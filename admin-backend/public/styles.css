@@ -145,6 +145,13 @@ header {
 
 .action-row { margin-bottom: 12px; }
 .action-btn.lock-btn { background: var(--alert-red); color: white; }
+.action-btn.warning-btn { background: #b45309; color: white; margin-bottom: 8px; }
+.action-btn.warning-btn:hover { background: #92400e; }
+.action-btn.danger-btn { background: #7f1d1d; color: white; border: 1px solid #ef4444; }
+.action-btn.danger-btn:hover { background: #450a0a; }
+.sidebar-card.danger-zone { border: 1px solid rgba(239,68,68,0.4); background: rgba(127,29,29,0.15); }
+.sidebar-card.danger-zone h3 { color: #f87171; }
+.hint-text { font-size: 12px; color: var(--text-gray); margin-bottom: 12px; }
 
 .toggle-grid {
   display: flex;

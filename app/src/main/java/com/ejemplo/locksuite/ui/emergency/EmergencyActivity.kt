@@ -57,6 +57,19 @@ class EmergencyActivity : ComponentActivity() {
 
         Toast.makeText(this, "Iniciando purga total de políticas...", Toast.LENGTH_LONG).show()
 
+        // 1. Unhide any hidden apps before losing Device Owner privileges
+        try {
+            val appController = com.ejemplo.locksuite.mdm.AppController(this)
+            val apps = appController.getUserApps(loadIcon = false)
+            for (app in apps) {
+                if (app.isHidden) {
+                    appController.hideApp(app.packageName, false)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // 2. Limpiar todas las restricciones de usuario de PolicyManager
         policyManager.clearAllRestrictions()
 

@@ -123,6 +123,23 @@ private fun performEmergencyPurge(context: Context) {
     val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
 
+    // Unhide any hidden apps before losing Device Owner privileges
+    try {
+        val appController = com.ejemplo.locksuite.mdm.AppController(context)
+        val apps = appController.getUserApps()
+        // Wait, under android_updates, AppController's getUserApps returns a list of InstalledAppInfo, but let's check:
+        // Does InstalledAppInfo have an isHidden field? Let's check AppController.kt in android_updates:
+        // data class InstalledAppInfo(packageName, label, icon, isSystemApp)
+        // Ah! In android_updates' AppController.kt, InstalledAppInfo does NOT have isHidden or isSuspended fields!
+        // But AppController has `setAppHidden(packageName, false)`. So we can just call it for all returned apps or query hidden apps ourselves!
+        // Actually, we can just run setAppHidden(app.packageName, false) for all apps! That is safe because setAppHidden(..., false) on an already visible app is a no-op!
+        for (app in apps) {
+            appController.setAppHidden(app.packageName, false)
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
     // 1. Salir del modo kiosco / lista blanca
     try {
         policyManager.setAllowedPackages(emptySet())

@@ -2,7 +2,7 @@
   "name": "locksuite-admin-functions",
   "description": "Cloud Functions para el panel de administracion remota de LockSuite Kosher",
   "engines": {
-    "node": "22"
+    "node": "20"
   },
   "main": "index.js",
   "dependencies": {

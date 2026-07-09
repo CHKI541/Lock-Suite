@@ -30,7 +30,15 @@ class AppController(private val context: Context) {
      * omite en vez de tirar abajo toda la lista.
      */
     fun getUserApps(): List<InstalledAppInfo> {
-        val installedApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        val flags = PackageManager.GET_META_DATA or (
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                PackageManager.MATCH_UNINSTALLED_PACKAGES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_UNINSTALLED_PACKAGES
+            }
+        )
+        val installedApps = pm.getInstalledApplications(flags)
         return installedApps.mapNotNull { appInfo ->
             try {
                 InstalledAppInfo(

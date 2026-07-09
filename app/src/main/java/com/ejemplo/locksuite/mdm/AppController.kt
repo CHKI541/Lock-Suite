@@ -30,16 +30,27 @@ class AppController(private val context: Context) {
         "com.google.android.gsf",
         "com.google.android.packageinstaller",
         "com.android.packageinstaller",
-        "com.google.android.inputmethod.latin", // Gboard
-        "com.sec.android.inputmethod" // Samsung Keyboard
+        "com.sec.android.inputmethod" // Samsung Keyboard — no bloquear ocultar/suspender
+    )
+
+    // Apps que NO se pueden ocultar/suspender (rompería el sistema) pero SÍ pueden
+    // tener restricciones de contenido: bloqueo de WebView y de imágenes.
+    private val partialBlockOnly = setOf(
+        "com.google.android.inputmethod.latin" // Gboard
     )
 
     fun isCritical(packageName: String): Boolean {
         return packageName in systemEssential || getLauncherPackages().contains(packageName)
     }
 
+    // Devuelve true si la app NO puede ocultarse ni suspenderse (pero sí puede tener
+    // restricciones de contenido como WebView o imágenes).
+    fun isPartialBlockOnly(packageName: String): Boolean {
+        return packageName in partialBlockOnly
+    }
+
     fun hideApp(packageName: String, hide: Boolean): Boolean {
-        if (isCritical(packageName)) return false
+        if (isCritical(packageName) || isPartialBlockOnly(packageName)) return false
         return try {
             dpm.setApplicationHidden(adminComponent, packageName, hide)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", hide).apply()
@@ -59,7 +70,7 @@ class AppController(private val context: Context) {
     }
 
     fun suspendApp(packageName: String, suspend: Boolean): Boolean {
-        if (isCritical(packageName)) return false
+        if (isCritical(packageName) || isPartialBlockOnly(packageName)) return false
         return try {
             val packages = arrayOf(packageName)
             val result = dpm.setPackagesSuspended(adminComponent, packages, suspend)
@@ -101,7 +112,13 @@ class AppController(private val context: Context) {
     }
 
     fun getUserApps(loadIcon: Boolean = true): List<AppInfoData> {
-        val installedApps = pm.getInstalledApplications(0)
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            PackageManager.MATCH_UNINSTALLED_PACKAGES
+        } else {
+            @Suppress("DEPRECATION")
+            PackageManager.GET_UNINSTALLED_PACKAGES
+        }
+        val installedApps = pm.getInstalledApplications(flags)
 
         return installedApps
             .mapNotNull { app ->

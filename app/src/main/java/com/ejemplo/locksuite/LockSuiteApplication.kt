@@ -37,7 +37,15 @@ class LockSuiteApplication : Application() {
             e.printStackTrace()
         }
 
-        // 4. Sincronizar información del dispositivo de forma proactiva al iniciar la app
+        // 4. Marcar el dispositivo como "En línea" de forma casi instantánea al iniciar la app
+        //    (solo escribe el timestamp lastSeen, sin esperar la sincronización completa)
+        try {
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(this)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 5. Sincronizar información completa del dispositivo de forma proactiva
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(this)
         } catch (e: Exception) {

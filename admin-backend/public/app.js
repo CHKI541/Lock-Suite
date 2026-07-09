@@ -28,6 +28,8 @@ const auth = firebase.auth(),
     sidebarLockBtn = document.getElementById("sidebar-lock-btn"),
     sidebarTrustStatus = document.getElementById("sidebar-trust-status"),
     sidebarForgetPinBtn = document.getElementById("sidebar-forget-pin-btn"),
+    sidebarArchiveBtn = document.getElementById("sidebar-archive-btn"),
+    sidebarDeleteBtn = document.getElementById("sidebar-delete-btn"),
     sidebarStatusMsg = document.getElementById("sidebar-status-msg"),
     playstoreHidden = document.getElementById("playstore-hidden"),
     playstoreSuspended = document.getElementById("playstore-suspended"),
@@ -546,3 +548,57 @@ saveNameBtn.addEventListener("click", async () => {
         currentDevicesData = e.val() || {}, renderDevicesList(currentDevicesData)
     })
 });
+
+// --- Archivar dispositivo ---
+if (sidebarArchiveBtn) {
+    sidebarArchiveBtn.addEventListener("click", async () => {
+        if (!selectedDeviceId) return;
+        const deviceData = currentDevicesData[selectedDeviceId] || {};
+        const name = field(deviceData, "deviceName") || field(deviceData, "model") || selectedDeviceId;
+        const confirmed = window.confirm(`¿Archivar el dispositivo "${name}"?\n\nEl dispositivo quedará oculto del panel pero sus datos se conservarán en la base de datos (en la sección "archivedDevices"). Podrás restaurarlo manualmente desde Firebase Console.`);
+        if (!confirmed) return;
+        sidebarArchiveBtn.disabled = true;
+        sidebarStatusMsg.textContent = "Archivando...";
+        try {
+            // Copiar datos a archivedDevices y borrar de devices
+            const snapshot = await database.ref(`devices/${selectedDeviceId}`).once("value");
+            const data = snapshot.val();
+            if (data) {
+                data._archivedAt = new Date().toISOString();
+                await database.ref(`archivedDevices/${selectedDeviceId}`).set(data);
+            }
+            await database.ref(`devices/${selectedDeviceId}`).remove();
+            sidebarStatusMsg.textContent = "✔ Dispositivo archivado.";
+            closeDeviceSidebar();
+        } catch (e) {
+            sidebarStatusMsg.textContent = "✘ Error al archivar: " + e.message;
+        } finally {
+            sidebarArchiveBtn.disabled = false;
+        }
+    });
+}
+
+// --- Eliminar dispositivo definitivamente ---
+if (sidebarDeleteBtn) {
+    sidebarDeleteBtn.addEventListener("click", async () => {
+        if (!selectedDeviceId) return;
+        const deviceData = currentDevicesData[selectedDeviceId] || {};
+        const name = field(deviceData, "deviceName") || field(deviceData, "model") || selectedDeviceId;
+        const confirmed1 = window.confirm(`⚠️ ¿Eliminar permanentemente el dispositivo "${name}"?\n\nEsta acción NO se puede deshacer. Todos los datos del dispositivo serán borrados para siempre.`);
+        if (!confirmed1) return;
+        const confirmed2 = window.confirm(`¿Confirmás que querés eliminar "${name}" de forma irreversible?`);
+        if (!confirmed2) return;
+        sidebarDeleteBtn.disabled = true;
+        sidebarStatusMsg.textContent = "Eliminando...";
+        try {
+            await database.ref(`devices/${selectedDeviceId}`).remove();
+            await database.ref(`deviceSecrets/${selectedDeviceId}`).remove().catch(() => {});
+            sidebarStatusMsg.textContent = "✔ Dispositivo eliminado.";
+            closeDeviceSidebar();
+        } catch (e) {
+            sidebarStatusMsg.textContent = "✘ Error al eliminar: " + e.message;
+        } finally {
+            sidebarDeleteBtn.disabled = false;
+        }
+    });
+}

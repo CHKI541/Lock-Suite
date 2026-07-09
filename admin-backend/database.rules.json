@@ -24,6 +24,10 @@
     "commandLog": {
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       ".write": "false"
+    },
+    "archivedDevices": {
+      ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
+      ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
     }
   }
 }

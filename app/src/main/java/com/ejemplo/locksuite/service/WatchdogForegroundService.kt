@@ -55,6 +55,13 @@ class WatchdogForegroundService : Service() {
         scheduleWorkManagerWatchdog()
         handler.post(checkRunnable)
 
+        // Marcar en línea de inmediato al (re)arrancar el servicio
+        try {
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Sincronizar información del dispositivo en segundo plano al iniciar el servicio
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)

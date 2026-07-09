@@ -35,8 +35,27 @@ object FirebaseDeviceSync {
     fun syncToken(context: Context, token: String) {
         withAuth {
             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
-            ref.updateChildren(mapOf("fcmToken" to token, "info/fcmToken" to token))
-                .addOnFailureListener { it.printStackTrace() }
+            ref.updateChildren(mapOf(
+                "fcmToken" to token,
+                "info/fcmToken" to token,
+                "lastSeen" to ServerValue.TIMESTAMP,
+                "info/lastSeen" to ServerValue.TIMESTAMP
+            )).addOnFailureListener { it.printStackTrace() }
+        }
+    }
+
+    /**
+     * Escribe únicamente el timestamp de lastSeen. Llamar al arrancar la app para
+     * aparecer "En línea" en el panel web de forma casi instantánea, sin esperar a
+     * que se complete la sincronización completa del estado del dispositivo.
+     */
+    fun syncLastSeenOnly(context: Context) {
+        withAuth {
+            val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
+            ref.updateChildren(mapOf(
+                "lastSeen" to ServerValue.TIMESTAMP,
+                "info/lastSeen" to ServerValue.TIMESTAMP
+            )).addOnFailureListener { it.printStackTrace() }
         }
     }
 
@@ -193,13 +212,17 @@ object FirebaseDeviceSync {
     private fun withAuth(action: () -> Unit) {
         val auth = FirebaseAuth.getInstance()
         if (auth.currentUser != null) {
+            // Reutilizar sesión existente: no re-autenticar en cada ciclo
             action()
             return
         }
+        // Primera vez: iniciar sesión anónima (requiere Anonymous Auth habilitado en Firebase Console)
         auth.signInAnonymously()
             .addOnSuccessListener { action() }
-            .addOnFailureListener { 
-                it.printStackTrace() 
+            .addOnFailureListener { e ->
+                // Loguear el error real para facilitar el diagnóstico
+                android.util.Log.e("FirebaseDeviceSync", "signInAnonymously falló: ${e.message}", e)
+                // Intentar igual — si hay reglas permisivas podría funcionar sin auth
                 action()
             }
     }

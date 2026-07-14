@@ -301,7 +301,8 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
     const c = currentDevicesData[e],
         r = c && (c.model || c.info && c.info.model) || "Celular";
     for (;;) try {
-        const callable = functionsRef.httpsCallable("sendCommandV3");
+        // Obtener Firebase ID token del administrador actualmente logueado
+        const idToken = await auth.currentUser.getIdToken();
         const payload = {
             deviceId: e,
             command: t,
@@ -312,8 +313,24 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
         if (extraParams) {
             Object.assign(payload, extraParams);
         }
-        const res = await callable(payload);
-        const commandId = res.data && res.data.commandId;
+        
+        const response = await fetch("https://sendcommandv4-687828714595.us-central1.run.app", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${idToken}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            const errMsg = errData.error || `HTTP_${response.status}`;
+            throw new Error(errMsg);
+        }
+
+        const resData = await response.json();
+        const commandId = resData.commandId;
         if (commandId) {
             sidebarStatusMsg.textContent = "Comando enviado. Esperando respuesta del celular...";
             const ackRef = database.ref(`devices/${e}/commandAcks/${commandId}`);
@@ -492,10 +509,13 @@ saveNameBtn.addEventListener("click", async () => {
     if (selectedDeviceId) {
         sidebarForgetPinBtn.disabled = !0, sidebarStatusMsg.textContent = "Olvidando confianza del PIN...";
         try {
-            const e = functionsRef.httpsCallable("forgetDeviceTrust");
-            await e({
-                deviceId: selectedDeviceId
-            }), sidebarStatusMsg.textContent = "Confianza del PIN olvidada."
+            // Borrado directo en la base de datos (no requiere Cloud Function)
+            const adminUid = auth.currentUser && auth.currentUser.uid;
+            if (adminUid) {
+                await database.ref(`devices/${selectedDeviceId}/trustedAdmins/${adminUid}`).remove();
+                await database.ref(`devices/${selectedDeviceId}/info/trustedAdmins/${adminUid}`).remove();
+            }
+            sidebarStatusMsg.textContent = "Confianza del PIN olvidada.";
         } catch (e) {
             sidebarStatusMsg.textContent = "Error al olvidar confianza: " + e.message
         } finally {

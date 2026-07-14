@@ -385,17 +385,17 @@ class PolicyManager(private val context: Context) {
             setSystemWebViewSuspended(true)
         }
 
-        // Re-aplicar lista blanca (allowlist) de aplicaciones si existe localmente
+        // Re-aplicar suspensiones individuales y lista blanca (allowlist) de aplicaciones
         val prefs = PrefsHelper.getMdmPrefs(context)
         val allowed = prefs.getStringSet("allowed_packages", null)
-        if (allowed != null) {
-            val appController = AppController(context)
-            val userApps = appController.getUserApps(loadIcon = false)
-            for (app in userApps) {
-                if (!app.isCritical) {
-                    val shouldSuspend = !allowed.contains(app.packageName)
-                    appController.suspendApp(app.packageName, shouldSuspend)
-                }
+        
+        val appController = AppController(context)
+        val userApps = appController.getUserApps(loadIcon = false)
+        for (app in userApps) {
+            if (!app.isCritical) {
+                val isIndividuallySuspended = prefs.getBoolean("suspend_${app.packageName}", false)
+                val shouldSuspend = (allowed != null && !allowed.contains(app.packageName)) || isIndividuallySuspended
+                appController.suspendApp(app.packageName, shouldSuspend)
             }
         }
     }

@@ -196,6 +196,18 @@
             android:name=".receiver.UninstallReceiver"
             android:exported="false" />
 
+        <!-- PACKAGE CHANGES RECEIVER (Sincronización en tiempo real al instalar/desinstalar apps) -->
+        <receiver
+            android:name=".receiver.PackageReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_REMOVED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>

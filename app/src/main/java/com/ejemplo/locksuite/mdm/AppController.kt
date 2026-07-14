@@ -54,6 +54,18 @@ class AppController(private val context: Context) {
         return try {
             dpm.setApplicationHidden(adminComponent, packageName, hide)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", hide).apply()
+            
+            // Si des-ocultamos la app y estaba marcada como suspendida, aplicamos la suspensión física en este momento
+            if (!hide) {
+                val shouldSuspend = PrefsHelper.getMdmPrefs(context).getBoolean("suspend_$packageName", false)
+                if (shouldSuspend) {
+                    try {
+                        dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -71,6 +83,14 @@ class AppController(private val context: Context) {
 
     fun suspendApp(packageName: String, suspend: Boolean): Boolean {
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) return false
+        
+        // Si la app está oculta, setPackagesSuspended fallará en Android.
+        // Guardamos el estado deseado en preferencias y retornamos true para mantener la web sincronizada.
+        if (isAppHidden(packageName)) {
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", suspend).apply()
+            return true
+        }
+
         return try {
             val packages = arrayOf(packageName)
             val result = dpm.setPackagesSuspended(adminComponent, packages, suspend)

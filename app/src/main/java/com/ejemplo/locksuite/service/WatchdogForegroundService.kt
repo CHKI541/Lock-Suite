@@ -38,7 +38,7 @@ class WatchdogForegroundService : Service() {
             if (now - lastSyncTime > 90000) {
                 lastSyncTime = now
                 try {
-                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }

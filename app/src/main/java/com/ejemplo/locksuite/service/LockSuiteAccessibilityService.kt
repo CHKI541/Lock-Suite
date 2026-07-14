@@ -65,6 +65,17 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastCheckedAt = 0L
 
+    private val whatsappScanRunnable = object : Runnable {
+        override fun run() {
+            val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+            val blockStatus = policyManager.isWhatsAppBlockStatusEnabled()
+            val blockChannels = policyManager.isWhatsAppBlockChannelsEnabled()
+            if (blockStatus || blockChannels) {
+                scanForUpdatesTab(blockStatus, blockChannels)
+            }
+        }
+    }
+
     // Stack de paquetes activos: [0] = el más reciente que NO es browser/webview-provider
     private val appPackageStack = ArrayDeque<String>(3)
 
@@ -626,15 +637,19 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             } else if (category == WhatsAppRestrictedContent.CHANNEL && blockChannels) {
                 triggerWhatsAppBlock("Canal")
             }
+            // Escaneo inmediato al cambiar de actividad/pantalla
+            scanForUpdatesTab(blockStatus, blockChannels)
         }
 
-        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_VIEW_SELECTED) {
-            for (delay in longArrayOf(0L, 200L, 500L, 900L)) {
-                mainHandler.postDelayed({
-                    scanForUpdatesTab(blockStatus, blockChannels)
-                }, delay)
-            }
+        if (eventType == AccessibilityEvent.TYPE_VIEW_SELECTED) {
+            // Escaneo inmediato al tocar una pestaña/vista
+            scanForUpdatesTab(blockStatus, blockChannels)
+        }
+
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            // Debounce de 400ms para evitar ráfagas de escaneos al desplazarse o actualizarse la vista
+            mainHandler.removeCallbacks(whatsappScanRunnable)
+            mainHandler.postDelayed(whatsappScanRunnable, 400)
         }
     }
 

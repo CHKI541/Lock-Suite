@@ -207,24 +207,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     true
                 }
                 "UPDATE_ALLOWLIST" -> {
-                    val appController = com.ejemplo.locksuite.mdm.AppController(this)
-                    val userApps = appController.getUserApps(loadIcon = false)
-                    var allOk = true
-                    for (app in userApps) {
-                        if (!app.isCritical) {
-                            val shouldSuspend = !packagesList.contains(app.packageName)
-                            if (!appController.suspendApp(app.packageName, shouldSuspend)) {
-                                allOk = false
-                            }
-                        }
-                    }
-                    if (allOk) {
-                        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
-                        prefs.edit()
-                            .putStringSet("allowed_packages", packagesList.toSet())
-                            .apply()
-                    }
-                    allOk
+                    val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+                    prefs.edit()
+                        .putStringSet("allowed_packages", packagesList.toSet())
+                        .apply()
+                    policyManager.refreshInstallRestriction()
+                    true
                 }
                 "CHANGE_PIN" -> {
                     val newHash = data["pinHash"]

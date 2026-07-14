@@ -57,14 +57,47 @@ class PolicyManager(private val context: Context) {
         setRestriction(UserManager.DISALLOW_FACTORY_RESET, block)
 
     fun setInstallAppsBlocked(block: Boolean): Boolean {
-        val success = setRestriction(UserManager.DISALLOW_INSTALL_APPS, block)
-        try {
-            // Suspender Google Play Store (com.android.vending) para evitar instalaciones remotas o en segundo plano
-            dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), block)
-        } catch (e: Exception) {
-            e.printStackTrace()
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("install_apps_blocked_admin", block).apply()
+        refreshInstallRestriction()
+        return true
+    }
+
+    fun isInstallAppsBlocked(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("install_apps_blocked_admin", false)
+    }
+
+    fun refreshInstallRestriction() {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val isBlocked = prefs.getBoolean("install_apps_blocked_admin", false)
+        val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
+        val hasAllowedApps = allowed.any { it != context.packageName && it != "com.ejemplo.locksuite" }
+
+        if (isBlocked) {
+            if (hasAllowedApps) {
+                // Bloqueo programático: permite instalaciones, pero filtra por código
+                setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)
+                prefs.edit().putBoolean("install_blocked_programmatic", true).apply()
+            } else {
+                // Bloqueo nativo estricto: bloquea a nivel de OS
+                setRestriction(UserManager.DISALLOW_INSTALL_APPS, true)
+                prefs.edit().putBoolean("install_blocked_programmatic", false).apply()
+            }
+            try {
+                // Suspender Google Play Store (com.android.vending) para evitar instalaciones remotas o en segundo plano
+                dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), true)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        } else {
+            // Sin bloqueo
+            setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)
+            prefs.edit().putBoolean("install_blocked_programmatic", false).apply()
+            try {
+                dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), false)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
-        return success
     }
 
     fun setUninstallAppsBlocked(block: Boolean) =
@@ -385,19 +418,19 @@ class PolicyManager(private val context: Context) {
             setSystemWebViewSuspended(true)
         }
 
-        // Re-aplicar suspensiones individuales y lista blanca (allowlist) de aplicaciones
+        // Re-aplicar suspensiones individuales de aplicaciones
         val prefs = PrefsHelper.getMdmPrefs(context)
-        val allowed = prefs.getStringSet("allowed_packages", null)
-        
         val appController = AppController(context)
         val userApps = appController.getUserApps(loadIcon = false)
         for (app in userApps) {
             if (!app.isCritical) {
                 val isIndividuallySuspended = prefs.getBoolean("suspend_${app.packageName}", false)
-                val shouldSuspend = (allowed != null && !allowed.contains(app.packageName)) || isIndividuallySuspended
-                appController.suspendApp(app.packageName, shouldSuspend)
+                appController.suspendApp(app.packageName, isIndividuallySuspended)
             }
         }
+
+        // Re-aplicar restricciones de instalación
+        refreshInstallRestriction()
     }
 
     fun clearAllRestrictions() {

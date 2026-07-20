@@ -50,7 +50,12 @@ class AppController(private val context: Context) {
     }
 
     fun hideApp(packageName: String, hide: Boolean): Boolean {
-        if (isCritical(packageName) || isPartialBlockOnly(packageName)) return false
+        if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
+            // Si la app es crítica o especial y se solicita des-ocultarla (hide = false), el estado deseado
+            // ya se cumple (no está oculta por protección del sistema) -> retornar true (éxito).
+            // Si se solicita ocultarla (hide = true), se rechaza por seguridad del SO -> retornar false.
+            return !hide
+        }
         return try {
             dpm.setApplicationHidden(adminComponent, packageName, hide)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", hide).apply()
@@ -82,7 +87,11 @@ class AppController(private val context: Context) {
     }
 
     fun suspendApp(packageName: String, suspend: Boolean): Boolean {
-        if (isCritical(packageName) || isPartialBlockOnly(packageName)) return false
+        if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
+            // Si la app es crítica y se solicita des-suspenderla (suspend = false), el estado deseado
+            // ya se cumple (no está suspendida) -> retornar true (éxito).
+            return !suspend
+        }
         
         android.util.Log.i("AppController", "suspendApp: $packageName -> suspend=$suspend")
         // Siempre guardar la preferencia de estado deseado

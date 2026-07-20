@@ -45,15 +45,16 @@ class BootReceiver : BroadcastReceiver() {
         try {
             val hasWebViewBlocked = com.ejemplo.locksuite.mdm.WebViewBlockManager.getBlockedPackages(context).isNotEmpty()
             val hasAdBlocking = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context).getBoolean("global_ad_blocking", false)
+            val hasGifsBlocked = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context).getBoolean("block_gifs", false)
             
-            if (hasWebViewBlocked || hasAdBlocking) {
+            if (hasWebViewBlocked || hasAdBlocking || hasGifsBlocked) {
                 val vpnIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(vpnIntent)
                 } else {
                     context.startService(vpnIntent)
                 }
-                android.util.Log.i("BootReceiver", "Re-arrancando KosherVpnService tras boot (WebView=$hasWebViewBlocked, AdBlock=$hasAdBlocking).")
+                android.util.Log.i("BootReceiver", "Re-arrancando KosherVpnService tras boot (WebView=$hasWebViewBlocked, AdBlock=$hasAdBlocking, Gifs=$hasGifsBlocked).")
             }
         } catch (e: Exception) {
             e.printStackTrace()

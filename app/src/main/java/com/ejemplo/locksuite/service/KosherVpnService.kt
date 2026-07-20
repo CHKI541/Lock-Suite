@@ -136,6 +136,18 @@ class KosherVpnService : VpnService() {
             return
         }
 
+        // 2. Bloqueo global de GIFs/Tenor si la opción está activa por el administrador
+        val isGifsBlocked = PrefsHelper.getMdmPrefs(this).getBoolean("block_gifs", false)
+        if (isGifsBlocked) {
+            val isTenorOrGiphy = queriedDomain.contains("tenor") || 
+                                 queriedDomain.contains("giphy") ||
+                                 queriedDomain.contains("gboard-stickers")
+            if (isTenorOrGiphy) {
+                android.util.Log.i("KosherVPN", "🚫 BLOQUEADO GIFS/STICKERS/TENOR: $queriedDomain")
+                return
+            }
+        }
+
         // 1. Intentar resolver el UID dueño del socket
         val ownerUid = resolveOwnerUid(packet)
         var isBlocked = false
@@ -156,6 +168,13 @@ class KosherVpnService : VpnService() {
                         // Auto-Whitelist dinámica basada en packageName + infraestructura común para cualquier app genérica
                         val isAllowed = WebViewPolicy.isDomainAllowedForGenericApp(packageName, queriedDomain)
                         isBlocked = !isAllowed
+                    }
+                } else if (packageName == "com.mercadopago.wallet") {
+                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
+                    if (policyManager.isMercadoPagoBlockOffersEnabled()) {
+                        if (WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
+                            isBlocked = true
+                        }
                     }
                 }
             }

@@ -8,7 +8,7 @@
       }
     },
     "deviceSecrets": {
-      ".read": "false",
+      ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
         ".write": "auth != null"
       }
@@ -27,6 +27,18 @@
     },
     "archivedDevices": {
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
+      ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
+    },
+    "groups": {
+      ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
+      ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
+    },
+    "globalSettings": {
+      ".read": true,
+      ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
+    },
+    "storeApps": {
+      ".read": true,
       ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
     }
   }

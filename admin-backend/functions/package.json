@@ -1,13 +1,14 @@
 {
   "name": "locksuite-admin-functions",
   "description": "Cloud Functions para el panel de administracion remota de LockSuite Kosher",
+  "version": "1.0.4",
   "engines": {
     "node": "20"
   },
   "main": "index.js",
   "dependencies": {
-    "firebase-admin": "^12.1.0",
-    "firebase-functions": "^5.0.0"
+    "firebase-admin": "^12.1.1",
+    "firebase-functions": "^5.0.1"
   },
   "private": true
 }

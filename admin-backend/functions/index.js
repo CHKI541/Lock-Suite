@@ -2,10 +2,17 @@ const { onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 
+const FUNCTION_OPTIONS = {
+  region: "us-central1",
+  cors: true,
+  invoker: "public",
+};
+
 admin.initializeApp({
   databaseURL: "https://locksuite-nueva-default-rtdb.firebaseio.com"
 });
 
+// Force deploy timestamp: 2026-07-15T00:15:00Z
 // CORS headers para todas las respuestas
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -35,6 +42,7 @@ const ALLOWED_COMMANDS = new Set([
   "DISABLE_AI_MODE", "ENABLE_MAPS_IMAGE_BLOCKING", "DISABLE_MAPS_IMAGE_BLOCKING",
   "BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS", "BLOCK_WHATSAPP_CHANNELS",
   "UNBLOCK_WHATSAPP_CHANNELS", "CHANGE_PIN", "ENABLE_STEALTH", "DISABLE_STEALTH",
+  "BLOCK_GIFS", "UNBLOCK_GIFS", "UPDATE_APP", "UPDATE_LOCKSUITE", "VERIFY_PIN",
 ]);
 
 // Helper para verificar admin por email
@@ -85,16 +93,7 @@ async function verifyDevicePin(deviceId, deviceRef, deviceData, adminUid, device
   }
 }
 
-const FUNCTION_OPTIONS = {
-  region: "us-central1",
-  invoker: "public",
-};
-
-/**
- * sendCommandV3 — Enviar comando a un dispositivo
- * HTTP POST { deviceId, command, packages?, devicePin?, rememberDevice?, newPin? }
- */
-exports.sendCommandV4 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
+exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
   // CORS headers siempre
   Object.entries(CORS_HEADERS).forEach(([k, v]) => res.set(k, v));
 
@@ -143,7 +142,14 @@ exports.sendCommandV4 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       return;
     }
 
-    await verifyDevicePin(deviceId, deviceRef, deviceData, adminUid, devicePin, rememberDevice);
+    if (command !== "UPDATE_LOCKSUITE") {
+      await verifyDevicePin(deviceId, deviceRef, deviceData, adminUid, devicePin, rememberDevice);
+    }
+
+    if (command === "VERIFY_PIN") {
+      res.status(200).json({ success: true, verified: true });
+      return;
+    }
 
     const token = getDeviceField(deviceData, "fcmToken");
     if (!token) {
@@ -208,3 +214,4 @@ exports.sendCommandV4 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     res.status(status).json({ error: e.message || "Error interno del servidor." });
   }
 });
+

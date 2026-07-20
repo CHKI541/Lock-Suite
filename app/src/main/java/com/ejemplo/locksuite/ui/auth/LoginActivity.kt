@@ -1,8 +1,23 @@
 package com.ejemplo.locksuite.ui.auth
 
 import android.content.Intent
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
+import android.app.PendingIntent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.content.Context
+import kotlinx.coroutines.launch
 import android.os.Handler
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.ValueEventListener
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.CircularProgressIndicator
 import android.os.Looper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -74,8 +89,11 @@ class LoginActivity : ComponentActivity() {
             }
         })
 
+        val openStore = intent?.getBooleanExtra("OPEN_STORE", false) ?: false
+
         setContent {
             LoginScreen(
+                initialOpenStore = openStore,
                 onLoginSuccess = {
                     SessionManager.openSession()
                     startActivity(Intent(this, DashboardActivity::class.java))
@@ -84,10 +102,24 @@ class LoginActivity : ComponentActivity() {
             )
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
 }
 
+data class StoreApp(
+    val label: String = "",
+    val packageName: String = "",
+    val apkUrl: String = ""
+)
+
 @Composable
-fun LoginScreen(onLoginSuccess: () -> Unit) {
+fun LoginScreen(
+    initialOpenStore: Boolean = false,
+    onLoginSuccess: () -> Unit
+) {
     val context = LocalContext.current
     var showPinInput by remember { mutableStateOf(false) }
     var inputPin by remember { mutableStateOf("") }
@@ -95,6 +127,15 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
     var warningText by remember { mutableStateOf("") }
     var showLanguageMenu by remember { mutableStateOf(false) }
     var langUpdateKey by remember { mutableIntStateOf(0) } // Forzar recomposición al cambiar de idioma
+    
+    var showStoreDialog by remember { mutableStateOf(initialOpenStore) }
+    var storeAppsList by remember { mutableStateOf<List<StoreApp>>(emptyList()) }
+    var allowedPackagesSet by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var isStoreLoading by remember { mutableStateOf(false) }
+    
+    var updateProgress by remember { mutableStateOf<Int?>(null) }
+    var storeDownloadingPackage by remember { mutableStateOf<String?>(null) }
+    var storeProgress by remember { mutableStateOf(0) }
 
     fun updateLockoutState() {
         when (val state = PinManager.getLockoutState(context)) {
@@ -146,18 +187,21 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
     // Dummy block para forzar la lectura del trigger de idioma y recomponer dinámicamente
     if (langUpdateKey >= 0) {
         if (!showPinInput) {
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(navyDark)
                     .padding(24.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
                 // Barra superior de iconos
                 Row(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Selector de idioma (Mundo)
@@ -207,6 +251,8 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                         }
                     }
 
+                    Spacer(modifier = Modifier.width(8.dp))
+
                     // Icono de configuración
                     IconButton(
                         onClick = { showPinInput = true },
@@ -222,9 +268,10 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                     }
                 }
 
+                Spacer(modifier = Modifier.height(24.dp))
+
                 // Logo central
                 Column(
-                    modifier = Modifier.align(Alignment.Center),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -251,6 +298,97 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                         color = Color(0xFF2ECC71),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(48.dp))
+
+                // Botones y versión al fondo
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val coroutineScope = rememberCoroutineScope()
+                    val pInfo = try {
+                        context.packageManager.getPackageInfo(context.packageName, 0)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val currentVersionName = pInfo?.versionName ?: "Unknown"
+                    val currentVersionCode = if (pInfo != null) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            pInfo.longVersionCode.toInt()
+                        } else {
+                            @Suppress("DEPRECATION")
+                            pInfo.versionCode
+                        }
+                    } else {
+                        0
+                    }
+                    
+                    // Botón para Tienda Kosher
+                    Button(
+                        onClick = {
+                            showStoreDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = accentOrange, contentColor = navyDark),
+                        modifier = Modifier.fillMaxWidth(0.85f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = if (LocaleManager.getLang() == "he") "חנות אפליקציות" else if (LocaleManager.getLang() == "en") "App Store" else "Tienda",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Botón para Actualizar
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                val db = FirebaseDatabase.getInstance()
+                                val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(context)
+                                val error = com.ejemplo.locksuite.util.SelfUpdater.checkAndPerformUpdate(context, true) { progress ->
+                                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                        updateProgress = progress
+                                    }
+                                    db.getReference("devices/$deviceId/updateProgress").setValue(progress)
+                                }
+                                updateProgress = null
+                                db.getReference("devices/$deviceId/updateProgress").removeValue()
+                                if (error != null) {
+                                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        enabled = updateProgress == null,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = accentOrange,
+                            contentColor = navyDark,
+                            disabledContainerColor = Color.White.copy(alpha = 0.1f),
+                            disabledContentColor = Color.White.copy(alpha = 0.4f)
+                        ),
+                        modifier = Modifier.fillMaxWidth(0.85f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = if (updateProgress != null) {
+                                if (LocaleManager.getLang() == "he") "מוריד: ${updateProgress}%" else if (LocaleManager.getLang() == "en") "Downloading: ${updateProgress}%" else "Descargando: ${updateProgress}%"
+                            } else {
+                                if (LocaleManager.getLang() == "he") "עדכן אפליקציה" else if (LocaleManager.getLang() == "en") "Update App" else "Actualizar Aplicación"
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Información de versión
+                    Text(
+                        text = "LockSuite v$currentVersionName ($currentVersionCode)",
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 12.sp,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -498,5 +636,180 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                 }
             }
         }
+    }
+
+    LaunchedEffect(showStoreDialog) {
+        if (showStoreDialog) {
+            isStoreLoading = true
+            val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(context)
+            val db = FirebaseDatabase.getInstance()
+            
+            var globalList = emptyList<String>()
+            var deviceList = emptyList<String>()
+            
+            fun updateSet() {
+                allowedPackagesSet = (globalList + deviceList + context.packageName + "com.ejemplo.locksuite").toSet()
+            }
+            
+            db.getReference("globalSettings/allowedPackages").addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    globalList = snapshot.children.mapNotNull { it.getValue(String::class.java) }
+                    updateSet()
+                }
+                override fun onCancelled(error: DatabaseError) {
+                    android.util.Log.w("LoginActivity", "globalSettings query cancelled: ${error.message}")
+                }
+            })
+            
+            db.getReference("devices/$deviceId/allowedPackages").addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(devSnap: DataSnapshot) {
+                    deviceList = devSnap.children.mapNotNull { it.getValue(String::class.java) }
+                    updateSet()
+                }
+                override fun onCancelled(error: DatabaseError) {
+                    android.util.Log.w("LoginActivity", "device allowedPackages query cancelled: ${error.message}")
+                }
+            })
+            
+            db.getReference("storeApps").addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(storeSnap: DataSnapshot) {
+                    val apps = storeSnap.children.mapNotNull {
+                        val label = it.child("label").getValue(String::class.java) ?: ""
+                        val pkg = it.child("packageName").getValue(String::class.java) ?: ""
+                        val apk = it.child("apkUrl").getValue(String::class.java) ?: ""
+                        if (label.isNotEmpty() && pkg.isNotEmpty() && apk.isNotEmpty()) {
+                            StoreApp(label, pkg, apk)
+                        } else null
+                    }
+                    storeAppsList = apps
+                    isStoreLoading = false
+                }
+                override fun onCancelled(error: DatabaseError) {
+                    android.util.Log.e("LoginActivity", "storeApps query failed: ${error.message}")
+                    isStoreLoading = false
+                }
+            })
+        }
+    }
+
+    if (showStoreDialog) {
+        AlertDialog(
+            onDismissRequest = { showStoreDialog = false },
+            title = {
+                Text(
+                    text = if (LocaleManager.getLang() == "he") "חנות אפליקציות" else if (LocaleManager.getLang() == "en") "App Store" else "Tienda",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+            },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(350.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isStoreLoading) {
+                        CircularProgressIndicator(color = accentOrange)
+                    } else if (storeAppsList.isEmpty()) {
+                        Text(
+                            text = if (LocaleManager.getLang() == "he") "אין אפליקציות בחנות כרגע" else if (LocaleManager.getLang() == "en") "No apps available in the store" else "No hay aplicaciones disponibles en la tienda.",
+                            color = Color.White.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center
+                        )
+                    } else {
+                        androidx.compose.foundation.lazy.LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(storeAppsList.size) { index ->
+                                val app = storeAppsList[index]
+                                val isAllowed = allowedPackagesSet.contains(app.packageName)
+                                val coroutineScope = rememberCoroutineScope()
+                                
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(navyMedium.copy(alpha = 0.5f), shape = RoundedCornerShape(12.dp))
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(app.packageName, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                                    }
+                                    
+                                    val isDownloadingThis = storeDownloadingPackage == app.packageName
+                                    Button(
+                                        onClick = {
+                                            if (isAllowed && storeDownloadingPackage == null) {
+                                                coroutineScope.launch {
+                                                    storeDownloadingPackage = app.packageName
+                                                    val db = FirebaseDatabase.getInstance()
+                                                    val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(context)
+                                                    val err = com.ejemplo.locksuite.util.SelfUpdater.downloadAndInstallApk(
+                                                        context,
+                                                        app.apkUrl,
+                                                        app.packageName,
+                                                        app.label
+                                                    ) { progress ->
+                                                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                                            storeProgress = progress
+                                                        }
+                                                        db.getReference("devices/$deviceId/updateProgress").setValue(progress)
+                                                    }
+                                                    storeDownloadingPackage = null
+                                                    db.getReference("devices/$deviceId/updateProgress").removeValue()
+                                                    if (err != null) {
+                                                        Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                                                    } else {
+                                                        Toast.makeText(context, "${app.label} instalado correctamente.", Toast.LENGTH_LONG).show()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = isAllowed && (storeDownloadingPackage == null || isDownloadingThis),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = accentOrange,
+                                            contentColor = navyDark,
+                                            disabledContainerColor = Color.White.copy(alpha = 0.1f),
+                                            disabledContentColor = Color.White.copy(alpha = 0.4f)
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isDownloadingThis) {
+                                                if (LocaleManager.getLang() == "he") "מוריד: ${storeProgress}%" else if (LocaleManager.getLang() == "en") "Downloading: ${storeProgress}%" else "Descargando: ${storeProgress}%"
+                                            } else if (isAllowed) {
+                                                if (LocaleManager.getLang() == "he") "הורד" else if (LocaleManager.getLang() == "en") "Download" else "Instalar"
+                                            } else {
+                                                if (LocaleManager.getLang() == "he") "חסום" else if (LocaleManager.getLang() == "en") "Blocked" else "Bloqueada"
+                                            },
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showStoreDialog = false }) {
+                    Text(
+                        text = if (LocaleManager.getLang() == "he") "סגור" else if (LocaleManager.getLang() == "en") "Close" else "Cerrar",
+                        color = accentOrange,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            containerColor = navyDark,
+            shape = RoundedCornerShape(18.dp)
+        )
     }
 }

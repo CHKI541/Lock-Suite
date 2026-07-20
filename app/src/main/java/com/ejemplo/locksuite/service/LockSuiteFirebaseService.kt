@@ -11,6 +11,9 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
 import javax.crypto.Mac
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import javax.crypto.spec.SecretKeySpec
 import android.util.Base64
 import java.security.MessageDigest
@@ -20,7 +23,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
         val command = data["command"] ?: return
-        val commandId = data["commandId"]
+        var commandId = data["commandId"]
         
         val policyManager = PolicyManager(this)
 
@@ -132,6 +135,8 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "UNBLOCK_INTERNET" -> policyManager.setInternetBlocked(false)
                 "ENABLE_ADBLOCK" -> policyManager.setAdBlockingEnabled(true)
                 "DISABLE_ADBLOCK" -> policyManager.setAdBlockingEnabled(false)
+                "BLOCK_GIFS" -> policyManager.setGifsBlocked(true)
+                "UNBLOCK_GIFS" -> policyManager.setGifsBlocked(false)
                 "BLOCK_WHATSAPP_STATUS" -> {
                     policyManager.setWhatsAppBlockStatus(true)
                     true
@@ -146,6 +151,14 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 }
                 "UNBLOCK_WHATSAPP_CHANNELS" -> {
                     policyManager.setWhatsAppBlockChannels(false)
+                    true
+                }
+                "BLOCK_MERCADOPAGO_OFFERS" -> {
+                    policyManager.setMercadoPagoBlockOffers(true)
+                    true
+                }
+                "UNBLOCK_MERCADOPAGO_OFFERS" -> {
+                    policyManager.setMercadoPagoBlockOffers(false)
                     true
                 }
 
@@ -225,6 +238,82 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                         .putStringSet("allowed_packages", packagesList.toSet())
                         .apply()
                     policyManager.refreshInstallRestriction()
+                    true
+                }
+                "UPDATE_APP" -> {
+                    val packageName = packagesList.firstOrNull()
+                    if (packageName != null) {
+                        try {
+                            val localDpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+                            val localAdminComponent = android.content.ComponentName(this, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
+                            localDpm.setPackagesSuspended(localAdminComponent, arrayOf("com.android.vending"), false)
+                            val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+                            prefs.edit().putString("updating_package", packageName).apply()
+                            val playStoreIntent = android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse("market://details?id=$packageName")
+                            ).apply {
+                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                            }
+                            startActivity(playStoreIntent)
+                            val watchdogIntent = android.content.Intent(this, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
+                                action = "UPDATE_TIMEOUT"
+                            }
+                            val pendingIntent = android.app.PendingIntent.getBroadcast(
+                                this,
+                                9911,
+                                watchdogIntent,
+                                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                            )
+                            val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                            val triggerTime = System.currentTimeMillis() + 10 * 60 * 1000L
+                            alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                            true
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                }
+                "UPDATE_LOCKSUITE" -> {
+                    val idToAck = commandId
+                    commandId = null
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(applicationContext)
+                        val baseRef = FirebaseDatabase.getInstance().reference
+                        val progressRef = baseRef.child("devices/$deviceId/updateProgress")
+                        
+                        val error = com.ejemplo.locksuite.util.SelfUpdater.checkAndPerformUpdate(applicationContext, false) { progress ->
+                            progressRef.setValue(progress)
+                        }
+                        
+                        progressRef.removeValue()
+                        
+                        if (!idToAck.isNullOrBlank()) {
+                            val ackRef = baseRef.child("devices/$deviceId/commandAcks/$idToAck")
+                            val ackInfoRef = baseRef.child("devices/$deviceId/info/commandAcks/$idToAck")
+                            if (error == null) {
+                                val ackData = mapOf(
+                                    "status" to "applied",
+                                    "command" to "UPDATE_LOCKSUITE",
+                                    "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
+                                )
+                                ackRef.setValue(ackData)
+                                ackInfoRef.setValue(ackData).addOnFailureListener {}
+                            } else {
+                                val ackData = mapOf(
+                                    "status" to "failed",
+                                    "reason" to error,
+                                    "command" to "UPDATE_LOCKSUITE",
+                                    "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
+                                )
+                                ackRef.setValue(ackData)
+                                ackInfoRef.setValue(ackData).addOnFailureListener {}
+                            }
+                        }
+                    }
                     true
                 }
                 "CHANGE_PIN" -> {

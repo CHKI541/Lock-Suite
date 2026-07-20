@@ -121,6 +121,23 @@ object FirebaseDeviceSync {
             e.printStackTrace()
         }
 
+        val pInfo = try {
+            context.packageManager.getPackageInfo(context.packageName, 0)
+        } catch (e: Exception) {
+            null
+        }
+        val currentVersionCode = if (pInfo != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pInfo.longVersionCode.toInt()
+            } else {
+                @Suppress("DEPRECATION")
+                pInfo.versionCode
+            }
+        } else {
+            0
+        }
+        val currentVersionName = pInfo?.versionName ?: "Unknown"
+
         withAuth {
             writeFields(
                 context,
@@ -130,6 +147,8 @@ object FirebaseDeviceSync {
                     "isDeviceOwner" to dpm.isDeviceOwnerApp(context.packageName),
                     "kioskEnabled" to false,
                     "allowedAppCount" to 0,
+                    "versionCode" to currentVersionCode,
+                    "versionName" to currentVersionName,
 
                     "wifiBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_WIFI),
                     "bluetoothBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH),
@@ -154,10 +173,12 @@ object FirebaseDeviceSync {
                     "keyguardDisabled" to policyManager.isKeyguardDisabled(),
                     "internetBlocked" to policyManager.isInternetBlocked(),
                     "adBlockingEnabled" to policyManager.isAdBlockingEnabled(),
+                    "gifsBlocked" to policyManager.isGifsBlocked(),
                     "aiModeEnabled" to com.ejemplo.locksuite.mdm.ImageBlockManager.isGlobalAiEnabled(context),
                     "mapsImageBlockingEnabled" to com.ejemplo.locksuite.mdm.ImageBlockManager.isMapsImageBlockingEnabled(context),
                     "whatsappBlockStatus" to policyManager.isWhatsAppBlockStatusEnabled(),
                     "whatsappBlockChannels" to policyManager.isWhatsAppBlockChannelsEnabled(),
+                    "mercadoPagoBlockOffers" to policyManager.isMercadoPagoBlockOffersEnabled(),
                     "stealthModeEnabled" to isStealth
                 )
             )

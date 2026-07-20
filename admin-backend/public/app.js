@@ -17,6 +17,7 @@ const auth = firebase.auth(),
     sidebarCloseBtn = document.getElementById("sidebar-close-btn"),
     sidebarDeviceName = document.getElementById("sidebar-device-name"),
     sidebarDeviceId = document.getElementById("sidebar-device-id"),
+    sidebarDeviceVersion = document.getElementById("sidebar-device-version"),
     sidebarTabButtons = document.querySelectorAll(".sidebar-tabs .tab-btn"),
     sidebarTabPanels = document.querySelectorAll(".tab-panel"),
     deviceNameInput = document.getElementById("device-name-input"),
@@ -42,11 +43,15 @@ const auth = firebase.auth(),
     pinModalCancel = document.getElementById("pin-modal-cancel"),
     pinModalConfirm = document.getElementById("pin-modal-confirm"),
     sidebarNewPinInput = document.getElementById("sidebar-new-pin-input"),
-    sidebarChangePinBtn = document.getElementById("sidebar-change-pin-btn");
+    sidebarChangePinBtn = document.getElementById("sidebar-change-pin-btn"),
+    sidebarUpdateLocksuiteBtn = document.getElementById("sidebar-update-locksuite-btn"),
+    globalUpdateLocksuiteBtn = document.getElementById("global-update-locksuite-btn");
 let selectedDeviceId = null,
     currentDevicesData = {},
     activeTabId = "panel-policies",
-    devicesListener = null;
+    devicesListener = null,
+    verifiedDevicePins = {},
+    verifiedDevicePinHashes = {};
 
 function field(device, key, fallback = null) {
     if (device && device[key] !== undefined && device[key] !== null) return device[key];
@@ -65,17 +70,42 @@ function arrayOrCsv(value) {
     return value || "";
 }
 
+let groupsListener = null;
+
 function startRealtimeSync() {
     devicesListener && database.ref("devices").off("value", devicesListener), devicesListener = database.ref("devices").on("value", e => {
         const t = e.val() || {};
         currentDevicesData = t, renderDevicesList(t), selectedDeviceId && t[selectedDeviceId] && updateSidebarUI(selectedDeviceId, t[selectedDeviceId])
+        // Si hay un grupo abierto, refrescar la lista de dispositivos seleccionables por si cambiaron de nombre o estado
+        if (selectedGroupId && currentGroupsData[selectedGroupId]) {
+            renderGroupDevicesSelector(currentGroupsData[selectedGroupId]);
+        }
     }, e => {
         globalError.textContent = "Error de sincronización en tiempo real: " + e.message
-    })
+    });
+
+    groupsListener && database.ref("groups").off("value", groupsListener), groupsListener = database.ref("groups").on("value", e => {
+        currentGroupsData = e.val() || {};
+        renderGroupsList(currentGroupsData);
+        if (selectedGroupId && currentGroupsData[selectedGroupId]) {
+            updateGroupSidebarUI(selectedGroupId, currentGroupsData[selectedGroupId]);
+        }
+    }, e => {
+        console.error("Error de sync de grupos:", e);
+    });
+
+    archivedListener && database.ref("archivedDevices").off("value", archivedListener), archivedListener = database.ref("archivedDevices").on("value", e => {
+        currentArchivedDevicesData = e.val() || {};
+        renderArchivedDevicesList(currentArchivedDevicesData);
+    }, e => {
+        console.error("Error de sync de archivados:", e);
+    });
 }
 
 function stopRealtimeSync() {
     devicesListener && (database.ref("devices").off("value", devicesListener), devicesListener = null)
+    groupsListener && (database.ref("groups").off("value", groupsListener), groupsListener = null)
+    archivedListener && (database.ref("archivedDevices").off("value", archivedListener), archivedListener = null)
 }
 
 function renderDevicesList(e) {
@@ -112,8 +142,100 @@ function renderDevicesList(e) {
     })) : devicesContainer.innerHTML = '<p class="loading-text">Todavía no hay dispositivos registrados.</p>'
 }
 
-function openDeviceSidebar(e, t) {
-    selectedDeviceId = e, sidebar.classList.remove("hidden"), updateSidebarUI(e, t)
+async function hashPinLocal(pin, saltBase64) {
+    const binaryString = window.atob(saltBase64);
+    const saltBytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+        saltBytes[i] = binaryString.charCodeAt(i);
+    }
+    const encoder = new TextEncoder();
+    const pinBytes = encoder.encode(pin);
+    const combinedBytes = new Uint8Array(saltBytes.length + pinBytes.length);
+    combinedBytes.set(saltBytes, 0);
+    combinedBytes.set(pinBytes, saltBytes.length);
+    
+    const hashBuffer = await window.crypto.subtle.digest("SHA-256", combinedBytes);
+    const hashBytes = new Uint8Array(hashBuffer);
+    let binaryHash = "";
+    for (let i = 0; i < hashBytes.byteLength; i++) {
+        binaryHash += String.fromCharCode(hashBytes[i]);
+    }
+    return window.btoa(binaryHash);
+}
+
+async function verifyPinBackend(deviceId, pin, remember) {
+    const secretsSnap = await database.ref(`deviceSecrets/${deviceId}`).once("value");
+    const secrets = secretsSnap.val();
+    if (!secrets || !secrets.pinHash || !secrets.pinSalt) {
+        throw new Error("DEVICE_PIN_NOT_ENROLLED");
+    }
+    
+    const localHash = await hashPinLocal(pin, secrets.pinSalt);
+    if (localHash !== secrets.pinHash) {
+        throw new Error("PIN_INCORRECT");
+    }
+    
+    const adminUid = auth.currentUser ? auth.currentUser.uid : null;
+    if (adminUid) {
+        if (remember) {
+            await database.ref(`devices/${deviceId}/trustedAdmins/${adminUid}`).set(true);
+            await database.ref(`devices/${deviceId}/info/trustedAdmins/${adminUid}`).set(true);
+        }
+    }
+    return { success: true };
+}
+
+async function openDeviceSidebar(e, t) {
+    selectedDeviceId = e;
+    
+    const trustedAdmins = t.trustedAdmins || (t.info && t.info.trustedAdmins) || {};
+    const adminUid = auth.currentUser ? auth.currentUser.uid : null;
+    const isTrusted = adminUid && trustedAdmins[adminUid] === true;
+    
+    // Verificamos si tiene PIN configurado según la bandera pública hasPinConfigured
+    const hasPinConfigured = t.hasPinConfigured || (t.info && t.info.hasPinConfigured) === true;
+    
+    if (hasPinConfigured && !isTrusted && !verifiedDevicePins[e]) {
+        const r = t.deviceName || (t.info && t.info.deviceName) || t.model || (t.info && t.info.model) || "Celular";
+        let isPinCorrect = false;
+        let errorMessage = "";
+        
+        while (!isPinCorrect) {
+            const pinData = await showPinModal(r, errorMessage);
+            if (!pinData) {
+                closeDeviceSidebar();
+                return;
+            }
+            
+            try {
+                pinModalError.textContent = "Verificando PIN...";
+                pinModalError.style.color = "var(--accent-orange)";
+                
+                await verifyPinBackend(e, pinData.pin, pinData.remember);
+                
+                isPinCorrect = true;
+                verifiedDevicePins[e] = pinData.pin;
+            } catch (err) {
+                console.error("Error al verificar PIN:", err);
+                if (err.message === "PIN_INCORRECT") {
+                    errorMessage = "PIN incorrecto. Intentá de nuevo.";
+                } else if (err.message === "DEVICE_PIN_NOT_ENROLLED") {
+                    alert("Este dispositivo no tiene un PIN de administrador configurado.");
+                    closeDeviceSidebar();
+                    return;
+                } else {
+                    errorMessage = "Error al verificar PIN: " + err.message;
+                }
+            }
+        }
+    } else if (!hasPinConfigured && !isTrusted) {
+        alert("Este dispositivo no tiene un PIN de administrador configurado.");
+        closeDeviceSidebar();
+        return;
+    }
+    
+    sidebar.classList.remove("hidden");
+    updateSidebarUI(e, t);
 }
 
 function closeDeviceSidebar() {
@@ -123,7 +245,24 @@ function closeDeviceSidebar() {
 function updateSidebarUI(e, t) {
     const n = field(t, "deviceName", ""),
         a = field(t, "model", "Celular");
-    sidebarDeviceName.textContent = n || a || "Celular sin nombre", sidebarDeviceId.textContent = e, document.activeElement !== deviceNameInput && (deviceNameInput.value = n);
+    const vName = field(t, "versionName", "");
+    const vCode = field(t, "versionCode", "");
+    let vText = "";
+    if (vName) {
+        vText = `Versión: ${vName} (${vCode})`;
+    } else {
+        vText = "Versión: Desconocida (actualizá la app)";
+    }
+    const progress = field(t, "updateProgress", null);
+    if (progress !== null && progress !== undefined) {
+        vText += ` [Descargando: ${progress}%]`;
+        sidebarUpdateLocksuiteBtn.textContent = `🔄 Descargando: ${progress}%`;
+        sidebarUpdateLocksuiteBtn.disabled = true;
+    } else {
+        sidebarUpdateLocksuiteBtn.textContent = `🔄 Actualizar LockSuite (Sistema)`;
+        sidebarUpdateLocksuiteBtn.disabled = false;
+    }
+    sidebarDeviceName.textContent = n || a || "Celular sin nombre", sidebarDeviceId.textContent = e, sidebarDeviceVersion.textContent = vText, document.activeElement !== deviceNameInput && (deviceNameInput.value = n);
     sidebar.querySelectorAll(".policy-switch").forEach(e => {
         const n = e.getAttribute("data-policy");
         e.checked = field(t, n, false) === true;
@@ -238,8 +377,15 @@ function renderAppsList(e) {
             advancedPanel.style.border = "1px solid rgba(255, 255, 255, 0.05)";
             advancedPanel.style.width = "100%";
             advancedPanel.style.display = "flex";
-            advancedPanel.style.alignItems = "center";
-            advancedPanel.style.justifyContent = "space-between";
+            advancedPanel.style.flexDirection = "column";
+            advancedPanel.style.gap = "8px";
+
+            // Fila 1: Bloqueo de Imagen
+            const imgRow = document.createElement("div");
+            imgRow.style.display = "flex";
+            imgRow.style.alignItems = "center";
+            imgRow.style.justifyContent = "space-between";
+            imgRow.style.width = "100%";
 
             const label = document.createElement("span");
             label.textContent = "Bloqueo de imágenes:";
@@ -282,13 +428,51 @@ function renderAppsList(e) {
                 runCommandOnDevice(selectedDeviceId, cmd, [e.packageName], select);
             });
 
+            imgRow.appendChild(label);
+            imgRow.appendChild(select);
+            advancedPanel.appendChild(imgRow);
+
+            // Fila 2: Actualizar App
+            const updateRow = document.createElement("div");
+            updateRow.style.display = "flex";
+            updateRow.style.alignItems = "center";
+            updateRow.style.justifyContent = "space-between";
+            updateRow.style.width = "100%";
+            updateRow.style.borderTop = "1px solid rgba(255, 255, 255, 0.05)";
+            updateRow.style.paddingTop = "6px";
+
+            const updateLabel = document.createElement("span");
+            updateLabel.textContent = "Actualizar Aplicación:";
+            updateLabel.style.fontSize = "11px";
+            updateLabel.style.color = "var(--text-gray)";
+
+            const updateBtn = document.createElement("button");
+            updateBtn.className = "app-toggle-btn";
+            updateBtn.textContent = "Actualizar desde Play Store";
+            updateBtn.style.padding = "4px 8px";
+            updateBtn.style.fontSize = "10px";
+            updateBtn.style.backgroundColor = "#16a085";
+            updateBtn.style.color = "white";
+            updateBtn.style.border = "none";
+            updateBtn.style.borderRadius = "4px";
+            updateBtn.style.cursor = "pointer";
+
+            updateBtn.addEventListener("click", (evt) => {
+                evt.stopPropagation();
+                if (confirm(`¿Enviar comando para actualizar "${e.label}"? El celular abrirá temporalmente la Play Store y se cerrará automáticamente al finalizar la instalación.`)) {
+                    runCommandOnDevice(selectedDeviceId, "UPDATE_APP", [e.packageName], updateBtn);
+                }
+            });
+
+            updateRow.appendChild(updateLabel);
+            updateRow.appendChild(updateBtn);
+            advancedPanel.appendChild(updateRow);
+
             gearBtn.addEventListener("click", (evt) => {
                 evt.stopPropagation();
                 advancedPanel.classList.toggle("hidden");
             });
 
-            advancedPanel.appendChild(label);
-            advancedPanel.appendChild(select);
             t.appendChild(advancedPanel);
         }
         sidebarAppsList.appendChild(t);
@@ -296,18 +480,17 @@ function renderAppsList(e) {
 }
 async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParams = null) {
     a && (a.disabled = !0), sidebarStatusMsg.textContent = "Enviando comando al celular...";
-    let d = null,
+    let d = verifiedDevicePins[e] || null,
         s = !1,
         o = "";
     const c = currentDevicesData[e],
         r = c && (c.model || c.info && c.info.model) || "Celular";
     for (;;) try {
-        // Obtener Firebase ID token del administrador actualmente logueado
         const idToken = await auth.currentUser.getIdToken();
         const payload = {
             deviceId: e,
             command: t,
-            packages: n,
+            packages: n ? (Array.isArray(n) ? n.join(",") : String(n)) : null,
             devicePin: d,
             rememberDevice: s
         };
@@ -315,7 +498,7 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             Object.assign(payload, extraParams);
         }
         
-        const response = await fetch("https://sendcommandv4-687828714595.us-central1.run.app", {
+        const response = await fetch("https://sendcommandv8-687828714595.us-central1.run.app", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -333,13 +516,16 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
         const resData = await response.json();
         const commandId = resData.commandId;
         if (commandId) {
-            sidebarStatusMsg.textContent = "Comando enviado. Esperando respuesta del celular...";
+            const isUpdateCmd = (t === "UPDATE_LOCKSUITE");
+            const timeoutMs = isUpdateCmd ? 120000 : 10000;
+            sidebarStatusMsg.textContent = isUpdateCmd ? "Esperando descarga y actualización del celular..." : "Comando enviado. Esperando respuesta del celular...";
             const ackRef = database.ref(`devices/${e}/commandAcks/${commandId}`);
             const timeoutId = setTimeout(() => {
                 ackRef.off();
-                sidebarStatusMsg.textContent = "✓ Comando enviado (sin confirmación del celular)";
+                sidebarStatusMsg.textContent = isUpdateCmd ? "✓ Comando enviado. El celular se está actualizando en segundo plano." : "✓ Comando enviado (sin confirmación del celular)";
                 if (a) a.disabled = false;
-            }, 10000);
+                if (i) i();
+            }, timeoutMs);
             
             ackRef.on("value", (snap) => {
                 if (snap.exists()) {
@@ -349,36 +535,48 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                         ackRef.off();
                         sidebarStatusMsg.textContent = "✓ Comando aplicado con éxito en el celular";
                         if (a) a.disabled = false;
+                        if (i) i();
                     } else if (status === "failed") {
                         clearTimeout(timeoutId);
                         ackRef.off();
                         sidebarStatusMsg.textContent = "✗ El comando falló en el celular";
                         if (a) a.disabled = false;
+                        if (i) i();
                     }
                 }
             });
         } else {
             sidebarStatusMsg.textContent = "✓ Comando enviado";
             setTimeout(() => {
-                "✓ Comando enviado" === sidebarStatusMsg.textContent && (sidebarStatusMsg.textContent = "")
+                "✓ Comando enviado" === sidebarStatusMsg.textContent && (sidebarStatusMsg.textContent = "");
+                if (a) a.disabled = false;
+                if (i) i();
             }, 4000);
         }
-        break
+        break;
     } catch (e) {
         if ("PIN_REQUIRED" === e.message || "PIN_INCORRECT" === e.message) {
+            if ("PIN_INCORRECT" === e.message) {
+                delete verifiedDevicePins[selectedDeviceId];
+            }
             o = "PIN_INCORRECT" === e.message ? "PIN incorrecto. Intentá de nuevo." : "";
             const t = await showPinModal(r, o);
             if (!t) {
                 sidebarStatusMsg.textContent = "Cancelado — PIN requerido.", i && i();
-                break
+                break;
             }
             d = t.pin, s = t.remember;
-            continue
+            verifiedDevicePins[selectedDeviceId] = t.pin;
+            const dHash = c.pinHash || (c.info && c.info.pinHash);
+            if (dHash) {
+                verifiedDevicePinHashes[selectedDeviceId] = dHash;
+            }
+            continue;
         }
         sidebarStatusMsg.textContent = "✗ Error: " + (e.message || "desconocido"), i && i();
-        break
+        break;
     }
-    a && (a.disabled = !1)
+    a && (a.disabled = !1);
 }
 
 function showPinModal(e, t) {
@@ -473,10 +671,12 @@ saveNameBtn.addEventListener("click", async () => {
             externalMediaBlocked: ["BLOCK_EXTERNAL_MEDIA", "UNBLOCK_EXTERNAL_MEDIA"],
             tetheringBlocked: ["BLOCK_TETHERING", "UNBLOCK_TETHERING"],
             adBlockingEnabled: ["ENABLE_ADBLOCK", "DISABLE_ADBLOCK"],
+            gifsBlocked: ["BLOCK_GIFS", "UNBLOCK_GIFS"],
             aiModeEnabled: ["ENABLE_AI_MODE", "DISABLE_AI_MODE"],
             mapsImageBlockingEnabled: ["ENABLE_MAPS_IMAGE_BLOCKING", "DISABLE_MAPS_IMAGE_BLOCKING"],
             whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
             whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
+            mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"]
         } [n];
     if (!i) return;
@@ -527,6 +727,13 @@ saveNameBtn.addEventListener("click", async () => {
             sidebarForgetPinBtn.disabled = !1
         }
     }
+}), sidebarUpdateLocksuiteBtn.addEventListener("click", () => {
+    if (selectedDeviceId) {
+        if (confirm("¿Actualizar la aplicación LockSuite (sistema) en este celular?")) {
+            sidebarUpdateLocksuiteBtn.disabled = !0;
+            runCommandOnDevice(selectedDeviceId, "UPDATE_LOCKSUITE", null, sidebarUpdateLocksuiteBtn);
+        }
+    }
 }), sidebarChangePinBtn.addEventListener("click", () => {
     const pin = sidebarNewPinInput.value.trim();
     if (!pin || pin.length < 4 || pin.length > 16 || !/^\d+$/.test(pin)) {
@@ -572,6 +779,26 @@ saveNameBtn.addEventListener("click", async () => {
     devicesListener && database.ref("devices").once("value").then(e => {
         currentDevicesData = e.val() || {}, renderDevicesList(currentDevicesData)
     })
+}), globalUpdateLocksuiteBtn.addEventListener("click", () => {
+    const deviceIds = Object.keys(currentDevicesData);
+    if (deviceIds.length === 0) {
+        alert("No hay ningún dispositivo registrado.");
+        return;
+    }
+    if (confirm(`¿Enviar orden de actualización de LockSuite (sistema) a los ${deviceIds.length} celulares registrados?`)) {
+        globalUpdateLocksuiteBtn.disabled = true;
+        let successCount = 0;
+        let failCount = 0;
+        const promises = deviceIds.map(deviceId => {
+            return runCommandOnDevice(deviceId, "UPDATE_LOCKSUITE")
+                .then(() => { successCount++; })
+                .catch(() => { failCount++; });
+        });
+        Promise.all(promises).finally(() => {
+            globalUpdateLocksuiteBtn.disabled = false;
+            alert(`Orden de actualización enviada. Éxito: ${successCount}, Fallidos: ${failCount}`);
+        });
+    }
 });
 
 // --- Archivar dispositivo ---
@@ -624,6 +851,860 @@ if (sidebarDeleteBtn) {
             sidebarStatusMsg.textContent = "✘ Error al eliminar: " + e.message;
         } finally {
             sidebarDeleteBtn.disabled = false;
+        }
+    });
+}
+
+// ==========================================
+// LÓGICA DE GRUPOS
+// ==========================================
+const mainTabDevices = document.getElementById("main-tab-devices");
+const mainTabGroups = document.getElementById("main-tab-groups");
+const groupsContainer = document.getElementById("groups-container");
+const groupsList = document.getElementById("groups-list");
+const createGroupBtn = document.getElementById("create-group-btn");
+
+const groupSidebar = document.getElementById("group-sidebar");
+const groupSidebarName = document.getElementById("group-sidebar-name");
+const groupSidebarId = document.getElementById("group-sidebar-id");
+const groupSidebarCloseBtn = document.getElementById("group-sidebar-close-btn");
+const groupNameInput = document.getElementById("group-name-input");
+const saveGroupNameBtn = document.getElementById("save-group-name-btn");
+const groupDevicesSelectorList = document.getElementById("group-devices-selector-list");
+const groupSidebarStatusMsg = document.getElementById("group-sidebar-status-msg");
+
+// Toggles de políticas grupales
+const groupPolicyPlaystore = document.getElementById("group-policy-playstore");
+const groupPolicyCamera = document.getElementById("group-policy-camera");
+const groupPolicyAdblock = document.getElementById("group-policy-adblock");
+const groupPolicyGifs = document.getElementById("group-policy-gifs");
+const groupPolicyWebview = document.getElementById("group-policy-webview");
+
+// Acciones de mantenimiento de grupo
+const groupActionUnsuspendAll = document.getElementById("group-action-unsuspend-all");
+const groupUpdatePackageInput = document.getElementById("group-update-package-input");
+const groupActionUpdateApp = document.getElementById("group-action-update-app");
+const groupActionUpdateLocksuite = document.getElementById("group-action-update-locksuite");
+const groupDeleteBtn = document.getElementById("group-delete-btn");
+
+let selectedGroupId = null;
+let currentGroupsData = {};
+
+// 1. Alternancia de Pestañas Principales (Celulares / Grupos / Archivados)
+const mainTabArchived = document.getElementById("main-tab-archived");
+const archivedContainer = document.getElementById("archived-container");
+const archivedList = document.getElementById("archived-list");
+
+let currentArchivedDevicesData = {};
+let archivedListener = null;
+
+const mainTabGlobalSettings = document.getElementById("main-tab-global-settings");
+const globalSettingsContainer = document.getElementById("global-settings-container");
+
+const globalAllowedPackagesInput = document.getElementById("global-allowed-packages-input");
+const saveGlobalAllowedPackagesBtn = document.getElementById("save-global-allowed-packages-btn");
+const globalAllowedStatusMsg = document.getElementById("global-allowed-status-msg");
+
+const storeAppLabel = document.getElementById("store-app-label");
+const storeAppPackage = document.getElementById("store-app-package");
+const storeAppUrl = document.getElementById("store-app-url");
+const addStoreAppBtn = document.getElementById("add-store-app-btn");
+const storeAppsList = document.getElementById("store-apps-list");
+
+if (mainTabDevices && mainTabGroups && mainTabArchived && mainTabGlobalSettings) {
+    mainTabDevices.addEventListener("click", () => {
+        mainTabDevices.classList.add("active");
+        mainTabGroups.classList.remove("active");
+        mainTabArchived.classList.remove("active");
+        mainTabGlobalSettings.classList.remove("active");
+        
+        mainTabDevices.style.background = "var(--navy-light)";
+        mainTabDevices.style.color = "var(--text-light)";
+        mainTabGroups.style.background = "none";
+        mainTabGroups.style.color = "var(--text-gray)";
+        mainTabArchived.style.background = "none";
+        mainTabArchived.style.color = "var(--text-gray)";
+        mainTabGlobalSettings.style.background = "none";
+        mainTabGlobalSettings.style.color = "var(--text-gray)";
+        
+        devicesContainer.classList.remove("hidden");
+        groupsContainer.classList.add("hidden");
+        archivedContainer.classList.add("hidden");
+        globalSettingsContainer.classList.add("hidden");
+    });
+
+    mainTabGroups.addEventListener("click", () => {
+        mainTabGroups.classList.add("active");
+        mainTabDevices.classList.remove("active");
+        mainTabArchived.classList.remove("active");
+        mainTabGlobalSettings.classList.remove("active");
+        
+        mainTabGroups.style.background = "var(--navy-light)";
+        mainTabGroups.style.color = "var(--text-light)";
+        mainTabDevices.style.background = "none";
+        mainTabDevices.style.color = "var(--text-gray)";
+        mainTabArchived.style.background = "none";
+        mainTabArchived.style.color = "var(--text-gray)";
+        mainTabGlobalSettings.style.background = "none";
+        mainTabGlobalSettings.style.color = "var(--text-gray)";
+        
+        groupsContainer.classList.remove("hidden");
+        devicesContainer.classList.add("hidden");
+        archivedContainer.classList.add("hidden");
+        globalSettingsContainer.classList.add("hidden");
+        closeDeviceSidebar();
+    });
+
+    mainTabArchived.addEventListener("click", () => {
+        mainTabArchived.classList.add("active");
+        mainTabDevices.classList.remove("active");
+        mainTabGroups.classList.remove("active");
+        mainTabGlobalSettings.classList.remove("active");
+        
+        mainTabArchived.style.background = "var(--navy-light)";
+        mainTabArchived.style.color = "var(--text-light)";
+        mainTabDevices.style.background = "none";
+        mainTabDevices.style.color = "var(--text-gray)";
+        mainTabGroups.style.background = "none";
+        mainTabGroups.style.color = "var(--text-gray)";
+        mainTabGlobalSettings.style.background = "none";
+        mainTabGlobalSettings.style.color = "var(--text-gray)";
+        
+        archivedContainer.classList.remove("hidden");
+        devicesContainer.classList.add("hidden");
+        groupsContainer.classList.add("hidden");
+        globalSettingsContainer.classList.add("hidden");
+        closeDeviceSidebar();
+        closeGroupSidebar();
+    });
+
+    mainTabGlobalSettings.addEventListener("click", () => {
+        mainTabGlobalSettings.classList.add("active");
+        mainTabDevices.classList.remove("active");
+        mainTabGroups.classList.remove("active");
+        mainTabArchived.classList.remove("active");
+        
+        mainTabGlobalSettings.style.background = "var(--navy-light)";
+        mainTabGlobalSettings.style.color = "var(--text-light)";
+        mainTabDevices.style.background = "none";
+        mainTabDevices.style.color = "var(--text-gray)";
+        mainTabGroups.style.background = "none";
+        mainTabGroups.style.color = "var(--text-gray)";
+        mainTabArchived.style.background = "none";
+        mainTabArchived.style.color = "var(--text-gray)";
+        
+        globalSettingsContainer.classList.remove("hidden");
+        devicesContainer.classList.add("hidden");
+        groupsContainer.classList.add("hidden");
+        archivedContainer.classList.add("hidden");
+        closeDeviceSidebar();
+        closeGroupSidebar();
+    });
+}
+
+// 2. Renderizar Lista de Tarjetas de Grupos
+function renderGroupsList(groups) {
+    if (!groupsList) return;
+    groupsList.innerHTML = "";
+    
+    const groupEntries = Object.entries(groups);
+    if (groupEntries.length === 0) {
+        groupsList.innerHTML = '<p class="loading-text" style="grid-column: 1/-1;">Todavía no hay ningún grupo creado. Hacé clic en "+ Crear Nuevo Grupo".</p>';
+        return;
+    }
+    
+    groupEntries.forEach(([groupId, group]) => {
+        const deviceIds = Object.keys(group.devices || {});
+        const deviceCount = deviceIds.length;
+        
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.background = "var(--navy-medium)";
+        card.style.borderRadius = "16px";
+        card.style.padding = "20px";
+        card.style.display = "flex";
+        card.style.flexDirection = "column";
+        card.style.justifyContent = "space-between";
+        card.style.gap = "12px";
+        
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.justifyContent = "space-between";
+        header.style.alignItems = "flex-start";
+        
+        const info = document.createElement("div");
+        const title = document.createElement("h2");
+        title.style.margin = "0";
+        title.style.fontSize = "16px";
+        title.textContent = group.name || "Grupo sin nombre";
+        
+        const sub = document.createElement("p");
+        sub.style.margin = "4px 0 0 0";
+        sub.style.fontSize = "12px";
+        sub.style.color = "var(--text-gray)";
+        sub.textContent = `${deviceCount} celular${deviceCount === 1 ? "" : "es"} asignado${deviceCount === 1 ? "" : "s"}`;
+        
+        info.appendChild(title);
+        info.appendChild(sub);
+        
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.style.backgroundColor = deviceCount > 0 ? "var(--navy-light)" : "rgba(255,255,255,0.05)";
+        badge.style.color = deviceCount > 0 ? "var(--text-light)" : "var(--text-gray)";
+        badge.textContent = deviceCount > 0 ? "Activo" : "Vacío";
+        
+        header.appendChild(info);
+        header.appendChild(badge);
+        card.appendChild(header);
+        
+        const actionBar = document.createElement("div");
+        const adminBtn = document.createElement("button");
+        adminBtn.className = "action-btn";
+        adminBtn.style.background = "var(--accent-orange)";
+        adminBtn.style.color = "var(--navy-dark)";
+        adminBtn.style.fontWeight = "bold";
+        adminBtn.style.fontSize = "12px";
+        adminBtn.style.padding = "8px 16px";
+        adminBtn.style.borderRadius = "8px";
+        adminBtn.style.cursor = "pointer";
+        adminBtn.style.width = "100%";
+        adminBtn.textContent = "👥 Configurar Grupo";
+        
+        adminBtn.addEventListener("click", () => openGroupSidebar(groupId, group));
+        actionBar.appendChild(adminBtn);
+        card.appendChild(actionBar);
+        
+        groupsList.appendChild(card);
+    });
+}
+
+// 3. Crear Nuevo Grupo
+if (createGroupBtn) {
+    createGroupBtn.addEventListener("click", () => {
+        const groupName = prompt("Escribí el nombre para el nuevo grupo:");
+        if (!groupName || groupName.trim() === "") return;
+        
+        database.ref("groups").push({
+            name: groupName.trim(),
+            devices: {},
+            policies: {
+                playstoreBlocked: false,
+                cameraDisabled: false,
+                adBlockingEnabled: false,
+                gifsBlocked: false,
+                webviewBlocked: false
+            }
+        }).then(() => {
+            console.log("Grupo creado con éxito");
+        }).catch(err => {
+            alert("Error al crear grupo: " + err.message);
+        });
+    });
+}
+
+// 4. Sidebar del Grupo (Abrir / Cerrar)
+function openGroupSidebar(groupId, group) {
+    selectedGroupId = groupId;
+    if (groupSidebar) {
+        groupSidebar.classList.remove("hidden");
+        updateGroupSidebarUI(groupId, group);
+    }
+}
+
+function closeGroupSidebar() {
+    selectedGroupId = null;
+    if (groupSidebar) {
+        groupSidebar.classList.add("hidden");
+    }
+}
+
+if (groupSidebarCloseBtn) {
+    groupSidebarCloseBtn.addEventListener("click", closeGroupSidebar);
+}
+
+// 5. Alternancia de Pestañas internas del Sidebar del Grupo
+const groupTabButtons = document.querySelectorAll(".group-tab-btn");
+const groupTabPanels = document.querySelectorAll(".group-tab-panel");
+groupTabButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+        groupTabButtons.forEach(b => {
+            b.classList.remove("active");
+            b.style.color = "var(--text-gray)";
+            b.style.borderBottomColor = "transparent";
+        });
+        groupTabPanels.forEach(p => p.style.display = "none");
+        
+        btn.classList.add("active");
+        btn.style.color = "var(--accent-orange)";
+        btn.style.borderBottomColor = "var(--accent-orange)";
+        
+        const tabId = btn.getAttribute("data-tab");
+        const panel = document.getElementById(tabId);
+        if (panel) {
+            panel.style.display = "flex";
+        }
+    });
+});
+
+// 6. Actualizar Interfaz del Sidebar del Grupo
+function updateGroupSidebarUI(groupId, group) {
+    if (!groupSidebar) return;
+    
+    groupSidebarName.textContent = group.name || "Grupo sin nombre";
+    groupSidebarId.textContent = `ID: ${groupId}`;
+    groupNameInput.value = group.name || "";
+    
+    const policies = group.policies || {};
+    groupSidebar.querySelectorAll(".group-policy-switch").forEach(el => {
+        const policyKey = el.getAttribute("data-policy");
+        el.checked = !!policies[policyKey];
+    });
+    
+    // Renderizar selector de dispositivos
+    renderGroupDevicesSelector(group);
+}
+
+// 7. Renderizar Lista de Selección de Celulares
+function renderGroupDevicesSelector(group) {
+    if (!groupDevicesSelectorList) return;
+    groupDevicesSelectorList.innerHTML = "";
+    
+    const deviceEntries = Object.entries(currentDevicesData);
+    if (deviceEntries.length === 0) {
+        groupDevicesSelectorList.innerHTML = '<p class="hint-text">No hay celulares registrados para asociar.</p>';
+        return;
+    }
+    
+    deviceEntries.forEach(([deviceId, device]) => {
+        const name = field(device, "deviceName", "Dispositivo sin nombre");
+        const model = field(device, "model", "Modelo desconocido");
+        const isChecked = group.devices && group.devices[deviceId] === true;
+        
+        const label = document.createElement("label");
+        label.style.display = "flex";
+        label.style.justifyContent = "space-between";
+        label.style.alignItems = "center";
+        label.style.fontSize = "13px";
+        label.style.padding = "8px";
+        label.style.background = "var(--navy-dark)";
+        label.style.borderRadius = "8px";
+        label.style.cursor = "pointer";
+        
+        const textSpan = document.createElement("span");
+        textSpan.style.display = "flex";
+        textSpan.style.flexDirection = "column";
+        
+        const nameSpan = document.createElement("span");
+        nameSpan.style.fontWeight = "bold";
+        nameSpan.textContent = name;
+        
+        const modelSpan = document.createElement("span");
+        modelSpan.style.fontSize = "10px";
+        modelSpan.style.color = "var(--text-gray)";
+        modelSpan.textContent = `${model} (ID: ${deviceId.substring(0, 8)}...)`;
+        
+        textSpan.appendChild(nameSpan);
+        textSpan.appendChild(modelSpan);
+        
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = isChecked;
+        checkbox.style.width = "auto";
+        checkbox.style.margin = "0";
+        
+        checkbox.addEventListener("change", () => {
+            if (checkbox.checked) {
+                database.ref(`groups/${selectedGroupId}/devices/${deviceId}`).set(true).then(() => {
+                    // Sincronizar políticas del grupo actuales a este nuevo celular de inmediato
+                    applyGroupPoliciesToSingleDevice(selectedGroupId, deviceId);
+                });
+            } else {
+                database.ref(`groups/${selectedGroupId}/devices/${deviceId}`).remove();
+            }
+        });
+        
+        label.appendChild(textSpan);
+        label.appendChild(checkbox);
+        groupDevicesSelectorList.appendChild(label);
+    });
+}
+
+// Guardar cambio de nombre de grupo
+if (saveGroupNameBtn && groupNameInput) {
+    saveGroupNameBtn.addEventListener("click", () => {
+        if (!selectedGroupId) return;
+        const newName = groupNameInput.value.trim();
+        if (newName === "") return;
+        saveGroupNameBtn.disabled = true;
+        
+        database.ref(`groups/${selectedGroupId}/name`).set(newName).then(() => {
+            groupSidebarName.textContent = newName;
+            groupSidebarStatusMsg.textContent = "✔ Nombre guardado.";
+            setTimeout(() => groupSidebarStatusMsg.textContent = "", 3000);
+        }).catch(err => {
+            groupSidebarStatusMsg.textContent = "✘ Error: " + err.message;
+        }).finally(() => {
+            saveGroupNameBtn.disabled = false;
+        });
+    });
+}
+
+// 8. Enviar Comando a Todos los Dispositivos del Grupo
+async function runCommandOnGroup(groupId, command, packages = null, buttonEl = null, extraParams = null) {
+    const groupSnap = await database.ref(`groups/${groupId}`).once("value");
+    if (!groupSnap.exists()) return;
+    const group = groupSnap.val();
+    const deviceIds = Object.keys(group.devices || {});
+    if (deviceIds.length === 0) {
+        groupSidebarStatusMsg.textContent = "El grupo no tiene celulares asociados.";
+        setTimeout(() => groupSidebarStatusMsg.textContent = "", 4000);
+        return;
+    }
+    
+    if (buttonEl) buttonEl.disabled = true;
+    groupSidebarStatusMsg.textContent = `Enviando comando a ${deviceIds.length} celulares...`;
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const deviceId of deviceIds) {
+        try {
+            const idToken = await auth.currentUser.getIdToken();
+            const payload = {
+                deviceId: deviceId,
+                command: command,
+                packages: packages
+            };
+            if (extraParams) {
+                Object.assign(payload, extraParams);
+            }
+            
+            const response = await fetch("https://sendcommandv8-687828714595.us-central1.run.app", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${idToken}`
+                },
+                body: JSON.stringify(payload)
+            });
+            if (response.ok) {
+                successCount++;
+            } else {
+                failCount++;
+            }
+        } catch (err) {
+            failCount++;
+        }
+    }
+    
+    groupSidebarStatusMsg.textContent = `Enviado: ${successCount} exitosos, ${failCount} fallidos.`;
+    if (buttonEl) buttonEl.disabled = false;
+    setTimeout(() => {
+        if (groupSidebarStatusMsg.textContent.startsWith("Enviado:")) {
+            groupSidebarStatusMsg.textContent = "";
+        }
+    }, 5000);
+}
+
+// 9. Aplicar Políticas del Grupo al Asociar un Nuevo Celular
+async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
+    try {
+        const groupSnap = await database.ref(`groups/${groupId}`).once("value");
+        if (!groupSnap.exists()) return;
+        const group = groupSnap.val();
+        const policies = group.policies || {};
+        
+        const idToken = await auth.currentUser.getIdToken();
+        const sendPayload = async (cmd, pkgs = null) => {
+            await fetch("https://sendcommandv8-687828714595.us-central1.run.app", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${idToken}` },
+                body: JSON.stringify({ deviceId: deviceId, command: cmd, packages: pkgs })
+            }).catch(() => {});
+        };
+
+        const mapping = {
+            factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
+            installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
+            uninstallAppsBlocked: ["BLOCK_UNINSTALL_APPS", "UNBLOCK_UNINSTALL_APPS"],
+            adbBlocked: ["BLOCK_ADB", "UNBLOCK_ADB"],
+            userSwitchBlocked: ["BLOCK_USER_SWITCH", "UNBLOCK_USER_SWITCH"],
+            modifyAccountsBlocked: ["BLOCK_MODIFY_ACCOUNTS", "UNBLOCK_MODIFY_ACCOUNTS"],
+            safeBootBlocked: ["BLOCK_SAFE_BOOT", "UNBLOCK_SAFE_BOOT"],
+            unknownSourcesBlocked: ["BLOCK_UNKNOWN_SOURCES", "UNBLOCK_UNKNOWN_SOURCES"],
+            wifiBlocked: ["BLOCK_WIFI", "UNBLOCK_WIFI"],
+            vpnBlocked: ["BLOCK_VPN", "UNBLOCK_VPN"],
+            appsControlBlocked: ["BLOCK_APPS_CONTROL", "UNBLOCK_APPS_CONTROL"],
+            adjustVolumeBlocked: ["BLOCK_VOLUME", "UNBLOCK_VOLUME"],
+            cameraDisabled: ["DISABLE_CAMERA", "ENABLE_CAMERA"],
+            screenCaptureBlocked: ["BLOCK_SCREEN_CAPTURE", "UNBLOCK_SCREEN_CAPTURE"],
+            statusBarDisabled: ["DISABLE_STATUSBAR", "ENABLE_STATUSBAR"],
+            keyguardDisabled: ["DISABLE_KEYGUARD", "ENABLE_KEYGUARD"],
+            internetBlocked: ["BLOCK_INTERNET", "UNBLOCK_INTERNET"],
+            bluetoothBlocked: ["BLOCK_BLUETOOTH", "UNBLOCK_BLUETOOTH"],
+            bluetoothSharingBlocked: ["BLOCK_BLUETOOTH_SHARING", "UNBLOCK_BLUETOOTH_SHARING"],
+            externalMediaBlocked: ["BLOCK_EXTERNAL_MEDIA", "UNBLOCK_EXTERNAL_MEDIA"],
+            tetheringBlocked: ["BLOCK_TETHERING", "UNBLOCK_TETHERING"],
+            adBlockingEnabled: ["ENABLE_ADBLOCK", "DISABLE_ADBLOCK"],
+            gifsBlocked: ["BLOCK_GIFS", "UNBLOCK_GIFS"],
+            aiModeEnabled: ["ENABLE_AI_MODE", "DISABLE_AI_MODE"],
+            mapsImageBlockingEnabled: ["ENABLE_MAPS_IMAGE_BLOCKING", "DISABLE_MAPS_IMAGE_BLOCKING"],
+            whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
+            whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
+            mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
+            stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
+            webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
+        };
+
+        for (const [policyKey, mapCmds] of Object.entries(mapping)) {
+            const active = policies[policyKey] === true;
+            const cmd = active ? mapCmds[0] : mapCmds[1];
+            const pkgs = (policyKey === "webviewBlocked") ? ["com.android.chrome"] : null;
+            await sendPayload(cmd, pkgs);
+        }
+    } catch (err) {
+        console.error("Error al sincronizar políticas iniciales:", err);
+    }
+}
+
+// 10. Listeners para Toggles de Políticas Grupales
+if (groupSidebar) {
+    groupSidebar.addEventListener("change", (e) => {
+        if (!e.target.classList.contains("group-policy-switch")) return;
+        if (!selectedGroupId) return;
+        
+        const el = e.target;
+        const policyKey = el.getAttribute("data-policy");
+        const active = el.checked;
+        
+        const mapping = {
+            factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
+            installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
+            uninstallAppsBlocked: ["BLOCK_UNINSTALL_APPS", "UNBLOCK_UNINSTALL_APPS"],
+            adbBlocked: ["BLOCK_ADB", "UNBLOCK_ADB"],
+            userSwitchBlocked: ["BLOCK_USER_SWITCH", "UNBLOCK_USER_SWITCH"],
+            modifyAccountsBlocked: ["BLOCK_MODIFY_ACCOUNTS", "UNBLOCK_MODIFY_ACCOUNTS"],
+            safeBootBlocked: ["BLOCK_SAFE_BOOT", "UNBLOCK_SAFE_BOOT"],
+            unknownSourcesBlocked: ["BLOCK_UNKNOWN_SOURCES", "UNBLOCK_UNKNOWN_SOURCES"],
+            wifiBlocked: ["BLOCK_WIFI", "UNBLOCK_WIFI"],
+            vpnBlocked: ["BLOCK_VPN", "UNBLOCK_VPN"],
+            appsControlBlocked: ["BLOCK_APPS_CONTROL", "UNBLOCK_APPS_CONTROL"],
+            adjustVolumeBlocked: ["BLOCK_VOLUME", "UNBLOCK_VOLUME"],
+            cameraDisabled: ["DISABLE_CAMERA", "ENABLE_CAMERA"],
+            screenCaptureBlocked: ["BLOCK_SCREEN_CAPTURE", "UNBLOCK_SCREEN_CAPTURE"],
+            statusBarDisabled: ["DISABLE_STATUSBAR", "ENABLE_STATUSBAR"],
+            keyguardDisabled: ["DISABLE_KEYGUARD", "ENABLE_KEYGUARD"],
+            internetBlocked: ["BLOCK_INTERNET", "UNBLOCK_INTERNET"],
+            bluetoothBlocked: ["BLOCK_BLUETOOTH", "UNBLOCK_BLUETOOTH"],
+            bluetoothSharingBlocked: ["BLOCK_BLUETOOTH_SHARING", "UNBLOCK_BLUETOOTH_SHARING"],
+            externalMediaBlocked: ["BLOCK_EXTERNAL_MEDIA", "UNBLOCK_EXTERNAL_MEDIA"],
+            tetheringBlocked: ["BLOCK_TETHERING", "UNBLOCK_TETHERING"],
+            adBlockingEnabled: ["ENABLE_ADBLOCK", "DISABLE_ADBLOCK"],
+            gifsBlocked: ["BLOCK_GIFS", "UNBLOCK_GIFS"],
+            aiModeEnabled: ["ENABLE_AI_MODE", "DISABLE_AI_MODE"],
+            mapsImageBlockingEnabled: ["ENABLE_MAPS_IMAGE_BLOCKING", "DISABLE_MAPS_IMAGE_BLOCKING"],
+            whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
+            whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
+            mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
+            stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
+            webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
+        } [policyKey];
+        
+        if (!mapping) return;
+        const cmd = active ? mapping[0] : mapping[1];
+        const pkgs = (policyKey === "webviewBlocked") ? ["com.android.chrome"] : null;
+        
+        database.ref(`groups/${selectedGroupId}/policies/${policyKey}`).set(active);
+        runCommandOnGroup(selectedGroupId, cmd, pkgs, el);
+    });
+}
+
+// 11. Acciones de Mantenimiento
+if (groupActionUnsuspendAll) {
+    groupActionUnsuspendAll.addEventListener("click", () => {
+        if (!selectedGroupId) return;
+        if (confirm("¿Desbloquear todas las aplicaciones suspendidas en TODOS los celulares de este grupo?")) {
+            runCommandOnGroup(selectedGroupId, "UNSUSPEND_ALL_APPS", null, groupActionUnsuspendAll);
+        }
+    });
+}
+
+if (groupActionUpdateApp && groupUpdatePackageInput) {
+    groupActionUpdateApp.addEventListener("click", () => {
+        if (!selectedGroupId) return;
+        const pkg = groupUpdatePackageInput.value.trim();
+        if (pkg === "") {
+            alert("Escribí el nombre del paquete para actualizar.");
+            return;
+        }
+        if (confirm(`¿Enviar orden de actualización para "${pkg}" a todos los celulares del grupo?`)) {
+            runCommandOnGroup(selectedGroupId, "UPDATE_APP", [pkg], groupActionUpdateApp);
+            groupUpdatePackageInput.value = "";
+        }
+    });
+}
+
+if (groupActionUpdateLocksuite) {
+    groupActionUpdateLocksuite.addEventListener("click", () => {
+        if (!selectedGroupId) return;
+        if (confirm("¿Actualizar la aplicación LockSuite (sistema) en todos los celulares de este grupo?")) {
+            runCommandOnGroup(selectedGroupId, "UPDATE_LOCKSUITE", null, groupActionUpdateLocksuite);
+        }
+    });
+}
+
+// 12. Eliminar Grupo
+if (groupDeleteBtn) {
+    groupDeleteBtn.addEventListener("click", () => {
+        if (!selectedGroupId) return;
+        const group = currentGroupsData[selectedGroupId] || {};
+        if (confirm(`¿Eliminar el grupo "${group.name || "este grupo"}"?\n\nLos celulares seguirán funcionando individualmente.`)) {
+            groupDeleteBtn.disabled = true;
+            database.ref(`groups/${selectedGroupId}`).remove().then(() => {
+                closeGroupSidebar();
+            }).catch(err => {
+                alert("Error al eliminar grupo: " + err.message);
+            }).finally(() => {
+                groupDeleteBtn.disabled = false;
+            });
+        }
+    });
+}
+
+// ==========================================
+// LÓGICA DE DISPOSITIVOS ARCHIVADOS
+// ==========================================
+function renderArchivedDevicesList(archived) {
+    if (!archivedList) return;
+    archivedList.innerHTML = "";
+    
+    const entries = Object.entries(archived);
+    if (entries.length === 0) {
+        archivedList.innerHTML = '<p class="loading-text" style="grid-column: 1/-1;">No hay ningún dispositivo archivado en la base de datos.</p>';
+        return;
+    }
+    
+    entries.forEach(([deviceId, device]) => {
+        const name = field(device, "deviceName", "Dispositivo sin nombre");
+        const model = field(device, "model", "Modelo desconocido");
+        const archivedAt = device._archivedAt ? new Date(device._archivedAt).toLocaleString("es-AR") : "Fecha desconocida";
+        
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.background = "var(--navy-medium)";
+        card.style.borderRadius = "16px";
+        card.style.padding = "20px";
+        card.style.display = "flex";
+        card.style.flexDirection = "column";
+        card.style.justifyContent = "space-between";
+        card.style.gap = "12px";
+        
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.justifyContent = "space-between";
+        header.style.alignItems = "flex-start";
+        
+        const info = document.createElement("div");
+        const title = document.createElement("h2");
+        title.style.margin = "0";
+        title.style.fontSize = "16px";
+        title.textContent = name;
+        
+        const modelLabel = document.createElement("p");
+        modelLabel.style.margin = "4px 0 0 0";
+        modelLabel.style.fontSize = "12px";
+        modelLabel.style.color = "var(--text-gray)";
+        modelLabel.textContent = `${model} (ID: ${deviceId.substring(0, 8)}...)`;
+        
+        info.appendChild(title);
+        info.appendChild(modelLabel);
+        
+        const badge = document.createElement("span");
+        badge.className = "badge inactive";
+        badge.textContent = "Archivado";
+        
+        header.appendChild(info);
+        header.appendChild(badge);
+        card.appendChild(header);
+        
+        const dateText = document.createElement("p");
+        dateText.style.margin = "0";
+        dateText.style.fontSize = "11px";
+        dateText.style.color = "var(--text-gray)";
+        dateText.textContent = `Archivado el: ${archivedAt}`;
+        card.appendChild(dateText);
+        
+        const actions = document.createElement("div");
+        actions.style.display = "flex";
+        actions.style.gap = "8px";
+        
+        const restoreBtn = document.createElement("button");
+        restoreBtn.style.flex = "1";
+        restoreBtn.style.padding = "8px";
+        restoreBtn.style.fontSize = "12px";
+        restoreBtn.style.background = "var(--success-green)";
+        restoreBtn.style.color = "white";
+        restoreBtn.style.borderRadius = "8px";
+        restoreBtn.style.border = "none";
+        restoreBtn.style.cursor = "pointer";
+        restoreBtn.textContent = "🔓 Restaurar";
+        restoreBtn.addEventListener("click", () => restoreArchivedDevice(deviceId, device, restoreBtn));
+        
+        const deleteBtn = document.createElement("button");
+        deleteBtn.style.flex = "1";
+        deleteBtn.style.padding = "8px";
+        deleteBtn.style.fontSize = "12px";
+        deleteBtn.style.background = "#7f1d1d";
+        deleteBtn.style.color = "white";
+        deleteBtn.style.border = "1px solid #ef4444";
+        deleteBtn.style.borderRadius = "8px";
+        deleteBtn.style.cursor = "pointer";
+        deleteBtn.textContent = "🗑️ Eliminar";
+        deleteBtn.addEventListener("click", () => deleteArchivedDevicePermanently(deviceId, name, deleteBtn));
+        
+        actions.appendChild(restoreBtn);
+        actions.appendChild(deleteBtn);
+        card.appendChild(actions);
+        
+        archivedList.appendChild(card);
+    });
+}
+
+// Restaurar dispositivo archivado
+async function restoreArchivedDevice(deviceId, device, button) {
+    if (confirm(`¿Restaurar el dispositivo "${device.deviceName || device.model || deviceId}" al panel activo?`)) {
+        button.disabled = true;
+        try {
+            // Eliminar marca de archivo temporal
+            const restoredData = { ...device };
+            delete restoredData._archivedAt;
+            
+            // Escribir en devices y borrar de archivedDevices
+            await database.ref(`devices/${deviceId}`).set(restoredData);
+            await database.ref(`archivedDevices/${deviceId}`).remove();
+        } catch (err) {
+            alert("Error al restaurar dispositivo: " + err.message);
+            button.disabled = false;
+        }
+    }
+}
+
+// Eliminar dispositivo archivado definitivamente
+async function deleteArchivedDevicePermanently(deviceId, name, button) {
+    const confirmed1 = confirm(`⚠️ ¿Eliminar definitivamente "${name}"?\n\nEsta acción eliminará para siempre todos los registros y credenciales de este celular.`);
+    if (!confirmed1) return;
+    const confirmed2 = confirm(`¿Estás seguro de que querés eliminar permanentemente "${name}"?`);
+    if (!confirmed2) return;
+    
+    button.disabled = true;
+    try {
+        await database.ref(`archivedDevices/${deviceId}`).remove();
+        await database.ref(`deviceSecrets/${deviceId}`).remove().catch(() => {});
+    } catch (err) {
+        alert("Error al eliminar dispositivo: " + err.message);
+        button.disabled = false;
+    }
+}
+
+// ==========================================
+// AJUSTES GLOBALES Y TIENDA KOSHER
+// ==========================================
+if (saveGlobalAllowedPackagesBtn) {
+    saveGlobalAllowedPackagesBtn.addEventListener("click", () => {
+        const val = globalAllowedPackagesInput.value.split(",").map(p => p.trim()).filter(Boolean);
+        saveGlobalAllowedPackagesBtn.disabled = true;
+        globalAllowedStatusMsg.textContent = "Guardando...";
+        database.ref("globalSettings/allowedPackages").set(val)
+            .then(() => {
+                globalAllowedStatusMsg.textContent = "✓ Configuración guardada correctamente.";
+                setTimeout(() => globalAllowedStatusMsg.textContent = "", 4000);
+            })
+            .catch(err => {
+                globalAllowedStatusMsg.textContent = "✗ Error al guardar: " + err.message;
+            })
+            .finally(() => {
+                saveGlobalAllowedPackagesBtn.disabled = false;
+            });
+    });
+}
+
+if (addStoreAppBtn) {
+    addStoreAppBtn.addEventListener("click", () => {
+        const label = storeAppLabel.value.trim();
+        const pkg = storeAppPackage.value.trim();
+        const url = storeAppUrl.value.trim();
+        if (!label || !pkg || !url) {
+            alert("Por favor, completa todos los campos.");
+            return;
+        }
+        if (!/^[a-zA-Z0-9_.]+$/.test(pkg)) {
+            alert("Nombre de paquete inválido.");
+            return;
+        }
+        const key = pkg.replace(/\./g, "_");
+        addStoreAppBtn.disabled = true;
+        database.ref("storeApps/" + key).set({
+            label: label,
+            packageName: pkg,
+            apkUrl: url
+        }).then(() => {
+            storeAppLabel.value = "";
+            storeAppPackage.value = "";
+            storeAppUrl.value = "";
+        }).catch(err => {
+            alert("Error al agregar: " + err.message);
+        }).finally(() => {
+            addStoreAppBtn.disabled = false;
+        });
+    });
+}
+
+function renderStoreApps(storeApps) {
+    if (!storeAppsList) return;
+    storeAppsList.innerHTML = "";
+    const entries = Object.entries(storeApps);
+    if (entries.length === 0) {
+        storeAppsList.innerHTML = '<p class="loading-text" style="grid-column: 1/-1;">No hay aplicaciones en la tienda.</p>';
+        return;
+    }
+    entries.forEach(([key, app]) => {
+        const card = document.createElement("div");
+        card.className = "group-card";
+        card.style.padding = "16px";
+        card.style.display = "flex";
+        card.style.flexDirection = "column";
+        card.style.justifyContent = "space-between";
+        card.innerHTML = `
+            <div>
+                <h3 style="margin-top:0; margin-bottom:8px;">${app.label}</h3>
+                <p style="font-size:12px; color:var(--text-gray); margin: 4px 0;"><strong>Paquete:</strong> ${app.packageName}</p>
+                <p style="font-size:11px; color:var(--accent); word-break:break-all; margin: 4px 0;"><strong>URL:</strong> ${app.apkUrl}</p>
+            </div>
+            <button class="action-btn delete-btn" style="background:var(--alert-red); margin-top:12px; align-self:flex-start; font-size:12px; padding:6px 12px; color:white; border-radius:6px; font-weight:bold; border:none; cursor:pointer;">Eliminar</button>
+        `;
+        card.querySelector(".delete-btn").addEventListener("click", () => {
+            if (confirm(`¿Seguro que querés quitar "${app.label}" de la tienda?`)) {
+                database.ref("storeApps/" + key).remove();
+            }
+        });
+        storeAppsList.appendChild(card);
+    });
+}
+
+// Registrar Listeners en Firebase Database
+if (auth) {
+    auth.onAuthStateChanged(user => {
+        if (user) {
+            database.ref("globalSettings/allowedPackages").on("value", snap => {
+                if (globalAllowedPackagesInput) {
+                    const val = snap.val() || [];
+                    globalAllowedPackagesInput.value = val.join(", ");
+                }
+            });
+
+            database.ref("storeApps").on("value", snap => {
+                renderStoreApps(snap.val() || {});
+            });
         }
     });
 }

@@ -60,6 +60,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             "com.kiwibrowser.browser",
             "com.android.htmlviewer"
         )
+
+        private const val PKG_MERCADOPAGO = "com.mercadopago.wallet"
+        private val MP_OFFERS_KEYWORDS = listOf(
+            "oferta", "ofertas", "promocion", "promociones", "descuento", "descuentos",
+            "cupon", "cupones", "beneficio", "beneficios", "mercado puntos", "recompensa",
+            "novedades y ofertas", "supermercado"
+        )
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -143,6 +150,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // ── Bloqueo de Estados y Canales en WhatsApp ──
         if (packageName == PKG_WHATSAPP || packageName == PKG_WHATSAPP_BUSINESS) {
             handleWhatsAppBlocking(packageName, ev)
+        }
+
+        // ── Bloqueo de Ofertas en Mercado Pago ──
+        if (packageName == PKG_MERCADOPAGO) {
+            handleMercadoPagoBlocking(packageName, ev)
         }
 
         // Debounce para CONTENT_CHANGED (se dispara muy seguido)
@@ -716,6 +728,92 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (classifyWhatsAppContent(currentClassName) != WhatsAppRestrictedContent.NONE) {
                 performGlobalAction(GLOBAL_ACTION_HOME)
             }
+            blockInProgress = false
+        }, 700)
+    }
+
+    private val mercadoPagoScanRunnable = object : Runnable {
+        override fun run() {
+            val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+            if (policyManager.isMercadoPagoBlockOffersEnabled()) {
+                scanForMercadoPagoOffers()
+            }
+        }
+    }
+
+    private fun handleMercadoPagoBlocking(packageName: String, event: AccessibilityEvent) {
+        val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+        if (!policyManager.isMercadoPagoBlockOffersEnabled()) return
+
+        val eventType = event.eventType
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_SELECTED) {
+            scanForMercadoPagoOffers()
+        }
+
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            mainHandler.removeCallbacks(mercadoPagoScanRunnable)
+            mainHandler.postDelayed(mercadoPagoScanRunnable, 350)
+        }
+    }
+
+    private fun scanForMercadoPagoOffers() {
+        val root = rootInActiveWindow ?: return
+        val rootPkg = root.packageName?.toString() ?: ""
+        if (rootPkg != PKG_MERCADOPAGO && !WEBVIEW_PROVIDER_PACKAGES.contains(rootPkg)) {
+            root.recycle()
+            return
+        }
+
+        val containsOffersNode = checkNodeTreeForOffers(root)
+        root.recycle()
+
+        if (containsOffersNode) {
+            triggerMercadoPagoBlock()
+        }
+    }
+
+    private fun checkNodeTreeForOffers(node: AccessibilityNodeInfo?): Boolean {
+        if (node == null) return false
+        val text = node.text?.toString()?.lowercase() ?: ""
+        val contentDesc = node.contentDescription?.toString()?.lowercase() ?: ""
+        val viewId = node.viewIdResourceName?.lowercase() ?: ""
+
+        val combined = "$text $contentDesc $viewId"
+
+        if (node.isSelected || node.isFocused) {
+            if (MP_OFFERS_KEYWORDS.any { combined.contains(it) }) {
+                return true
+            }
+        }
+
+        if (combined.contains("ofertas") || combined.contains("promociones") || combined.contains("mercadolibre.com")) {
+            if (node.className?.toString()?.contains("WebView", ignoreCase = true) == true ||
+                node.className?.toString()?.contains("TextView", ignoreCase = true) == true && (node.parent?.isSelected == true || node.isFocused)) {
+                return true
+            }
+        }
+
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
+            val child = node.getChild(i)
+            if (child != null) {
+                val found = checkNodeTreeForOffers(child)
+                child.recycle()
+                if (found) return true
+            }
+        }
+        return false
+    }
+
+    private fun triggerMercadoPagoBlock() {
+        if (blockInProgress) return
+        blockInProgress = true
+        mainHandler.post {
+            Toast.makeText(applicationContext, "🚫 Sección de Ofertas restringida por LockSuite", Toast.LENGTH_SHORT).show()
+        }
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        mainHandler.postDelayed({
             blockInProgress = false
         }, 700)
     }

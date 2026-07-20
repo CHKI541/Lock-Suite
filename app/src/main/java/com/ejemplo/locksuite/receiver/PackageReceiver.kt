@@ -13,12 +13,40 @@ class PackageReceiver : BroadcastReceiver() {
         val action = intent.action
         Log.i("PackageReceiver", "Acción de paquete recibida: $action")
         
+        val prefs = PrefsHelper.getMdmPrefs(context)
+
+        if (action == "UPDATE_TIMEOUT") {
+            Log.w("PackageReceiver", "⏳ Tiempo límite de actualización alcanzado. Re-suspendiendo Google Play Store...")
+            try {
+                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                policyManager.refreshInstallRestriction()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            prefs.edit().remove("updating_package").apply()
+            return
+        }
+
         val packageName = intent.data?.schemeSpecificPart ?: return
 
+        val updatingPkg = prefs.getString("updating_package", null)
+        if (action == Intent.ACTION_PACKAGE_REPLACED || action == Intent.ACTION_PACKAGE_ADDED) {
+            if (updatingPkg != null && updatingPkg == packageName) {
+                Log.i("PackageReceiver", "✅ Actualización/Instalación de $packageName completada. Re-suspendiendo Google Play Store...")
+                try {
+                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                    policyManager.refreshInstallRestriction()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                prefs.edit().remove("updating_package").apply()
+                cancelUpdateTimeoutAlarm(context)
+            }
+        }
+
         if (action == Intent.ACTION_PACKAGE_ADDED) {
-            val prefs = PrefsHelper.getMdmPrefs(context)
-            val isProgrammaticBlocked = prefs.getBoolean("install_blocked_programmatic", false)
-            if (isProgrammaticBlocked) {
+            val isInstallBlocked = prefs.getBoolean("install_apps_blocked_admin", false) || prefs.getBoolean("install_blocked_programmatic", false)
+            if (isInstallBlocked) {
                 val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
                 // Evitar desinstalar nuestra propia app o las apps permitidas
                 val isAllowed = allowed.contains(packageName) || packageName == context.packageName
@@ -53,6 +81,24 @@ class PackageReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+        }
+    }
+
+    private fun cancelUpdateTimeoutAlarm(context: Context) {
+        try {
+            val watchdogIntent = Intent(context, PackageReceiver::class.java).apply {
+                action = "UPDATE_TIMEOUT"
+            }
+            val pendingIntent = android.app.PendingIntent.getBroadcast(
+                context,
+                9911,
+                watchdogIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            alarmManager.cancel(pendingIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }

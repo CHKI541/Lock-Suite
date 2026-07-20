@@ -93,7 +93,8 @@ class PolicyManager(private val context: Context) {
             setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)
             prefs.edit().putBoolean("install_blocked_programmatic", false).apply()
             try {
-                dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), false)
+                val isPlayStoreSuspended = prefs.getBoolean("suspend_com.android.vending", false)
+                dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), isPlayStoreSuspended)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -268,8 +269,8 @@ class PolicyManager(private val context: Context) {
                     e.printStackTrace()
                 }
             } else {
-                // Si ya no hay apps bloqueadas en WebView, apagar la VPN por completo para ahorrar batería
-                if (WebViewBlockManager.getBlockedPackages(context).isEmpty()) {
+                // Si ya no hay apps bloqueadas en WebView ni gifs bloqueados, apagar la VPN por completo para ahorrar batería
+                if (WebViewBlockManager.getBlockedPackages(context).isEmpty() && !isGifsBlocked()) {
                     val stopServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
                         action = "STOP_VPN"
                     }
@@ -289,6 +290,56 @@ class PolicyManager(private val context: Context) {
 
     fun isAdBlockingEnabled(): Boolean {
         return PrefsHelper.getMdmPrefs(context).getBoolean("global_ad_blocking", false)
+    }
+
+    fun setGifsBlocked(enabled: Boolean): Boolean {
+        return try {
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean("block_gifs", enabled).apply()
+            
+            if (enabled) {
+                // Arrancar la VPN para filtrar Tenor/GIFs
+                try {
+                    val prepareIntent = VpnService.prepare(context)
+                    if (prepareIntent == null) {
+                        val startServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(startServiceIntent)
+                        } else {
+                            context.startService(startServiceIntent)
+                        }
+                        
+                        // Si "Bloquear Ajustes de VPN" ya está activo, nos aseguramos de forzar Always-On
+                        if (isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)) {
+                            setVpnConfigBlocked(true)
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            } else {
+                // Si ya no hay apps bloqueadas en WebView, ni ad blocking, ni gifs bloqueados, apagar la VPN
+                val isAdBlockActive = isAdBlockingEnabled()
+                val hasBlockedWebViews = WebViewBlockManager.getBlockedPackages(context).isNotEmpty()
+                if (!isAdBlockActive && !hasBlockedWebViews) {
+                    val stopServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
+                        action = "STOP_VPN"
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(stopServiceIntent)
+                    } else {
+                        context.startService(stopServiceIntent)
+                    }
+                }
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    fun isGifsBlocked(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("block_gifs", false)
     }
 
     fun setInternetBlocked(block: Boolean): Boolean {
@@ -326,6 +377,14 @@ class PolicyManager(private val context: Context) {
 
     fun isWhatsAppBlockChannelsEnabled(): Boolean {
         return PrefsHelper.getMdmPrefs(context).getBoolean("whatsapp_block_channels", false)
+    }
+
+    fun setMercadoPagoBlockOffers(enabled: Boolean) {
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("mercadopago_block_offers", enabled).apply()
+    }
+
+    fun isMercadoPagoBlockOffersEnabled(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("mercadopago_block_offers", false)
     }
 
     // ─────────────────────────────────────────────
@@ -394,10 +453,14 @@ class PolicyManager(private val context: Context) {
             setInternetBlocked(true)
         }
 
-        // Suspender Google Play Store si el bloqueo de instalación está activado
-        if (isRestrictionEnabled(UserManager.DISALLOW_INSTALL_APPS)) {
+        // Suspender Google Play Store si el bloqueo de instalación está activado o si fue suspendida individualmente
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val shouldSuspendPlayStore = prefs.getBoolean("install_apps_blocked_admin", false) ||
+                prefs.getBoolean("suspend_com.android.vending", false)
+        if (shouldSuspendPlayStore) {
             try {
                 dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), true)
+                android.util.Log.i("PolicyManager", "reapplyAllRestrictions: Google Play Store re-suspendido con éxito")
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -419,11 +482,10 @@ class PolicyManager(private val context: Context) {
         }
 
         // Re-aplicar suspensiones individuales de aplicaciones
-        val prefs = PrefsHelper.getMdmPrefs(context)
         val appController = AppController(context)
         val userApps = appController.getUserApps(loadIcon = false)
         for (app in userApps) {
-            if (!app.isCritical) {
+            if (!app.isCritical && app.packageName != "com.android.vending") {
                 val isIndividuallySuspended = prefs.getBoolean("suspend_${app.packageName}", false)
                 appController.suspendApp(app.packageName, isIndividuallySuspended)
             }

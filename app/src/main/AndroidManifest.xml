@@ -196,6 +196,11 @@
             android:name=".receiver.UninstallReceiver"
             android:exported="false" />
 
+        <!-- RECEIVER FOR PROGRAMMATIC PACKAGE INSTALL STATUS -->
+        <receiver
+            android:name=".receiver.PackageInstallStatusReceiver"
+            android:exported="false" />
+
         <!-- PACKAGE CHANGES RECEIVER (Sincronización en tiempo real al instalar/desinstalar apps) -->
         <receiver
             android:name=".receiver.PackageReceiver"
@@ -206,6 +211,22 @@
                 <action android:name="android.intent.action.PACKAGE_REPLACED" />
                 <data android:scheme="package" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="UPDATE_TIMEOUT" />
+            </intent-filter>
+        </receiver>
+
+        <!-- STORE APP WIDGET PROVIDER (Acceso directo a la Tienda en la pantalla de inicio, compatible con Stealth) -->
+        <receiver
+            android:name=".widget.StoreWidgetProvider"
+            android:label="Tienda"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/store_widget_info" />
         </receiver>
 
     </application>

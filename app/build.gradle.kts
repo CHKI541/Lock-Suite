@@ -14,8 +14,8 @@ android {
         applicationId = "com.ejemplo.locksuite"
         minSdk = 24
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 17
+        versionName = "0.2.7"
     }
 
     signingConfigs {

@@ -84,21 +84,26 @@ class AppController(private val context: Context) {
     fun suspendApp(packageName: String, suspend: Boolean): Boolean {
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) return false
         
-        // Si la app está oculta, setPackagesSuspended fallará en Android.
-        // Guardamos el estado deseado en preferencias y retornamos true para mantener la web sincronizada.
-        if (isAppHidden(packageName)) {
-            PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", suspend).apply()
+        android.util.Log.i("AppController", "suspendApp: $packageName -> suspend=$suspend")
+        // Siempre guardar la preferencia de estado deseado
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", suspend).apply()
+
+        if (packageName == "com.android.vending") {
+            try {
+                dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), suspend)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
             return true
         }
 
         return try {
             val packages = arrayOf(packageName)
-            val result = dpm.setPackagesSuspended(adminComponent, packages, suspend)
-            val success = result.isEmpty()
-            if (success) {
-                PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", suspend).apply()
+            val unapplied = dpm.setPackagesSuspended(adminComponent, packages, suspend)
+            if (unapplied.isNotEmpty()) {
+                android.util.Log.w("AppController", "No se pudo suspender en OS los paquetes: ${unapplied.joinToString()}")
             }
-            success
+            true
         } catch (e: Exception) {
             e.printStackTrace()
             false
@@ -106,11 +111,13 @@ class AppController(private val context: Context) {
     }
 
     fun isAppSuspended(packageName: String): Boolean {
-        return try {
+        val prefsSuspended = PrefsHelper.getMdmPrefs(context).getBoolean("suspend_$packageName", false)
+        val osSuspended = try {
             dpm.isPackageSuspended(adminComponent, packageName)
         } catch (e: Exception) {
-            PrefsHelper.getMdmPrefs(context).getBoolean("suspend_$packageName", false)
+            false
         }
+        return prefsSuspended || osSuspended
     }
 
     fun uninstallApp(packageName: String): Boolean {

@@ -39,14 +39,86 @@
         <header>
           <h1>LockSuite <span class="accent">Kosher</span></h1>
           <div class="header-actions">
+            <button id="global-update-locksuite-btn" style="background-color: #2980b9; color: white; border: none; padding: 8px 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; margin-right: 8px;">🔄 Actualizar LockSuite (Todos)</button>
             <button id="refresh-button" class="secondary">Actualizar</button>
             <button id="logout-button" class="secondary">Cerrar sesión</button>
           </div>
         </header>
         <p id="global-error" class="error-text"></p>
+
+        <!-- Pestañas principales -->
+        <div class="main-navigation" style="display: flex; background: var(--navy-medium); border-radius: 12px; margin-bottom: 24px; padding: 4px; border: 1px solid var(--navy-light);">
+          <button id="main-tab-devices" class="main-nav-btn active" style="flex: 1; background: var(--navy-light); color: var(--text-light); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">📱 Celulares</button>
+          <button id="main-tab-groups" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">👥 Grupos</button>
+          <button id="main-tab-archived" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">📦 Archivados</button>
+          <button id="main-tab-global-settings" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">⚙️ Ajustes Globales</button>
+        </div>
+
         <main id="devices-container">
           <p class="loading-text">Cargando dispositivos…</p>
         </main>
+
+        <div id="groups-container" class="hidden">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 18px;">Grupos de Dispositivos</h2>
+            <button id="create-group-btn" class="secondary" style="width: auto; background: var(--success-green); color: white;">+ Crear Nuevo Grupo</button>
+          </div>
+          <div id="groups-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px;">
+            <p class="loading-text">Cargando grupos…</p>
+          </div>
+        </div>
+
+        <div id="archived-container" class="hidden">
+          <div style="margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 18px;">Dispositivos Archivados</h2>
+            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-top: 4px;">Celulares archivados. Podés restaurarlos al panel activo en cualquier momento.</p>
+          </div>
+          <div id="archived-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px;">
+            <p class="loading-text">Cargando dispositivos archivados…</p>
+          </div>
+        </div>
+
+        <div id="global-settings-container" class="hidden">
+          <!-- Sección: Paquetes Permitidos Globales -->
+          <div class="sidebar-card" style="margin-bottom: 24px;">
+            <h2>Permitir paquetes para todos los usuarios</h2>
+            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-top: 4px; margin-bottom: 12px;">
+              Paquetes de aplicaciones permitidos de instalar para TODOS los dispositivos (se ignorarán las restricciones de instalación y orígenes desconocidos al instalarlos desde la tienda). Introduce los nombres de paquete separados por comas.
+            </p>
+            <div class="input-group">
+              <input type="text" id="global-allowed-packages-input" placeholder="ej: com.waze, com.whatsapp" style="flex-grow: 1; width: 100%; background: var(--navy-dark); border: 1px solid var(--navy-light); color: var(--text-light); padding: 10px; border-radius: 8px; margin-bottom: 0;" />
+              <button id="save-global-allowed-packages-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight: bold; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; white-space: nowrap;">Guardar</button>
+            </div>
+            <p id="global-allowed-status-msg" style="font-size: 12px; margin-top: 8px; min-height: 18px; color: var(--accent);"></p>
+          </div>
+
+          <!-- Sección: Administrar Tienda Kosher -->
+          <div class="sidebar-card">
+            <h2>Tienda de Apps</h2>
+            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-top: 4px; margin-bottom: 16px;">
+              Aplicaciones disponibles para descarga directa e instalación silenciosa en los celulares autorizados.
+            </p>
+            
+            <!-- Formulario para agregar app a la tienda -->
+            <div style="background: var(--navy-dark); padding: 16px; border-radius: 12px; border: 1px solid var(--navy-light); margin-bottom: 20px;">
+              <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 14px;">Agregar nueva aplicación a la tienda</h3>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                <input type="text" id="store-app-label" placeholder="Nombre (ej: Waze)" style="background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 8px 12px; border-radius: 8px; font-size: 13px;" />
+                <input type="text" id="store-app-package" placeholder="Paquete (ej: com.waze)" style="background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 8px 12px; border-radius: 8px; font-size: 13px;" />
+              </div>
+              <div style="margin-bottom: 16px;">
+                <input type="text" id="store-app-url" placeholder="URL directa del APK (ej: https://github.com/.../Waze.apk)" style="width: 100%; background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 8px 12px; border-radius: 8px; font-size: 13px; box-sizing: border-box;" />
+              </div>
+              <button id="add-store-app-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight: bold; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-size: 13px;">➕ Agregar a la tienda</button>
+            </div>
+
+            <!-- Lista de apps actuales en la tienda -->
+            <h3 style="font-size: 14px; margin-bottom: 12px;">Aplicaciones en la tienda</h3>
+            <div id="store-apps-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
+              <p class="loading-text">Cargando aplicaciones de la tienda…</p>
+            </div>
+          </div>
+        </div>
       </div>
       
       <!-- Sidebar de administración de dispositivo -->
@@ -55,6 +127,7 @@
           <div>
             <h2 id="sidebar-device-name">Cargando...</h2>
             <p id="sidebar-device-id" class="device-id"></p>
+            <p id="sidebar-device-version" class="device-version" style="font-size: 11px; color: var(--text-gray); margin-top: 2px;"></p>
           </div>
           <button id="sidebar-close-btn" class="close-btn">&times;</button>
         </div>
@@ -117,6 +190,7 @@
                 <label class="toggle-row"><span>Bloquear Montaje de Medios Externos</span><input type="checkbox" class="policy-switch" data-policy="externalMediaBlocked" /></label>
                 <label class="toggle-row"><span>Bloquear Zona WiFi / Tethering</span><input type="checkbox" class="policy-switch" data-policy="tetheringBlocked" /></label>
                 <label class="toggle-row"><span>Filtro de Anuncios DNS (AdBlock)</span><input type="checkbox" class="policy-switch" data-policy="adBlockingEnabled" /></label>
+                <label class="toggle-row"><span>Bloquear GIFs y Stickers (Tenor)</span><input type="checkbox" class="policy-switch" data-policy="gifsBlocked" /></label>
                 <label class="toggle-row"><span>Modo Oculto (Stealth Mode)</span><input type="checkbox" class="policy-switch" data-policy="stealthModeEnabled" /></label>
               </div>
             </div>
@@ -135,6 +209,13 @@
               <div class="toggle-list">
                 <label class="toggle-row"><span>Bloquear Estados (WhatsApp)</span><input type="checkbox" class="policy-switch" data-policy="whatsappBlockStatus" /></label>
                 <label class="toggle-row"><span>Bloquear Canales (WhatsApp)</span><input type="checkbox" class="policy-switch" data-policy="whatsappBlockChannels" /></label>
+              </div>
+            </div>
+            <!-- Filtros de Mercado Pago -->
+            <div class="sidebar-card">
+              <h3>Filtros de Mercado Pago</h3>
+              <div class="toggle-list">
+                <label class="toggle-row"><span>Bloquear Ofertas (Mercado Pago)</span><input type="checkbox" class="policy-switch" data-policy="mercadoPagoBlockOffers" /></label>
               </div>
             </div>
           </div>
@@ -184,6 +265,7 @@
                 <h3>Comandos Directos</h3>
                 <button class="action-btn lock-btn" id="sidebar-lock-btn">🔒 Bloquear dispositivo ahora</button>
                 <button class="action-btn unlock-btn" id="sidebar-unsuspend-all-btn" style="margin-top: 10px; background-color: #2e7d32; color: white;">🔓 Desbloquear todas las apps</button>
+                <button class="action-btn" id="sidebar-update-locksuite-btn" style="margin-top: 10px; background-color: #2980b9; color: white;">🔄 Actualizar LockSuite (Sistema)</button>
               </div>
             <div class="sidebar-card">
               <h3>Seguridad y PIN</h3>
@@ -206,6 +288,145 @@
           </div>
           
           <p id="sidebar-status-msg" class="card-status"></p>
+        </div>
+      </div>
+
+      <!-- Sidebar de administración de grupo -->
+      <div id="group-sidebar" class="sidebar hidden">
+        <div class="sidebar-header">
+          <div>
+            <h2 id="group-sidebar-name">Nombre del Grupo</h2>
+            <p id="group-sidebar-id" class="device-id"></p>
+          </div>
+          <button id="group-sidebar-close-btn" class="close-btn">&times;</button>
+        </div>
+
+        <div class="sidebar-tabs">
+          <button class="group-tab-btn active" data-tab="group-panel-devices" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 14px; font-weight: bold; font-size: 13px; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s;">Dispositivos</button>
+          <button class="group-tab-btn" data-tab="group-panel-policies" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 14px; font-weight: bold; font-size: 13px; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s;">Políticas de Grupo</button>
+        </div>
+
+        <div class="sidebar-content" style="flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px;">
+          <!-- Pestaña 1: Dispositivos -->
+          <div id="group-panel-devices" class="group-tab-panel active" style="display: flex; flex-direction: column; gap: 16px;">
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray);">Nombre del Grupo</h3>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="group-name-input" placeholder="Nombre del grupo (ej: Hijos)" style="margin-bottom: 0;" />
+                <button id="save-group-name-btn" class="action-btn" style="width: auto; padding: 0 16px; background: var(--accent-orange); color: var(--navy-dark); font-weight: bold; border-radius: 10px;">Guardar</button>
+              </div>
+            </div>
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray);">Seleccionar Celulares</h3>
+              <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 12px;">Los celulares marcados formarán parte de este grupo.</p>
+              <div id="group-devices-selector-list" class="toggle-list" style="max-height: 300px; overflow-y: auto; padding: 4px; display: flex; flex-direction: column; gap: 8px;">
+                <!-- Lista de checkboxes generada por JS -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Pestaña 2: Políticas de Grupo -->
+          <div id="group-panel-policies" class="group-tab-panel" style="display: none; flex-direction: column; gap: 16px;">
+            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 4px; text-align: center;">Al cambiar una política, se aplicará a todos los celulares del grupo.</p>
+
+            <!-- Políticas de Sistema -->
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Políticas de Sistema (Device Owner)</h3>
+              <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Restauración de Fábrica</span><input type="checkbox" class="group-policy-switch" data-policy="factoryResetBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Instalación de Apps</span><input type="checkbox" class="group-policy-switch" data-policy="installAppsBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Desinstalación de Apps</span><input type="checkbox" class="group-policy-switch" data-policy="uninstallAppsBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear ADB y Opciones de Desarrollador</span><input type="checkbox" class="group-policy-switch" data-policy="adbBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Cambio de Usuario</span><input type="checkbox" class="group-policy-switch" data-policy="userSwitchBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Modificación de Cuentas</span><input type="checkbox" class="group-policy-switch" data-policy="modifyAccountsBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Reinicio Seguro (Safe Boot)</span><input type="checkbox" class="group-policy-switch" data-policy="safeBootBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Orígenes Desconocidos (APK)</span><input type="checkbox" class="group-policy-switch" data-policy="unknownSourcesBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ajustes de Red / WiFi / Datos</span><input type="checkbox" class="group-policy-switch" data-policy="wifiBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ajustes de VPN</span><input type="checkbox" class="group-policy-switch" data-policy="vpnBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Control de Apps</span><input type="checkbox" class="group-policy-switch" data-policy="appsControlBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ajuste de Volumen</span><input type="checkbox" class="group-policy-switch" data-policy="adjustVolumeBlocked" /></label>
+              </div>
+            </div>
+
+            <!-- Control de Hardware y Pantalla -->
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Control de Hardware y Pantalla</h3>
+              <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Deshabilitar Cámara Física</span><input type="checkbox" class="group-policy-switch" data-policy="cameraDisabled" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Captura de Pantalla</span><input type="checkbox" class="group-policy-switch" data-policy="screenCaptureBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Deshabilitar Barra de Estado</span><input type="checkbox" class="group-policy-switch" data-policy="statusBarDisabled" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Deshabilitar Bloqueo de Pantalla (Keyguard)</span><input type="checkbox" class="group-policy-switch" data-policy="keyguardDisabled" /></label>
+              </div>
+            </div>
+
+            <!-- Conectividad y Filtros -->
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Conectividad y Filtros</h3>
+              <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Todo el Internet</span><input type="checkbox" class="group-policy-switch" data-policy="internetBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Bluetooth</span><input type="checkbox" class="group-policy-switch" data-policy="bluetoothBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Compartir por Bluetooth</span><input type="checkbox" class="group-policy-switch" data-policy="bluetoothSharingBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Montaje de Medios Externos</span><input type="checkbox" class="group-policy-switch" data-policy="externalMediaBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Zona WiFi / Tethering</span><input type="checkbox" class="group-policy-switch" data-policy="tetheringBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Filtro de Anuncios DNS (AdBlock)</span><input type="checkbox" class="group-policy-switch" data-policy="adBlockingEnabled" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear GIFs y Stickers (Tenor)</span><input type="checkbox" class="group-policy-switch" data-policy="gifsBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Modo Oculto (Stealth Mode)</span><input type="checkbox" class="group-policy-switch" data-policy="stealthModeEnabled" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear WebView (Navegadores)</span><input type="checkbox" class="group-policy-switch" data-policy="webviewBlocked" /></label>
+              </div>
+            </div>
+
+            <!-- Inteligencia Artificial -->
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Inteligencia Artificial</h3>
+              <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Activar Modo IA (Filtro de Siluetas)</span><input type="checkbox" class="group-policy-switch" data-policy="aiModeEnabled" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloqueo de Imágenes en Maps</span><input type="checkbox" class="group-policy-switch" data-policy="mapsImageBlockingEnabled" /></label>
+              </div>
+            </div>
+
+            <!-- Filtros de WhatsApp -->
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Filtros de WhatsApp</h3>
+              <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Estados (WhatsApp)</span><input type="checkbox" class="group-policy-switch" data-policy="whatsappBlockStatus" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Canales (WhatsApp)</span><input type="checkbox" class="group-policy-switch" data-policy="whatsappBlockChannels" /></label>
+              </div>
+            </div>
+
+            <!-- Filtros de Mercado Pago -->
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Filtros de Mercado Pago</h3>
+              <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ofertas (Mercado Pago)</span><input type="checkbox" class="group-policy-switch" data-policy="mercadoPagoBlockOffers" /></label>
+              </div>
+            </div>
+          </div>
+
+            <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray);">Mantenimiento Grupal</h3>
+              <div style="margin-bottom: 12px;">
+                <button id="group-action-unsuspend-all" class="action-btn" style="background-color: var(--success-green); color: white; border: none; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%;">🔓 Desbloquear todas las apps en el grupo</button>
+              </div>
+              <div style="border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 12px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 13px; color: var(--text-light);">Actualizar App en el Grupo</h4>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" id="group-update-package-input" placeholder="Nombre de paquete (ej: com.whatsapp)" style="margin-bottom: 0; font-size: 12px; padding: 8px;" />
+                  <button id="group-action-update-app" class="action-btn" style="width: auto; font-size: 11px; padding: 0 12px; background-color: #16a085; color: white; border-radius: 8px; font-weight: bold; cursor: pointer; border: none;">Actualizar</button>
+                </div>
+              </div>
+              <div style="border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 12px; margin-top: 12px;">
+                <button id="group-action-update-locksuite" class="action-btn" style="background-color: #2980b9; color: white; border: none; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%;">🔄 Actualizar LockSuite en el grupo</button>
+              </div>
+            </div>
+
+            <div class="sidebar-card danger-zone" style="border: 1px solid rgba(239,68,68,0.4); background: rgba(127,29,29,0.15); border-radius: 16px; padding: 20px;">
+              <h3 style="margin-top: 0; font-size: 14px; color: #f87171;">⚠️ Eliminar Grupo</h3>
+              <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 12px;">Esta acción elimina el grupo del panel, pero no afecta a los celulares individuales.</p>
+              <button id="group-delete-btn" class="action-btn danger-btn" style="background: #7f1d1d; color: white; border: 1px solid #ef4444; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%;">🗑️ Eliminar este grupo</button>
+            </div>
+          </div>
+
+          <p id="group-sidebar-status-msg" class="card-status" style="font-size: 12px; color: var(--accent-orange); min-height: 16px; margin: 8px 0 0;"></p>
         </div>
       </div>
     </div>
@@ -253,6 +474,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

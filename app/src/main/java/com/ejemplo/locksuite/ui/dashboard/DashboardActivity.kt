@@ -14,6 +14,8 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -433,6 +435,19 @@ fun PoliciesTabContent(context: Context) {
     val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
 
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val error = com.ejemplo.locksuite.util.ApkInstaller.installApk(context, it)
+            if (error != null) {
+                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(context, "Iniciando instalación programática...", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     LaunchedEffect(refreshKey) {
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
@@ -483,6 +498,68 @@ fun PoliciesTabContent(context: Context) {
                         ) {
                             Text("Guardar", fontWeight = FontWeight.Bold)
                         }
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Instalar / Actualizar APK Permitida", color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        "Si tienes el archivo APK de una aplicación permitida en tu almacenamiento, puedes seleccionarlo aquí para instalarlo o actualizarlo, incluso si el bloqueo de APKs está activo.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                    Button(
+                        onClick = {
+                            try {
+                                launcher.launch("application/vnd.android.package-archive")
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Error al abrir selector de archivos: ${e.message}", Toast.LENGTH_LONG).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Seleccionar e Instalar APK", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Actualizar LockSuite", color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        "Comprueba si hay una nueva versión del sistema LockSuite MDM e instálala de forma inmediata.",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                    val coroutineScope = rememberCoroutineScope()
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                val error = com.ejemplo.locksuite.util.SelfUpdater.checkAndPerformUpdate(context, true)
+                                if (error != null) {
+                                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Buscar Actualizaciones", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -645,6 +722,11 @@ fun PoliciesTabContent(context: Context) {
                     label = "Bloquear Anuncios en todo el Dispositivo (Global)",
                     isChecked = remember(refreshKey) { policyManager.isAdBlockingEnabled() },
                     onCheckedChange = { policyManager.setAdBlockingEnabled(it).also { refreshKey++ } }
+                )
+                PolicySwitchRow(
+                    label = "Bloquear GIFs y Stickers en Gboard (Tenor)",
+                    isChecked = remember(refreshKey) { policyManager.isGifsBlocked() },
+                    onCheckedChange = { policyManager.setGifsBlocked(it).also { refreshKey++ } }
                 )
             }
         }
@@ -1631,6 +1713,42 @@ fun ServicesTabContent(
                                     com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
                                 }
                                 Toast.makeText(context, if (enabled) "Canales Bloqueados." else "Canales Permitidos.", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedTrackColor = accentOrange
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Bloquear Ofertas en Mercado Pago", color = Color.White, fontSize = 14.sp)
+                            Text(
+                                "Bloquea la sección de Ofertas, Descuentos y Promociones manteniendo pagos y transferencias activos.",
+                                color = Color.LightGray,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        var blockMpOffersState by remember {
+                            mutableStateOf(policyManager.isMercadoPagoBlockOffersEnabled())
+                        }
+                        Switch(
+                            checked = blockMpOffersState,
+                            onCheckedChange = { enabled ->
+                                policyManager.setMercadoPagoBlockOffers(enabled)
+                                blockMpOffersState = enabled
+                                scope.launch(Dispatchers.IO) {
+                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                                }
+                                Toast.makeText(context, if (enabled) "Ofertas de MP Bloqueadas." else "Ofertas de MP Permitidas.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color(0xFF0B192C),

@@ -125,4 +125,14 @@ object WebViewPolicy {
         // 4. Si no es infraestructura ni contiene el nombre de la app, bloqueamos (Zendesk, búsquedas libres, etc.)
         return false
     }
+
+    /**
+     * Verifica si un dominio pertenece a la sección de ofertas/comercio de Mercado Libre / Mercado Pago.
+     */
+    fun isMercadoPagoOffersDomain(queriedDomain: String): Boolean {
+        val lower = queriedDomain.lowercase()
+        if (lower.contains("mercadolibre.")) return true
+        if (lower.contains("ofertas.mercadopago") || lower.contains("promociones.mercadopago") || lower.contains("deals.mercadopago")) return true
+        return false
+    }
 }

@@ -381,16 +381,18 @@ document.addEventListener('DOMContentLoaded', () => {
   // ─── VERIFY ADB ───────────────────────────────────────────────────────────
   async function verifyAdbAuthorization() {
     const statusText = document.getElementById('statusTextStep3');
+    const btnNext = document.getElementById('btnNextStep3');
     try {
       statusText.innerText = 'Verificando autorización ADB...';
       const model = await adbShell('getprop ro.product.model');
       const brand = await adbShell('getprop ro.product.brand');
       connectedDeviceModel = `${brand.trim()} ${model.trim()}`;
       statusText.innerText = `✓ Conectado: ${connectedDeviceModel}`;
-      document.getElementById('btnNextStep3').disabled = false;
+      btnNext.disabled = false;
     } catch (err) {
       console.warn('ADB authorization pending:', err);
-      statusText.innerText = '⏳ Esperando que aceptes el permiso en tu celular...';
+      statusText.innerText = '⏳ Esperando que aceptes el permiso en tu celular... (si ya lo aceptaste, podés hacer clic en Siguiente)';
+      btnNext.disabled = false;
       setTimeout(verifyAdbAuthorization, 2500);
     }
   }

@@ -103,6 +103,9 @@ object SelfUpdater {
                     }
                 }
 
+                // Levantar restricciones ANTES de crear la sesión (Android valida al crear, no al commit)
+                prepareTemporaryInstallAccess(context)
+
                 val pm = context.packageManager
                 val packageInstaller = pm.packageInstaller
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
@@ -137,9 +140,6 @@ object SelfUpdater {
                     intent,
                     flags
                 )
-
-                // Desactivar temporalmente restricciones de OS para permitir la instalación MDM
-                prepareTemporaryInstallAccess(context)
 
                 session.commit(pendingIntent.intentSender)
                 session.close()
@@ -195,6 +195,9 @@ object SelfUpdater {
                     Toast.makeText(context, "Instalando $label en segundo plano...", Toast.LENGTH_SHORT).show()
                 }
 
+                // Levantar restricciones ANTES de crear la sesión (Android valida al crear, no al commit)
+                prepareTemporaryInstallAccess(context)
+
                 val pm = context.packageManager
                 val packageInstaller = pm.packageInstaller
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
@@ -230,9 +233,6 @@ object SelfUpdater {
                     flags
                 )
 
-                // Desactivar temporalmente restricciones de OS para permitir la instalación MDM
-                prepareTemporaryInstallAccess(context)
-
                 session.commit(pendingIntent.intentSender)
                 session.close()
 
@@ -260,7 +260,8 @@ object SelfUpdater {
 
             scheduleInstallSafetyTimeout(context)
 
-            Thread.sleep(300)
+            // Esperar a que Android propague el cambio de política antes de createSession()
+            Thread.sleep(500)
         } catch (e: Exception) {
             Log.w("SelfUpdater", "Error al preparar permisos temporales de instalación: ${e.message}")
         }

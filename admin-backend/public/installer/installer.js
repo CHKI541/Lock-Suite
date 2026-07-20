@@ -97,13 +97,74 @@ document.addEventListener('DOMContentLoaded', () => {
       console.error('USB Connect error:', err);
       btn.disabled = false;
       btn.innerText = '🔌 Conectar dispositivo';
+
       if (err.name === 'NotFoundError' || err.message.includes('No device selected')) {
         statusText.innerText = 'Selección cancelada. Intenta de nuevo.';
       } else {
+        // Show error with BAT download option
         statusText.innerText = `Error: ${err.message}`;
-        alert(`No se pudo conectar:\n\n${err.message}\n\nAsegúrate de que el celular esté conectado con el cable USB, la Depuración USB esté activada, y el celular esté desbloqueado.`);
+        showUsbError(err.message);
       }
     }
+  }
+
+  // ─── SHOW ERROR PANEL WITH BAT FALLBACK ──────────────────────────────────
+  function showUsbError(errorMsg) {
+    const existing = document.getElementById('usbErrorPanel');
+    if (existing) existing.remove();
+
+    const isWindowsDriverError = errorMsg.includes('claimInterface') || errorMsg.includes('Unable to claim') || errorMsg.includes('access denied');
+    const isNoInterfaceError = errorMsg.includes('interfaz ADB') || errorMsg.includes('interfaz') || errorMsg.includes('interface');
+
+    let explanation = '';
+    if (isWindowsDriverError) {
+      explanation = `
+        <p style="margin: 0 0 6px 0;"><b>¿Por qué pasó esto?</b> En Windows, el driver ADB del sistema ya tiene ocupada la interfaz USB del celular y no deja que el navegador acceda directamente.</p>
+        <p style="margin: 0;">Esto <b>no es un error tuyo</b> — es una limitación técnica de Windows con WebUSB.</p>
+      `;
+    } else if (isNoInterfaceError) {
+      explanation = `
+        <p style="margin: 0 0 6px 0;"><b>No se encontró la interfaz ADB.</b> Asegurate de que la <b>Depuración USB</b> esté activada en Opciones de Desarrollador y que el celular esté en modo <b>Transferencia de archivos (MTP)</b>.</p>
+        <p style="margin: 0;">Si ya lo hiciste, usá el instalador alternativo de abajo.</p>
+      `;
+    } else {
+      explanation = `<p style="margin: 0;">Error técnico al conectar: <code style="font-size:0.8rem; background:rgba(0,0,0,0.3); padding:2px 6px; border-radius:4px;">${errorMsg}</code></p>`;
+    }
+
+    const panel = document.createElement('div');
+    panel.id = 'usbErrorPanel';
+    panel.innerHTML = `
+      <div style="margin-top: 16px; padding: 18px 20px; background: rgba(239,68,68,0.08); border: 1.5px solid rgba(239,68,68,0.35); border-radius: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span style="color: #f87171; font-weight: 700; font-size: 0.95rem;">Error de conexión WebUSB</span>
+        </div>
+        <div style="font-size: 0.85rem; color: #e2e8f0; line-height: 1.6; margin-bottom: 16px;">
+          ${explanation}
+        </div>
+        <div style="background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); border-radius: 10px; padding: 14px 16px;">
+          <div style="font-weight: 600; color: #93c5fd; margin-bottom: 6px;">✅ Alternativa recomendada para Windows</div>
+          <div style="font-size: 0.83rem; color: #94a3b8; margin-bottom: 12px;">
+            Descargá este script y hacé doble clic. Instala LockSuite automáticamente usando ADB desde la línea de comandos — no necesita configuración adicional.
+          </div>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+            <a href="../instalar_locksuite.bat" download
+               style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background: linear-gradient(135deg, #2563eb, #1d4ed8); border-radius: 8px; color: #fff; text-decoration: none; font-size: 0.9rem; font-weight: 600; box-shadow: 0 2px 8px rgba(37,99,235,0.4);">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Descargar instalar_locksuite.bat
+            </a>
+            <span style="font-size: 0.78rem; color: #64748b;">Para Windows · doble clic para ejecutar</span>
+          </div>
+          <div style="margin-top: 10px; font-size: 0.78rem; color: #64748b; line-height: 1.5;">
+            <b>¿Qué hace el script?</b> Descarga ADB automáticamente si no lo tenés, instala el APK, asigna permisos de Device Owner y activa Accesibilidad — todo en un solo paso.
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Insert below the connect button
+    const actionsBar = document.querySelector('#step2 .actions-bar');
+    actionsBar.parentNode.insertBefore(panel, actionsBar);
   }
 
   // ─── ADB CONNECTION (WebUSB native protocol) ─────────────────────────────

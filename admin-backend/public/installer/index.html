@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Instalador LockSuite MDM</title>
+  <link rel="stylesheet" href="installer.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Top Navigation Header -->
+  <header>
+    <div class="brand">
+      <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      </svg>
+      <span>Instalador LockSuite</span>
+    </div>
+    <div class="stepper-dots" id="stepperDots">
+      <div class="dot active" data-step="1"></div>
+      <div class="dot" data-step="2"></div>
+      <div class="dot" data-step="3"></div>
+      <div class="dot" data-step="4"></div>
+      <div class="dot" data-step="5"></div>
+      <div class="dot" data-step="6"></div>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main>
+    <div class="installer-container">
+      
+      <!-- Phone Mockup Frame (Left) -->
+      <div class="phone-frame">
+        <div class="phone-notch"></div>
+        <div class="phone-screen" id="phoneScreen">
+          <!-- Dynamic Illustration for current step -->
+          <svg id="phoneIllustration" viewBox="0 0 100 100" width="120" height="120" fill="none">
+            <rect x="25" y="15" width="50" height="70" rx="6" stroke="#3b82f6" stroke-width="3"/>
+            <circle cx="50" cy="50" r="15" fill="#3b82f6" opacity="0.2"/>
+            <path d="M45 50l4 4 8-8" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="phone-instruction-caption" id="phoneCaption">Guía interactiva de instalación</div>
+        </div>
+      </div>
+
+      <!-- Right Panel: Step Views -->
+      <div class="content-panel">
+
+        <!-- STEP 1: WELCOME -->
+        <div class="step-view" id="step1">
+          <div class="step-header">
+            <h1 class="step-title">Bienvenido al Instalador de LockSuite</h1>
+            <p class="step-subtitle">Esta herramienta interactiva te guiará paso a paso para instalar y configurar LockSuite MDM con permisos de Device Owner y Accesibilidad en tu teléfono Android vía USB.</p>
+          </div>
+          <div class="alert-banner">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <div>Asegúrate de tener un cable USB para conectar el celular a esta computadora. Usaremos Google Chrome, Edge o Brave.</div>
+          </div>
+          <div class="actions-bar">
+            <div class="device-status-pill">
+              <span class="status-dot"></span>
+              <span id="statusTextStep1">No conectado</span>
+            </div>
+            <button class="btn btn-primary" id="btnStartStep1">Comenzar proceso &rarr;</button>
+          </div>
+        </div>
+
+        <!-- STEP 2: ENABLE USB DEBUGGING & CONNECT -->
+        <div class="step-view" id="step2" style="display: none;">
+          <div class="step-header">
+            <h1 class="step-title">Habilitar Depuración USB y Conectar</h1>
+            <p class="step-subtitle">Sigue estos sencillos pasos en la pantalla de tu celular para permitir la conexión desde la computadora.</p>
+          </div>
+          <ul class="instructions-list">
+            <li class="instruction-item">
+              <span class="badge-number">1</span>
+              <span>Conecta el teléfono a la computadora mediante el cable USB.</span>
+            </li>
+            <li class="instruction-item">
+              <span class="badge-number">2</span>
+              <span>Entra en <b>Ajustes</b> &rarr; <b>Acerca del teléfono</b>.</span>
+            </li>
+            <li class="instruction-item">
+              <span class="badge-number">3</span>
+              <span>Presiona <b>7 veces seguidas</b> en "Número de compilación".</span>
+            </li>
+            <li class="instruction-item">
+              <span class="badge-number">4</span>
+              <span>Vuelve a Ajustes &rarr; <b>Opciones de desarrollador</b>.</span>
+            </li>
+            <li class="instruction-item">
+              <span class="badge-number">5</span>
+              <span>Activa el interruptor <b>"Depuración USB"</b>.</span>
+            </li>
+          </ul>
+          <div class="actions-bar">
+            <div class="device-status-pill">
+              <span class="status-dot" id="statusDotStep2"></span>
+              <span id="statusTextStep2">No conectado</span>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-secondary" id="btnBackStep2">&larr; Atrás</button>
+              <button class="btn btn-primary" id="btnConnectUsb">Conectar dispositivo</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 3: AUTHORIZE ADB RSA -->
+        <div class="step-view" id="step3" style="display: none;">
+          <div class="step-header">
+            <h1 class="step-title">Autorizar Conexión ADB en el Celular</h1>
+            <p class="step-subtitle">Tu computadora está intentando comunicarse con el dispositivo.</p>
+          </div>
+          <div class="alert-banner">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div>En la pantalla de tu celular aparecerá una ventana flotante preguntando <b>"¿Permitir depuración USB desde esta computadora?"</b>. Marca la casilla <b>"Permitir siempre desde esta computadora"</b> y toca Aceptar.</div>
+          </div>
+          <div class="actions-bar">
+            <div class="device-status-pill">
+              <span class="status-dot connected"></span>
+              <span id="statusTextStep3">Conectado: Verificando autorización...</span>
+            </div>
+            <button class="btn btn-primary" id="btnNextStep3" disabled>Siguiente &rarr;</button>
+          </div>
+        </div>
+
+        <!-- STEP 4: INTERACTIVE ACCOUNTS CHECK -->
+        <div class="step-view" id="step4" style="display: none;">
+          <div class="step-header">
+            <h1 class="step-title">Comprobación de Cuentas</h1>
+            <p class="step-subtitle">Es obligatorio eliminar temporalmente todas las cuentas de Google/Samsung antes de asignar el permiso Device Owner. Podrás volver a agregarlas inmediatamente después de la instalación.</p>
+          </div>
+          <div class="alert-banner danger" id="accountAlertBanner">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div>Ve a <b>Ajustes &rarr; Cuentas y respaldo &rarr; Administrar cuentas</b> y elimina cada cuenta listada abajo.</div>
+          </div>
+          
+          <!-- Dynamic Account Cards List -->
+          <div class="account-cards-list" id="accountCardsList">
+            <!-- Account items injected by JS -->
+          </div>
+
+          <div class="actions-bar">
+            <div class="device-status-pill">
+              <span class="status-dot" id="statusDotAccount"></span>
+              <span id="accountCountText">Escaneando cuentas...</span>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-secondary" id="btnCheckAccountsAgain">🔄 Comprobar de nuevo</button>
+              <button class="btn btn-primary" id="btnNextStep4" disabled>Siguiente &rarr;</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 5: AUTOMATED INSTALLATION & PERMISSIONS -->
+        <div class="step-view" id="step5" style="display: none;">
+          <div class="step-header">
+            <h1 class="step-title">Instalación Automatizada en Proceso</h1>
+            <p class="step-subtitle">No desconectes el cable USB. Estamos transfiriendo la última versión de LockSuite y configurando las políticas del sistema.</p>
+          </div>
+
+          <div class="progress-container">
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="progressBarFill"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary);">
+              <span id="progressStatusText">Iniciando descarga del APK...</span>
+              <span id="progressPercentText">0%</span>
+            </div>
+          </div>
+
+          <div class="terminal-log" id="terminalLog">
+            [INFO] Conexión WebADB lista. Iniciando flujo de instalación...<br>
+          </div>
+
+          <div class="actions-bar">
+            <div class="device-status-pill">
+              <span class="status-dot connected"></span>
+              <span>Instalando...</span>
+            </div>
+            <button class="btn btn-primary" id="btnNextStep5" disabled>Finalizar &rarr;</button>
+          </div>
+        </div>
+
+        <!-- STEP 6: SUCCESS -->
+        <div class="step-view" id="step6" style="display: none;">
+          <div class="step-header">
+            <h1 class="step-title" style="color: var(--success-color);">¡Instalación Completada con Éxito!</h1>
+            <p class="step-subtitle">LockSuite MDM ha sido instalado en tu dispositivo y configurado como Device Owner del sistema.</p>
+          </div>
+
+          <ul class="instructions-list">
+            <li class="instruction-item">
+              <span style="color: var(--success-color); font-weight: bold;">✓</span>
+              <span><b>Aplicación instalada:</b> Última versión (v0.2.8)</span>
+            </li>
+            <li class="instruction-item">
+              <span style="color: var(--success-color); font-weight: bold;">✓</span>
+              <span><b>Permiso Device Owner:</b> Otorgado correctamente</span>
+            </li>
+            <li class="instruction-item">
+              <span style="color: var(--success-color); font-weight: bold;">✓</span>
+              <span><b>Servicios de Accesibilidad:</b> Habilitados a nivel de sistema</span>
+            </li>
+          </ul>
+
+          <div class="alert-banner">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            <div>¡Ya puedes desconectar el cable USB y volver a iniciar sesión con tu cuenta de Google en el celular si lo deseas!</div>
+          </div>
+
+          <div class="actions-bar">
+            <div></div>
+            <button class="btn btn-primary" id="btnGoToAdmin">Ir al Panel de Administración &rarr;</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <script src="webadb.js"></script>
+  <script src="installer.js"></script>
+</body>
+</html>

@@ -344,7 +344,15 @@ document.addEventListener('DOMContentLoaded', () => {
     await adbSend('OPEN', localId, 0, service);
 
     let p = await adbRead();
-    if (p.cmd !== 'OKAY') throw new Error(`No se pudo abrir shell para: ${command}`);
+    // Ignore any leftover CLSE or OKAY packets from previous closed streams
+    let attempts = 5;
+    while ((p.cmd === 'CLSE' || p.cmd === 'OKAY') && attempts > 0) {
+      console.log(`[adbShell] Leftover packet ${p.cmd} before OPEN response, reading next...`);
+      p = await adbRead();
+      attempts--;
+    }
+
+    if (p.cmd !== 'OKAY') throw new Error(`No se pudo abrir shell para: ${command} (cmd=${p.cmd})`);
 
     const remoteId = p.arg0;
     let output = '';
@@ -442,8 +450,14 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('btnNextStep4').disabled = true;
       }
     } catch (err) {
-      list.innerHTML = `<div style="color:var(--danger-color);">Error al escanear: ${err.message}</div>`;
-      countText.innerText = 'Error de escaneo';
+      console.warn('Account check failed:', err);
+      list.innerHTML = `
+        <div style="padding: 14px 16px; background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3); border-radius: 10px; color: #fbbf24; font-size: 0.85rem; line-height: 1.5;">
+          ⚠️ No se pudo comprobar automáticamente. Asegúrate manualmente en tu celular de que <b>no haya cuentas de Google registradas</b> (Ajustes &rarr; Cuentas &rarr; Quitar cuenta) y luego presioná Siguiente.
+        </div>`;
+      countText.innerText = 'Verificación manual';
+      dot.className = 'status-dot';
+      document.getElementById('btnNextStep4').disabled = false;
     }
   }
 

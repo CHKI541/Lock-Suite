@@ -32,6 +32,34 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnNextStep5').addEventListener('click', () => goToStep(6));
   document.getElementById('btnGoToAdmin').addEventListener('click', () => { window.location.href = '../index.html'; });
 
+  // QR Modal Bindings
+  const btnShowQrHeader = document.getElementById('btnShowQrModal');
+  const btnShowQrStep1 = document.getElementById('btnShowQrModalStep1');
+  const qrOverlay = document.getElementById('qrModalOverlay');
+  const btnCloseQr = document.getElementById('btnCloseQrModal');
+  const btnCloseQrBottom = document.getElementById('btnCloseQrModalBottom');
+  const qrImage = document.getElementById('qrCodeImage');
+
+  function openQrModal() {
+    const qrPayload = JSON.stringify({
+      "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.ejemplo.locksuite/.receiver.DeviceAdminReceiver",
+      "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://locksuite-nueva.web.app/locksuite-latest.apk",
+      "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true
+    });
+    qrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(qrPayload)}`;
+    qrOverlay.style.display = 'flex';
+  }
+
+  if (btnShowQrHeader) btnShowQrHeader.addEventListener('click', openQrModal);
+  if (btnShowQrStep1) btnShowQrStep1.addEventListener('click', openQrModal);
+  if (btnCloseQr) btnCloseQr.addEventListener('click', () => { qrOverlay.style.display = 'none'; });
+  if (btnCloseQrBottom) btnCloseQrBottom.addEventListener('click', () => { qrOverlay.style.display = 'none'; });
+  if (qrOverlay) {
+    qrOverlay.addEventListener('click', (e) => {
+      if (e.target === qrOverlay) qrOverlay.style.display = 'none';
+    });
+  }
+
   // Check WebUSB support on step 2
   document.getElementById('btnStartStep1').addEventListener('click', () => {
     if (!('usb' in navigator)) {

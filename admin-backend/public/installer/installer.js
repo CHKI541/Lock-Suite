@@ -338,27 +338,35 @@ document.addEventListener('DOMContentLoaded', () => {
     adbDevice.nextLocalId = 1;
   }
 
-  async function adbShell(command) {
+  // ─── ADB SERVICE HELPER (WITH LEFTOVER PACKET FILTERING) ───────────────────
+  async function adbOpenService(serviceName) {
     const localId = adbDevice.nextLocalId++;
-    const service = new TextEncoder().encode(`shell:${command}`);
+    const service = new TextEncoder().encode(serviceName);
     await adbSend('OPEN', localId, 0, service);
 
     let p = await adbRead();
-    // Ignore any leftover CLSE or OKAY packets from previous closed streams
-    let attempts = 5;
-    while ((p.cmd === 'CLSE' || p.cmd === 'OKAY') && attempts > 0) {
-      console.log(`[adbShell] Leftover packet ${p.cmd} before OPEN response, reading next...`);
+    let attempts = 15;
+    while (attempts > 0) {
+      if (p.cmd === 'OKAY' && p.arg1 === localId) {
+        return { localId, remoteId: p.arg0 };
+      }
+      console.log(`[adbOpenService] Discarding leftover packet ${p.cmd} (arg0=${p.arg0}, arg1=${p.arg1}) for ${serviceName}`);
       p = await adbRead();
       attempts--;
     }
 
-    if (p.cmd !== 'OKAY') throw new Error(`No se pudo abrir shell para: ${command} (cmd=${p.cmd})`);
+    if (p.cmd === 'OKAY' && p.arg1 === localId) {
+      return { localId, remoteId: p.arg0 };
+    }
+    throw new Error(`Servicio rechazado para ${serviceName}: cmd=${p.cmd}`);
+  }
 
-    const remoteId = p.arg0;
+  async function adbShell(command) {
+    const { localId, remoteId } = await adbOpenService(`shell:${command}`);
     let output = '';
 
     while (true) {
-      p = await adbRead();
+      const p = await adbRead();
       if (p.cmd === 'WRTE') {
         output += new TextDecoder().decode(p.data);
         await adbSend('OKAY', localId, remoteId);
@@ -536,15 +544,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ─── DIRECT STREAMING APK INSTALL ───────────────────────────────────────
   async function installApkDirectStream(bytes, onProgress) {
-    const localId = adbDevice.nextLocalId++;
-    const service = new TextEncoder().encode(`exec:pm install -S ${bytes.length} -r`);
-    await adbSend('OPEN', localId, 0, service);
-
-    let p = await adbRead();
-    if (p.cmd !== 'OKAY') {
-      throw new Error(`Servicio exec rechazado: cmd=${p.cmd}`);
-    }
-    const remoteId = p.arg0;
+    const { localId, remoteId } = await adbOpenService(`exec:pm install -S ${bytes.length} -r`);
 
     const CHUNK_SIZE = 64 * 1024;
     let offset = 0;
@@ -553,8 +553,9 @@ document.addEventListener('DOMContentLoaded', () => {
       await adbSend('WRTE', localId, remoteId, chunk);
 
       let ack = await adbRead();
-      if (ack.cmd !== 'OKAY') {
-        throw new Error(`Error de transferencia en offset ${offset} (cmd=${ack.cmd})`);
+      while (ack.cmd === 'WRTE') {
+        await adbSend('OKAY', localId, remoteId);
+        ack = await adbRead();
       }
 
       offset += chunk.length;
@@ -568,7 +569,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let output = '';
     while (true) {
-      p = await adbRead();
+      const p = await adbRead();
       if (p.cmd === 'WRTE') {
         output += new TextDecoder().decode(p.data);
         await adbSend('OKAY', localId, remoteId);
@@ -582,13 +583,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ─── ADB PUSH FILE FALLBACK (sync protocol) ─────────────────────────────
   async function pushFileAdb(bytes, remotePath, onProgress) {
-    const localId = adbDevice.nextLocalId++;
-    const service = new TextEncoder().encode('sync:');
-    await adbSend('OPEN', localId, 0, service);
-
-    let p = await adbRead();
-    if (p.cmd !== 'OKAY') throw new Error('No se pudo abrir el servicio ADB sync.');
-    const remoteId = p.arg0;
+    const { localId, remoteId } = await adbOpenService('sync:');
 
     const modeStr = ',33188';
     const fullPathStr = remotePath + modeStr;
@@ -600,7 +595,11 @@ document.addEventListener('DOMContentLoaded', () => {
     sendReq.set(pathBytes, 8);
 
     await adbSend('WRTE', localId, remoteId, sendReq);
-    p = await adbRead();
+    let p = await adbRead();
+    while (p.cmd === 'WRTE') {
+      await adbSend('OKAY', localId, remoteId);
+      p = await adbRead();
+    }
     if (p.cmd !== 'OKAY') throw new Error('Error al iniciar envío SEND.');
 
     const CHUNK_SIZE = 64 * 1024;

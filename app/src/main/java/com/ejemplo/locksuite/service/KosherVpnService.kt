@@ -180,8 +180,13 @@ class KosherVpnService : VpnService() {
             }
         } else {
             // Fallback: Si no se pudo obtener el UID del socket (carrera de hilos), aplicamos la blacklist global
-            val globalBlacklist = WebViewPolicy.getGlobalBlacklist()
-            isBlocked = globalBlacklist.any { queriedDomain == it || queriedDomain.endsWith(".$it") }
+            val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
+            if (policyManager.isMercadoPagoBlockOffersEnabled() && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
+                isBlocked = true
+            } else {
+                val globalBlacklist = WebViewPolicy.getGlobalBlacklist()
+                isBlocked = globalBlacklist.any { queriedDomain == it || queriedDomain.endsWith(".$it") }
+            }
             logPackage = "fallback-global"
         }
 

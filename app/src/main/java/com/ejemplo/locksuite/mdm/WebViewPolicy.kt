@@ -132,7 +132,14 @@ object WebViewPolicy {
     fun isMercadoPagoOffersDomain(queriedDomain: String): Boolean {
         val lower = queriedDomain.lowercase()
         if (lower.contains("mercadolibre.")) return true
-        if (lower.contains("ofertas.mercadopago") || lower.contains("promociones.mercadopago") || lower.contains("deals.mercadopago")) return true
+        if (lower.contains("mlstatic.")) return true
+        if (lower.contains("ofertas.mercadopago") || 
+            lower.contains("promociones.mercadopago") || 
+            lower.contains("deals.mercadopago") ||
+            lower.contains("beneficios.mercadopago") ||
+            lower.contains("descuentos.mercadopago") ||
+            lower.contains("loyalty.mercadopago") ||
+            lower.contains("matt.mercadopago")) return true
         return false
     }
 }

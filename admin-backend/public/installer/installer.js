@@ -340,7 +340,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function adbShell(command) {
     const localId = adbDevice.nextLocalId++;
-    const service = new TextEncoder().encode(`shell:${command}\0`);
+    const service = new TextEncoder().encode(`shell:${command}`);
     await adbSend('OPEN', localId, 0, service);
 
     let p = await adbRead();

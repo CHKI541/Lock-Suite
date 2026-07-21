@@ -77,6 +77,7 @@ class PolicyManager(private val context: Context) {
         val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
         val hasAllowedApps = allowed.any { it != context.packageName && it != "com.ejemplo.locksuite" }
 
+        val appController = AppController(context)
         if (isBlocked) {
             if (hasAllowedApps) {
                 // Bloqueo programático: permite instalaciones, pero filtra por código
@@ -90,7 +91,7 @@ class PolicyManager(private val context: Context) {
             try {
                 // Respetar preferencia explícita de Play Store (si suspend_com.android.vending es false, no suspender)
                 val isPlayStoreSuspended = prefs.getBoolean("suspend_com.android.vending", true)
-                dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), isPlayStoreSuspended)
+                appController.suspendApp("com.android.vending", isPlayStoreSuspended)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -100,7 +101,7 @@ class PolicyManager(private val context: Context) {
             prefs.edit().putBoolean("install_blocked_programmatic", false).apply()
             try {
                 val isPlayStoreSuspended = prefs.getBoolean("suspend_com.android.vending", false)
-                dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), isPlayStoreSuspended)
+                appController.suspendApp("com.android.vending", isPlayStoreSuspended)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -483,9 +484,10 @@ class PolicyManager(private val context: Context) {
 
         // Suspender Google Play Store si el bloqueo de instalación está activado o si fue suspendida individualmente
         val prefs = PrefsHelper.getMdmPrefs(context)
+        val appController = AppController(context)
         val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
         try {
-            dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), shouldSuspendPlayStore)
+            appController.suspendApp("com.android.vending", shouldSuspendPlayStore)
             android.util.Log.i("PolicyManager", "reapplyAllRestrictions: Google Play Store estado de suspensión aplicado ($shouldSuspendPlayStore)")
         } catch (e: Exception) {
             e.printStackTrace()
@@ -506,13 +508,14 @@ class PolicyManager(private val context: Context) {
             setSystemWebViewSuspended(true)
         }
 
-        // Re-aplicar suspensiones individuales de aplicaciones
-        val appController = AppController(context)
+        // Re-aplicar suspensiones individuales de aplicaciones (solo si están suspendidas explícitamente)
         val userApps = appController.getUserApps(loadIcon = false)
         for (app in userApps) {
             if (!app.isCritical && app.packageName != "com.android.vending") {
                 val isIndividuallySuspended = prefs.getBoolean("suspend_${app.packageName}", false)
-                appController.suspendApp(app.packageName, isIndividuallySuspended)
+                if (isIndividuallySuspended) {
+                    appController.suspendApp(app.packageName, true)
+                }
             }
         }
 

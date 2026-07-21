@@ -89,7 +89,7 @@ class AppController(private val context: Context) {
     fun suspendApp(packageName: String, suspend: Boolean): Boolean {
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
             // Si la app es crítica y se solicita des-suspenderla (suspend = false), el estado deseado
-            // ya se cumple (no está suspendida) -> retornar true (éxito).
+            // ya se cumple (no está suspended) -> retornar true (éxito).
             return !suspend
         }
         
@@ -97,26 +97,55 @@ class AppController(private val context: Context) {
         // Siempre guardar la preferencia de estado deseado
         PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", suspend).apply()
 
-        if (packageName == "com.android.vending") {
+        val isCurrentlyOsSuspended = try {
+            dpm.isPackageSuspended(adminComponent, packageName)
+        } catch (e: Exception) {
+            false
+        }
+
+        if (suspend) {
+            var osSuspendedSuccess = false
+            if (!isCurrentlyOsSuspended) {
+                try {
+                    val unapplied = dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
+                    osSuspendedSuccess = unapplied.isEmpty() || !unapplied.contains(packageName)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            } else {
+                osSuspendedSuccess = true
+            }
+
+            // Si el SO prohibió suspender el paquete (típico en com.android.vending o instaladores protegidos por Android),
+            // usar el fallback nativo de ocultar/deshabilitar la aplicación (setApplicationHidden)
+            if (!osSuspendedSuccess) {
+                android.util.Log.w("AppController", "setPackagesSuspended no pudo suspender $packageName en el SO. Aplicando fallback de deshabilitado (setApplicationHidden).")
+                try {
+                    dpm.setApplicationHidden(adminComponent, packageName, true)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        } else {
+            // Des-suspender en el SO si estaba suspendida
             try {
-                dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), suspend)
+                dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), false)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            return true
+
+            // Si fue ocultada mediante el fallback de suspensión (y no por preferencia explícita del usuario), des-ocultarla
+            val isExplicitlyHiddenByUser = PrefsHelper.getMdmPrefs(context).getBoolean("hide_$packageName", false)
+            if (!isExplicitlyHiddenByUser) {
+                try {
+                    dpm.setApplicationHidden(adminComponent, packageName, false)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
         }
 
-        return try {
-            val packages = arrayOf(packageName)
-            val unapplied = dpm.setPackagesSuspended(adminComponent, packages, suspend)
-            if (unapplied.isNotEmpty()) {
-                android.util.Log.w("AppController", "No se pudo suspender en OS los paquetes: ${unapplied.joinToString()}")
-            }
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            !suspend
-        }
+        return true
     }
 
     fun isAppSuspended(packageName: String): Boolean {
@@ -126,7 +155,12 @@ class AppController(private val context: Context) {
         } catch (e: Exception) {
             false
         }
-        return prefsSuspended || osSuspended
+        val isHidden = try {
+            dpm.isApplicationHidden(adminComponent, packageName)
+        } catch (e: Exception) {
+            false
+        }
+        return prefsSuspended || osSuspended || (isHidden && prefsSuspended)
     }
 
     fun uninstallApp(packageName: String): Boolean {

@@ -179,6 +179,8 @@ object FirebaseDeviceSync {
                     "whatsappBlockStatus" to policyManager.isWhatsAppBlockStatusEnabled(),
                     "whatsappBlockChannels" to policyManager.isWhatsAppBlockChannelsEnabled(),
                     "mercadoPagoBlockOffers" to policyManager.isMercadoPagoBlockOffersEnabled(),
+                    "mercadoPagoBlockOffersAccessibility" to policyManager.isMercadoPagoBlockOffersAccessibilityEnabled(),
+                    "mercadoPagoBlockOffersVpn" to policyManager.isMercadoPagoBlockOffersVpnEnabled(),
                     "stealthModeEnabled" to isStealth
                 )
             )
@@ -199,6 +201,7 @@ object FirebaseDeviceSync {
                     "isHidden" to app.isHidden,
                     "isSuspended" to app.isSuspended,
                     "isWebViewBlocked" to app.isWebViewBlocked,
+                    "isInternetBlocked" to app.isInternetBlocked,
                     "imageBlockingMode" to app.imageBlockingMode,
                     "appType" to app.appType,
                     "isCritical" to app.isCritical

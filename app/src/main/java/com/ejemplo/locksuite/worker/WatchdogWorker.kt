@@ -26,6 +26,9 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             e.printStackTrace()
         }
 
+        // Garantizar que KosherVpnService siga activo si cualquier política lo requiere
+        com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(applicationContext)
+
         // Sincronizar información del dispositivo periódicamente en segundo plano
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)

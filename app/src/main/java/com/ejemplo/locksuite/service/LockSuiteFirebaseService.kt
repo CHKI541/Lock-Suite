@@ -161,6 +161,22 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     policyManager.setMercadoPagoBlockOffers(false)
                     true
                 }
+                "BLOCK_MP_OFFERS_ACCESSIBILITY" -> {
+                    policyManager.setMercadoPagoBlockOffersAccessibility(true)
+                    true
+                }
+                "UNBLOCK_MP_OFFERS_ACCESSIBILITY" -> {
+                    policyManager.setMercadoPagoBlockOffersAccessibility(false)
+                    true
+                }
+                "BLOCK_MP_OFFERS_VPN" -> {
+                    policyManager.setMercadoPagoBlockOffersVpn(true)
+                    true
+                }
+                "UNBLOCK_MP_OFFERS_VPN" -> {
+                    policyManager.setMercadoPagoBlockOffersVpn(false)
+                    true
+                }
 
                 "HIDE_APP" -> {
                     val appController = com.ejemplo.locksuite.mdm.AppController(this)
@@ -198,6 +214,27 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "UNBLOCK_WEBVIEW" -> {
                     packagesList.forEach { com.ejemplo.locksuite.mdm.WebViewBlockManager.setBlocked(this, it, false) }
                     true
+                }
+                "BLOCK_APP_INTERNET" -> {
+                    packagesList.forEach { policyManager.setPerAppInternetBlocked(it, true) }
+                    true
+                }
+                "UNBLOCK_APP_INTERNET" -> {
+                    packagesList.forEach { policyManager.setPerAppInternetBlocked(it, false) }
+                    true
+                }
+                "SET_HIDE_SUSPENDED_APPS" -> {
+                    val enabled = data["enabled"]?.toBoolean() ?: true
+                    policyManager.setHideSuspendedApps(enabled)
+                    true
+                }
+                "APPLY_PRESET_PROFILE" -> {
+                    val presetJson = data["presetJson"]
+                    if (!presetJson.isNullOrEmpty()) {
+                        policyManager.importPolicyPresetJson(presetJson)
+                    } else {
+                        false
+                    }
                 }
                 "SET_IMAGE_BLOCK_NONE" -> {
                     packagesList.forEach { com.ejemplo.locksuite.mdm.ImageBlockManager.setMode(this, it, "none") }
@@ -266,8 +303,8 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                                 android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
                             )
                             val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-                            val triggerTime = System.currentTimeMillis() + 10 * 60 * 1000L
-                            alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+                            val triggerTime = android.os.SystemClock.elapsedRealtime() + 10 * 60 * 1000L
+                            alarmManager.setExact(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent)
                             true
                         } catch (e: Exception) {
                             e.printStackTrace()

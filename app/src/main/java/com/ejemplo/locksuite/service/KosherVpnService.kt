@@ -22,6 +22,7 @@ class KosherVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     @Volatile private var running = false
     private lateinit var connectivityManager: ConnectivityManager
+    private var dnsExecutor: java.util.concurrent.ExecutorService? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -68,15 +69,44 @@ class KosherVpnService : VpnService() {
         if (running) return
         try {
             startForeground(9002, buildNotification())
-            vpnInterface = Builder()
+
+            // Desactivar DNS privado para evitar que Android envíe consultas cifradas por TCP 853 saltándose la VPN
+            try {
+                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+                policyManager.disablePrivateDns()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            val builder = Builder()
                 .setSession("Filtro Kosher DNS")
                 .addAddress("10.0.0.2", 32)
                 .addDnsServer("10.0.0.1")
-                .addRoute("10.0.0.1", 32) // Captura todas las consultas dirigidas al DNS virtual
+                .addRoute("10.0.0.1", 32) // Captura todas las consultas dirigidas al DNS virtual IPv4
+                .addAddress("fd00::2", 128)
+                .addDnsServer("fd00::1")
+                .addRoute("fd00::1", 128) // Captura todas las consultas dirigidas al DNS virtual IPv6
                 .setBlocking(true)
                 .setMtu(1500)
-                .establish()
 
+            // Excluir la propia app LockSuite para que sus peticiones upstream/FCM no pasen por el túnel
+            try {
+                builder.addDisallowedApplication(packageName)
+            } catch (e: Exception) {
+                android.util.Log.w("KosherVPN", "No se pudo desautorizar la propia app de la VPN: ${e.message}")
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                try {
+                    builder.setUnderlyingNetworks(null) // Usar las redes físicas activas del sistema (Wi-Fi / Móvil)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            vpnInterface = builder.establish()
+
+            dnsExecutor = java.util.concurrent.Executors.newFixedThreadPool(16)
             running = true
             Thread { runFilterLoop() }.start()
             android.util.Log.i("KosherVPN", "Servicio VPN iniciado exitosamente.")
@@ -107,7 +137,18 @@ class KosherVpnService : VpnService() {
                 val packet = IpPacketParser.parse(buffer, length) ?: continue
                 if (packet.protocol != IpPacketParser.PROTO_UDP || packet.destPort != 53) continue
 
-                handleDnsQuery(packet, output)
+                val executor = dnsExecutor
+                if (executor != null && !executor.isShutdown) {
+                    executor.execute {
+                        try {
+                            handleDnsQuery(packet, output)
+                        } catch (e: Exception) {
+                            android.util.Log.e("KosherVPN", "Error en consulta DNS asíncrona: ${e.message}")
+                        }
+                    }
+                } else {
+                    handleDnsQuery(packet, output)
+                }
             }
         } catch (e: Exception) {
             android.util.Log.e("KosherVPN", "Error en bucle de filtrado VPN: ${e.message}")
@@ -157,8 +198,11 @@ class KosherVpnService : VpnService() {
             val packageName = packageManager.getPackagesForUid(ownerUid)?.firstOrNull()
             if (packageName != null) {
                 logPackage = packageName
-                // Verificar si esta app tiene el bloqueo de WebView activado por el admin
-                if (WebViewBlockManager.isBlocked(this, packageName)) {
+                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
+                if (policyManager.isPerAppInternetBlocked(packageName)) {
+                    isBlocked = true
+                    android.util.Log.i("KosherVPN", "🚫 BLOQUEADO INTERNET TOTAL POR APP ($packageName): $queriedDomain")
+                } else if (WebViewBlockManager.isBlocked(this, packageName)) {
                     val coreDomains = WebViewPolicy.getCoreDomainsFor(packageName)
                     if (coreDomains != null) {
                         // Whitelist estricta para apps conocidas (ej. Waze/DiDi)
@@ -170,8 +214,7 @@ class KosherVpnService : VpnService() {
                         isBlocked = !isAllowed
                     }
                 } else if (packageName == "com.mercadopago.wallet") {
-                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
-                    if (policyManager.isMercadoPagoBlockOffersEnabled()) {
+                    if (policyManager.isMercadoPagoBlockOffersVpnEnabled()) {
                         if (WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
                             isBlocked = true
                         }
@@ -181,7 +224,7 @@ class KosherVpnService : VpnService() {
         } else {
             // Fallback: Si no se pudo obtener el UID del socket (carrera de hilos), aplicamos la blacklist global
             val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
-            if (policyManager.isMercadoPagoBlockOffersEnabled() && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
+            if (policyManager.isMercadoPagoBlockOffersVpnEnabled() && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
                 isBlocked = true
             } else {
                 val globalBlacklist = WebViewPolicy.getGlobalBlacklist()
@@ -250,6 +293,12 @@ class KosherVpnService : VpnService() {
 
     private fun stopVpn() {
         running = false
+        try {
+            dnsExecutor?.shutdownNow()
+            dnsExecutor = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         try {
             vpnInterface?.close()
         } catch (e: Exception) {

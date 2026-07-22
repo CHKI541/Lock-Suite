@@ -116,10 +116,9 @@ class AppController(private val context: Context) {
                 osSuspendedSuccess = true
             }
 
-            // Si el SO prohibió suspender el paquete (típico en com.android.vending o instaladores protegidos por Android),
-            // usar el fallback nativo de ocultar/deshabilitar la aplicación (setApplicationHidden)
-            if (!osSuspendedSuccess) {
-                android.util.Log.w("AppController", "setPackagesSuspended no pudo suspender $packageName en el SO. Aplicando fallback de deshabilitado (setApplicationHidden).")
+            val hideSuspendedOption = PolicyManager(context).isHideSuspendedApps()
+            if (hideSuspendedOption || !osSuspendedSuccess) {
+                android.util.Log.w("AppController", "Aplicando ocultamiento de icono para app suspendida: $packageName")
                 try {
                     dpm.setApplicationHidden(adminComponent, packageName, true)
                 } catch (e: Exception) {
@@ -216,6 +215,7 @@ class AppController(private val context: Context) {
                         else -> "Sistema"
                     }
 
+                    val policyManager = PolicyManager(context)
                     AppInfoData(
                         packageName = app.packageName,
                         label = label,
@@ -224,6 +224,7 @@ class AppController(private val context: Context) {
                         isSuspended = isAppSuspended(app.packageName),
                         appType = appType,
                         isWebViewBlocked = WebViewBlockManager.isBlocked(context, app.packageName),
+                        isInternetBlocked = policyManager.isPerAppInternetBlocked(app.packageName),
                         isCritical = isCritical(app.packageName),
                         imageBlockingMode = ImageBlockManager.getMode(context, app.packageName)
                     )
@@ -249,6 +250,7 @@ data class AppInfoData(
     var isSuspended: Boolean,
     val appType: String,
     var isWebViewBlocked: Boolean = false,
+    var isInternetBlocked: Boolean = false,
     val isCritical: Boolean = false,
     val imageBlockingMode: String = "none"
 )

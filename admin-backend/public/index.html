@@ -52,6 +52,7 @@
           <button id="main-tab-devices" class="main-nav-btn active" style="flex: 1; background: var(--navy-light); color: var(--text-light); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">📱 Celulares</button>
           <button id="main-tab-groups" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">👥 Grupos</button>
           <button id="main-tab-archived" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">📦 Archivados</button>
+          <button id="main-tab-presets" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">📋 Perfiles (Presets)</button>
           <button id="main-tab-global-settings" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">⚙️ Ajustes Globales</button>
         </div>
 
@@ -76,6 +77,25 @@
           </div>
           <div id="archived-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px;">
             <p class="loading-text">Cargando dispositivos archivados…</p>
+          </div>
+        </div>
+
+        <!-- Pestaña: Perfiles de Bloqueo (Presets) -->
+        <div id="presets-container" class="hidden">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <h2 style="margin: 0; font-size: 18px;">Perfiles de Bloqueo (Presets)</h2>
+              <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-top: 4px;">Guarde o cargue configuraciones de bloqueo listas para aplicar a cualquier celular en 1-clic.</p>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button id="save-current-preset-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight: bold; padding: 10px 16px; border-radius: 8px; cursor: pointer;">+ Guardar Perfil Actual</button>
+              <label for="import-preset-file-input" class="action-btn" style="background: var(--navy-light); color: var(--text-light); font-weight: bold; padding: 10px 16px; border-radius: 8px; cursor: pointer; display: inline-block;">📥 Importar Respaldo (.locksuite)</label>
+              <input type="file" id="import-preset-file-input" accept=".locksuite,.json" style="display: none;" />
+            </div>
+          </div>
+
+          <div id="presets-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px;">
+            <p class="loading-text">Cargando perfiles guardados…</p>
           </div>
         </div>
 
@@ -210,7 +230,8 @@
               <div class="toggle-list">
                 <label class="toggle-row"><span>Bloquear Estados (WhatsApp)</span><input type="checkbox" class="policy-switch" data-policy="whatsappBlockStatus" /></label>
                 <label class="toggle-row"><span>Bloquear Canales (WhatsApp)</span><input type="checkbox" class="policy-switch" data-policy="whatsappBlockChannels" /></label>
-                <label class="toggle-row"><span>Bloquear Ofertas y Beneficios (Mercado Pago)</span><input type="checkbox" class="policy-switch" data-policy="mercadoPagoBlockOffers" /></label>
+                <label class="toggle-row"><span>Bloquear Ofertas MP (Accesibilidad)</span><input type="checkbox" class="policy-switch" data-policy="mercadoPagoBlockOffersAccessibility" /></label>
+                <label class="toggle-row"><span>Bloquear Ofertas MP (por VPN)</span><input type="checkbox" class="policy-switch" data-policy="mercadoPagoBlockOffersVpn" /></label>
               </div>
             </div>
           </div>
@@ -226,6 +247,7 @@
               <div class="toggle-list">
                 <label class="toggle-row"><span>Bloqueo Total (Ocultar)</span><input type="checkbox" id="playstore-hidden" /></label>
                 <label class="toggle-row"><span>Suspensión</span><input type="checkbox" id="playstore-suspended" /></label>
+                <label class="toggle-row"><span>Ocultar icono al suspender</span><input type="checkbox" id="hide-suspended-apps-toggle" /></label>
               </div>
             </div>
 
@@ -385,7 +407,8 @@
               <div class="toggle-grid" style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--navy-dark); border-radius: 10px;">
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Estados (WhatsApp)</span><input type="checkbox" class="group-policy-switch" data-policy="whatsappBlockStatus" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Canales (WhatsApp)</span><input type="checkbox" class="group-policy-switch" data-policy="whatsappBlockChannels" /></label>
-                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ofertas y Beneficios (Mercado Pago)</span><input type="checkbox" class="group-policy-switch" data-policy="mercadoPagoBlockOffers" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ofertas MP (Accesibilidad)</span><input type="checkbox" class="group-policy-switch" data-policy="mercadoPagoBlockOffersAccessibility" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ofertas MP (por VPN)</span><input type="checkbox" class="group-policy-switch" data-policy="mercadoPagoBlockOffersVpn" /></label>
               </div>
             </div>
           </div>

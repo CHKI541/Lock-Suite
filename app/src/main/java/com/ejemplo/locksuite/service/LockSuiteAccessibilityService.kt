@@ -743,7 +743,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private fun handleMercadoPagoBlocking(packageName: String, event: AccessibilityEvent) {
         val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
-        if (!policyManager.isMercadoPagoBlockOffersEnabled()) return
+        if (!policyManager.isMercadoPagoBlockOffersAccessibilityEnabled()) return
 
         val eventType = event.eventType
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||

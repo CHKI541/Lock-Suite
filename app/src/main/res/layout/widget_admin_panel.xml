@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_admin_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="14dp"
+    android:background="@drawable/widget_admin_bg">
+
+    <FrameLayout
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:background="@drawable/widget_admin_gear_circle_bg"
+        android:padding="10dp">
+
+        <ImageView
+            android:id="@+id/widget_admin_icon"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:src="@drawable/ic_gear"
+            android:tint="#0B192C"
+            android:contentDescription="Panel Admin" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/widget_admin_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Panel Admin"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:fontFamily="sans-serif-medium"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/widget_admin_subtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="LockSuite MDM"
+        android:textColor="#F1C40F"
+        android:textSize="11sp"
+        android:fontFamily="sans-serif" />
+
+</LinearLayout>

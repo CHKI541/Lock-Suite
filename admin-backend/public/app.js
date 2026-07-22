@@ -432,6 +432,37 @@ function renderAppsList(e) {
             imgRow.appendChild(select);
             advancedPanel.appendChild(imgRow);
 
+            // Fila 2: Bloqueo Total de Internet por App
+            const netRow = document.createElement("div");
+            netRow.style.display = "flex";
+            netRow.style.alignItems = "center";
+            netRow.style.justifyContent = "space-between";
+            netRow.style.width = "100%";
+            netRow.style.marginTop = "4px";
+
+            const netLabel = document.createElement("span");
+            netLabel.textContent = "Bloqueo Total de Internet:";
+            netLabel.style.fontSize = "11px";
+            netLabel.style.color = "var(--text-gray)";
+
+            const netBtn = document.createElement("button");
+            netBtn.className = "app-toggle-btn" + (e.isInternetBlocked ? " active-block" : "");
+            netBtn.style.fontSize = "11px";
+            netBtn.style.padding = "4px 8px";
+            netBtn.textContent = e.isInternetBlocked ? "🚫 Sin Internet (Bloqueado)" : "🌐 Internet Permitido";
+            netBtn.addEventListener("click", () => {
+                const cmd = e.isInternetBlocked ? "UNBLOCK_APP_INTERNET" : "BLOCK_APP_INTERNET";
+                runCommandOnDevice(selectedDeviceId, cmd, [e.packageName], netBtn);
+            });
+
+            netRow.appendChild(netLabel);
+            netRow.appendChild(netBtn);
+            advancedPanel.appendChild(netRow);
+
+            imgRow.appendChild(label);
+            imgRow.appendChild(select);
+            advancedPanel.appendChild(imgRow);
+
             // Fila 2: Actualizar App
             const updateRow = document.createElement("div");
             updateRow.style.display = "flex";
@@ -677,6 +708,8 @@ saveNameBtn.addEventListener("click", async () => {
             whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
             whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
+            mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
+            mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"]
         } [n];
     if (!i) return;
@@ -696,7 +729,18 @@ saveNameBtn.addEventListener("click", async () => {
     playstoreSuspended.disabled = !0, runCommandOnDevice(selectedDeviceId, t, ["com.android.vending"], playstoreSuspended, () => {
         playstoreSuspended.checked = !e
     })
-}), sidebarAllowlistBtn.addEventListener("click", () => {
+});
+const hideSuspendedAppsToggle = document.getElementById("hide-suspended-apps-toggle");
+if (hideSuspendedAppsToggle) {
+    hideSuspendedAppsToggle.addEventListener("change", () => {
+        const e = hideSuspendedAppsToggle.checked;
+        hideSuspendedAppsToggle.disabled = !0;
+        runCommandOnDevice(selectedDeviceId, "SET_HIDE_SUSPENDED_APPS", null, hideSuspendedAppsToggle, () => {
+            hideSuspendedAppsToggle.checked = !e;
+        }, { enabled: e });
+    });
+}
+sidebarAllowlistBtn.addEventListener("click", () => {
     const e = sidebarAllowlistInput.value.split(",").map(e => e.trim()).filter(Boolean);
     if (e.length === 0) {
         if (!confirm("¿Seguro que querés vaciar la lista de aplicaciones permitidas? Esto bloqueará el acceso a todas las aplicaciones no esenciales.")) {
@@ -978,11 +1022,50 @@ if (mainTabDevices && mainTabGroups && mainTabArchived && mainTabGlobalSettings)
         closeGroupSidebar();
     });
 
+        closeGroupSidebar();
+    });
+
+    const mainTabPresets = document.getElementById("main-tab-presets");
+    const presetsContainer = document.getElementById("presets-container");
+    const presetsList = document.getElementById("presets-list");
+
+    if (mainTabPresets) {
+        mainTabPresets.addEventListener("click", () => {
+            mainTabPresets.classList.add("active");
+            mainTabDevices.classList.remove("active");
+            mainTabGroups.classList.remove("active");
+            mainTabArchived.classList.remove("active");
+            mainTabGlobalSettings.classList.remove("active");
+            
+            mainTabPresets.style.background = "var(--navy-light)";
+            mainTabPresets.style.color = "var(--text-light)";
+            mainTabDevices.style.background = "none";
+            mainTabDevices.style.color = "var(--text-gray)";
+            mainTabGroups.style.background = "none";
+            mainTabGroups.style.color = "var(--text-gray)";
+            mainTabArchived.style.background = "none";
+            mainTabArchived.style.color = "var(--text-gray)";
+            mainTabGlobalSettings.style.background = "none";
+            mainTabGlobalSettings.style.color = "var(--text-gray)";
+            
+            presetsContainer.classList.remove("hidden");
+            devicesContainer.classList.add("hidden");
+            groupsContainer.classList.add("hidden");
+            archivedContainer.classList.add("hidden");
+            globalSettingsContainer.classList.add("hidden");
+            closeDeviceSidebar();
+            closeGroupSidebar();
+
+            loadPresetsList();
+        });
+    }
+
     mainTabGlobalSettings.addEventListener("click", () => {
         mainTabGlobalSettings.classList.add("active");
         mainTabDevices.classList.remove("active");
         mainTabGroups.classList.remove("active");
         mainTabArchived.classList.remove("active");
+        if (mainTabPresets) mainTabPresets.classList.remove("active");
         
         mainTabGlobalSettings.style.background = "var(--navy-light)";
         mainTabGlobalSettings.style.color = "var(--text-light)";
@@ -992,14 +1075,286 @@ if (mainTabDevices && mainTabGroups && mainTabArchived && mainTabGlobalSettings)
         mainTabGroups.style.color = "var(--text-gray)";
         mainTabArchived.style.background = "none";
         mainTabArchived.style.color = "var(--text-gray)";
+        if (mainTabPresets) {
+            mainTabPresets.style.background = "none";
+            mainTabPresets.style.color = "var(--text-gray)";
+        }
         
         globalSettingsContainer.classList.remove("hidden");
         devicesContainer.classList.add("hidden");
         groupsContainer.classList.add("hidden");
         archivedContainer.classList.add("hidden");
+        presetsContainer.classList.add("hidden");
         closeDeviceSidebar();
         closeGroupSidebar();
     });
+}
+
+// ─────────────────────────────────────────────
+// GESTIÓN DE PERFILES GUARDADOS (PRESETS)
+// ─────────────────────────────────────────────
+
+async function computeHmacSha256(dataStr) {
+    try {
+        const encoder = new TextEncoder();
+        const keyData = encoder.encode("LockSuiteMDM_Preset_HMAC_SecretKey_2026");
+        const msgData = encoder.encode(dataStr);
+
+        const cryptoKey = await crypto.subtle.importKey(
+            "raw",
+            keyData,
+            { name: "HMAC", hash: "SHA-256" },
+            false,
+            ["sign"]
+        );
+
+        const signatureBuffer = await crypto.subtle.sign("HMAC", cryptoKey, msgData);
+        const hashArray = Array.from(new Uint8Array(signatureBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) {
+        console.error("Error al calcular HMAC:", e);
+        return "";
+    }
+}
+
+function loadPresetsList() {
+    const presetsList = document.getElementById("presets-list");
+    if (!presetsList) return;
+    presetsList.innerHTML = '<p class="loading-text">Cargando perfiles guardados…</p>';
+
+    database.ref("presets").once("value", snapshot => {
+        const presets = snapshot.val() || {};
+        renderPresetsList(presets);
+    }).catch(err => {
+        presetsList.innerHTML = `<p class="error-text">Error al cargar perfiles: ${err.message}</p>`;
+    });
+}
+
+function renderPresetsList(presets) {
+    const presetsList = document.getElementById("presets-list");
+    if (!presetsList) return;
+    presetsList.innerHTML = "";
+
+    const entries = Object.entries(presets);
+    if (entries.length === 0) {
+        presetsList.innerHTML = '<p class="loading-text" style="grid-column: 1/-1;">No hay ningún perfil guardado aún. Hace clic en "+ Guardar Perfil Actual" o importa un respaldo .locksuite.</p>';
+        return;
+    }
+
+    entries.forEach(([presetId, preset]) => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.background = "var(--navy-medium)";
+        card.style.borderRadius = "16px";
+        card.style.padding = "20px";
+        card.style.display = "flex";
+        card.style.flexDirection = "column";
+        card.style.justifyContent = "space-between";
+        card.style.gap = "12px";
+
+        const title = document.createElement("h3");
+        title.style.margin = "0";
+        title.style.fontSize = "16px";
+        title.style.color = "var(--accent)";
+        title.textContent = preset.presetName || "Perfil Sin Nombre";
+
+        const dateStr = preset.createdAt ? new Date(preset.createdAt).toLocaleString() : "Fecha desconocida";
+        const dateEl = document.createElement("p");
+        dateEl.style.margin = "2px 0 8px 0";
+        dateEl.style.fontSize = "11px";
+        dateEl.style.color = "var(--text-gray)";
+        dateEl.textContent = `Creado: ${dateStr}`;
+
+        const details = document.createElement("div");
+        details.style.fontSize = "12px";
+        details.style.color = "var(--text-light)";
+        details.style.display = "flex";
+        details.style.flexDirection = "column";
+        details.style.gap = "4px";
+
+        const d = preset.data || {};
+        const restr = d.restrictions || {};
+        const restrCount = Object.values(restr).filter(Boolean).length;
+        const perAppCount = (d.perAppInternetBlocked || []).length;
+
+        details.innerHTML = `
+            <span>🔒 Restricciones de Sistema: <strong>${restrCount} activas</strong></span>
+            <span>🌐 Anuncios: <strong>${d.adBlockingEnabled ? "Bloqueados" : "Permitidos"}</strong></span>
+            <span>📱 Bloqueo Total Internet Apps: <strong>${perAppCount} apps</strong></span>
+            <span>🛒 Mercado Pago (Acc/VPN): <strong>${d.mercadoPagoBlockOffersAccessibility ? "Sí" : "No"} / ${d.mercadoPagoBlockOffersVpn ? "Sí" : "No"}</strong></span>
+        `;
+
+        const actions = document.createElement("div");
+        actions.style.display = "flex";
+        actions.style.gap = "8px";
+        actions.style.marginTop = "8px";
+
+        const applyBtn = document.createElement("button");
+        applyBtn.className = "action-btn";
+        applyBtn.style.background = "var(--success-green)";
+        applyBtn.style.color = "white";
+        applyBtn.style.fontWeight = "bold";
+        applyBtn.style.fontSize = "12px";
+        applyBtn.style.padding = "8px 12px";
+        applyBtn.style.flex = "1";
+        applyBtn.textContent = "⚡ Aplicar a Dispositivo";
+        applyBtn.addEventListener("click", () => applyPresetToDeviceModal(preset));
+
+        const exportBtn = document.createElement("button");
+        exportBtn.className = "action-btn";
+        exportBtn.style.background = "var(--navy-light)";
+        exportBtn.style.color = "var(--text-light)";
+        exportBtn.style.fontSize = "12px";
+        exportBtn.style.padding = "8px 12px";
+        exportBtn.textContent = "💾 Exportar";
+        exportBtn.addEventListener("click", () => exportPresetToFile(preset));
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "action-btn";
+        deleteBtn.style.background = "#e74c3c";
+        deleteBtn.style.color = "white";
+        deleteBtn.style.fontSize = "12px";
+        deleteBtn.style.padding = "8px 12px";
+        deleteBtn.textContent = "🗑️";
+        deleteBtn.addEventListener("click", () => {
+            if (confirm(`¿Eliminar el perfil "${preset.presetName}"?`)) {
+                database.ref(`presets/${presetId}`).remove().then(() => loadPresetsList());
+            }
+        });
+
+        actions.appendChild(applyBtn);
+        actions.appendChild(exportBtn);
+        actions.appendChild(deleteBtn);
+
+        card.appendChild(title);
+        card.appendChild(dateEl);
+        card.appendChild(details);
+        card.appendChild(actions);
+
+        presetsList.appendChild(card);
+    });
+}
+
+// 📌 Guardar Estado Actual como Nuevo Perfil
+const savePresetBtn = document.getElementById("save-current-preset-btn");
+if (savePresetBtn) {
+    savePresetBtn.addEventListener("click", async () => {
+        if (!selectedDeviceId || !currentDevicesData[selectedDeviceId]) {
+            alert("Seleccioná primero un celular en la pestaña 'Celulares' para usar su configuración como plantilla.");
+            return;
+        }
+
+        const name = prompt("Escribí el nombre para este perfil de bloqueo (ej. 'Bloqueo Fuerte A'):");
+        if (!name || !name.trim()) return;
+
+        const dev = currentDevicesData[selectedDeviceId];
+        const dataObj = {
+            restrictions: {
+                no_factory_reset: !!dev.factoryResetBlocked,
+                no_install_apps: !!dev.installAppsBlocked,
+                no_uninstall_apps: !!dev.uninstallAppsBlocked,
+                no_debugging_features: !!dev.adbBlocked,
+                no_user_switch: !!dev.userSwitchBlocked,
+                no_modify_accounts: !!dev.modifyAccountsBlocked,
+                no_safe_boot: !!dev.safeBootBlocked,
+                no_install_unknown_sources: !!dev.unknownSourcesBlocked,
+                no_config_wifi: !!dev.wifiBlocked,
+                no_config_vpn: !!dev.vpnBlocked,
+                no_adjust_volume: !!dev.adjustVolumeBlocked,
+                no_apps_control: !!dev.appsControlBlocked,
+                no_bluetooth_sharing: !!dev.bluetoothSharingBlocked,
+                no_physical_media: !!dev.externalMediaBlocked,
+                no_config_tethering: !!dev.tetheringBlocked
+            },
+            cameraDisabled: !!dev.cameraDisabled,
+            screenCaptureBlocked: !!dev.screenCaptureBlocked,
+            statusBarDisabled: !!dev.statusBarDisabled,
+            keyguardDisabled: !!dev.keyguardDisabled,
+            internetBlocked: !!dev.internetBlocked,
+            adBlockingEnabled: !!dev.adBlockingEnabled,
+            gifsBlocked: !!dev.gifsBlocked,
+            whatsappBlockStatus: !!dev.whatsappBlockStatus,
+            whatsappBlockChannels: !!dev.whatsappBlockChannels,
+            mercadoPagoBlockOffersAccessibility: !!dev.mercadoPagoBlockOffersAccessibility,
+            mercadoPagoBlockOffersVpn: !!dev.mercadoPagoBlockOffersVpn,
+            perAppInternetBlocked: Object.values(dev.apps || {}).filter(a => a.isInternetBlocked).map(a => a.packageName)
+        };
+
+        const dataStr = JSON.stringify(dataObj);
+        const signature = await computeHmacSha256(dataStr);
+
+        const presetPayload = {
+            presetName: name.trim(),
+            createdAt: Date.now(),
+            version: 1,
+            data: dataObj,
+            signature: signature
+        };
+
+        database.ref("presets").push(presetPayload).then(() => {
+            alert(`✅ Perfil "${name.trim()}" guardado con éxito.`);
+            loadPresetsList();
+        }).catch(err => alert("Error al guardar perfil: " + err.message));
+    });
+}
+
+// 📌 Exportar Perfil a Archivo .locksuite
+function exportPresetToFile(preset) {
+    const jsonStr = JSON.stringify(preset, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(preset.presetName || "perfil").replace(/\s+/g, "_")}.locksuite`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// 📌 Importar Archivo de Respaldo .locksuite
+const importFileInput = document.getElementById("import-preset-file-input");
+if (importFileInput) {
+    importFileInput.addEventListener("change", async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async event => {
+            try {
+                const preset = JSON.parse(event.target.result);
+                if (!preset.data || !preset.signature) {
+                    alert("🚨 Archivo inválido o corrupto.");
+                    return;
+                }
+
+                // Verificar Firma HMAC
+                const computed = await computeHmacSha256(JSON.stringify(preset.data));
+                if (computed.toLowerCase() !== preset.signature.toLowerCase()) {
+                    alert("🚨 FIRMA INVÁLIDA: El archivo de respaldo ha sido modificado o alterado de forma no autorizada.");
+                    return;
+                }
+
+                await database.ref("presets").push(preset);
+                alert(`✅ Perfil "${preset.presetName || 'Importado'}" verificado e importado con éxito.`);
+                loadPresetsList();
+            } catch (err) {
+                alert("Error al leer el archivo: " + err.message);
+            }
+        };
+        reader.readAsText(file);
+    });
+}
+
+// 📌 Aplicar Perfil a un Dispositivo en 1-Clic
+function applyPresetToDeviceModal(preset) {
+    const deviceId = prompt("Ingresá el ID del dispositivo al que querés aplicar este perfil (o dejalo como está si querés aplicarlo al celular seleccionado actualmente):", selectedDeviceId || "");
+    if (!deviceId || !deviceId.trim()) return;
+
+    const targetId = deviceId.trim();
+    const presetJsonStr = JSON.stringify(preset);
+
+    runCommandOnDevice(targetId, "APPLY_PRESET_PROFILE", { presetJson: presetJsonStr });
 }
 
 // 2. Renderizar Lista de Tarjetas de Grupos
@@ -1352,6 +1707,8 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
             whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
+            mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
+            mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
         };
@@ -1406,6 +1763,8 @@ if (groupSidebar) {
             whatsappBlockStatus: ["BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS"],
             whatsappBlockChannels: ["BLOCK_WHATSAPP_CHANNELS", "UNBLOCK_WHATSAPP_CHANNELS"],
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
+            mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
+            mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
         } [policyKey];

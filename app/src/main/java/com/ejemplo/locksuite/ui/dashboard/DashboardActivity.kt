@@ -1049,6 +1049,13 @@ fun AppManagerTabContent(context: Context) {
                                      }
                                  }
                              },
+                             onInternetChange = { block ->
+                                scope.launch(Dispatchers.IO) {
+                                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                                    policyManager.setPerAppInternetBlocked(app.packageName, block)
+                                    refreshApps()
+                                }
+                            },
                             onUninstallClick = {
                                 appToUninstall = app
                             }
@@ -1073,6 +1080,7 @@ fun AppManagerTabContent(context: Context) {
                             onHideChange = { _, onComplete -> onComplete(false) },
                             onSuspendChange = { _, onComplete -> onComplete(false) },
                             onWebViewChange = { _, onComplete -> onComplete(false) },
+                            onInternetChange = { _ -> },
                             onUninstallClick = {}
                         )
                     }
@@ -1088,11 +1096,13 @@ fun AppRowItem(
     onHideChange: (Boolean, (Boolean) -> Unit) -> Unit,
     onSuspendChange: (Boolean, (Boolean) -> Unit) -> Unit,
     onWebViewChange: (Boolean, (Boolean) -> Unit) -> Unit,
+    onInternetChange: (Boolean) -> Unit,
     onUninstallClick: () -> Unit
 ) {
     var hideState by remember { mutableStateOf(app.isHidden) }
     var suspendState by remember { mutableStateOf(app.isSuspended) }
     var webviewState by remember { mutableStateOf(app.isWebViewBlocked) }
+    var perAppNetState by remember { mutableStateOf(app.isInternetBlocked) }
     var expanded by remember { mutableStateOf(false) }
     var imageBlockingMode by remember { mutableStateOf(app.imageBlockingMode) }
     val scope = rememberCoroutineScope()
@@ -1318,9 +1328,43 @@ fun AppRowItem(
                             }
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Bloqueo Total de Internet", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Text("Corta el acceso a internet para esta app por completo.", color = Color.LightGray, fontSize = 11.sp)
+                        }
+                        Switch(
+                            checked = perAppNetState,
+                            onCheckedChange = { enabled ->
+                                perAppNetState = enabled
+                                onInternetChange(enabled)
+                                Toast.makeText(context, if (enabled) "Internet bloqueado en ${app.label}." else "Internet permitido en ${app.label}.", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedTrackColor = Color(0xFFF1C40F)
+                            )
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun StatusLabelRow(label: String, value: String) {
+    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+        Text(label, color = Color.LightGray, fontSize = 12.sp)
+        Text(value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(4.dp))
     }
 }
 
@@ -1729,26 +1773,62 @@ fun ServicesTabContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Bloquear Ofertas en Mercado Pago", color = Color.White, fontSize = 14.sp)
+                            Text("Bloquear Ofertas MP (Accesibilidad)", color = Color.White, fontSize = 14.sp)
                             Text(
-                                "Bloquea la sección de Ofertas, Descuentos y Promociones manteniendo pagos y transferencias activos.",
+                                "Bloquea visualmente la pestaña de Ofertas y Promociones en la pantalla de Mercado Pago.",
                                 color = Color.LightGray,
                                 fontSize = 11.sp,
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                         }
-                        var blockMpOffersState by remember {
-                            mutableStateOf(policyManager.isMercadoPagoBlockOffersEnabled())
+                        var blockMpAccState by remember {
+                            mutableStateOf(policyManager.isMercadoPagoBlockOffersAccessibilityEnabled())
                         }
                         Switch(
-                            checked = blockMpOffersState,
+                            checked = blockMpAccState,
                             onCheckedChange = { enabled ->
-                                policyManager.setMercadoPagoBlockOffers(enabled)
-                                blockMpOffersState = enabled
+                                policyManager.setMercadoPagoBlockOffersAccessibility(enabled)
+                                blockMpAccState = enabled
                                 scope.launch(Dispatchers.IO) {
                                     com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
                                 }
-                                Toast.makeText(context, if (enabled) "Ofertas de MP Bloqueadas." else "Ofertas de MP Permitidas.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, if (enabled) "Ofertas MP (Accesibilidad) Bloqueadas." else "Ofertas MP Permitidas.", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedTrackColor = accentOrange
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Bloquear Ofertas MP (por VPN)", color = Color.White, fontSize = 14.sp)
+                            Text(
+                                "Bloquea las peticiones de red y APIs de promociones y créditos en Mercado Pago.",
+                                color = Color.LightGray,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        var blockMpVpnState by remember {
+                            mutableStateOf(policyManager.isMercadoPagoBlockOffersVpnEnabled())
+                        }
+                        Switch(
+                            checked = blockMpVpnState,
+                            onCheckedChange = { enabled ->
+                                policyManager.setMercadoPagoBlockOffersVpn(enabled)
+                                blockMpVpnState = enabled
+                                scope.launch(Dispatchers.IO) {
+                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                                }
+                                Toast.makeText(context, if (enabled) "Ofertas MP (VPN) Bloqueadas." else "Ofertas MP Permitidas.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color(0xFF0B192C),
@@ -2118,14 +2198,5 @@ fun ServicesTabContent(
                 }
             }
         }
-    }
-}
-
-@Composable
-fun StatusLabelRow(label: String, value: String) {
-    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-        Text(label, color = Color.LightGray, fontSize = 12.sp)
-        Text(value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(4.dp))
     }
 }

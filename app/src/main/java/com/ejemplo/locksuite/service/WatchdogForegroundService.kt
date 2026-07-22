@@ -33,8 +33,11 @@ class WatchdogForegroundService : Service() {
         override fun run() {
             checkAccessibilityStatus()
             
+            // Garantizar que la VPN Kosher siga ejecutándose si alguna política la requiere
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(applicationContext)
+
             // Sincronizar periódicamente cada 90 segundos para mantener el estado "En línea" en la web sin abrir la app
-            val now = System.currentTimeMillis()
+            val now = android.os.SystemClock.elapsedRealtime()
             if (now - lastSyncTime > 90000) {
                 lastSyncTime = now
                 try {
@@ -72,7 +75,8 @@ class WatchdogForegroundService : Service() {
 
     private fun checkAccessibilityStatus() {
         val context = applicationContext
-        if (System.currentTimeMillis() < temporaryPauseUntil) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now < temporaryPauseUntil) return
         if (!com.ejemplo.locksuite.security.PinManager.isPinConfigured(context)) return
         if (com.ejemplo.locksuite.security.SessionManager.isActive()) return
 
@@ -97,7 +101,6 @@ class WatchdogForegroundService : Service() {
             }
 
             // Evitar relanzar la actividad repetidamente si ya se lanzó hace menos de 15 segundos
-            val now = System.currentTimeMillis()
             if (now - lastBlockLaunchTime > 15000) {
                 lastBlockLaunchTime = now
                 // Abrir pantalla de bloqueo de accesibilidad

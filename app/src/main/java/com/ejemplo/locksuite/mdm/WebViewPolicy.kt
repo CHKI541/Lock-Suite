@@ -77,7 +77,16 @@ object WebViewPolicy {
         "firebaseinstallations.googleapis.com",
         "app-measurement.com",
         "crashlytics.com",
-        "doubleclick.net" // A veces necesario para mapas de Google de manera interna
+        "cloudfront.net",
+        "akamaized.net",
+        "akamaihd.net",
+        "cloudflare.com",
+        "fastly.net",
+        "amazonaws.com",
+        "sentry.io",
+        "branch.io",
+        "adjust.com",
+        "appsflyer.com"
     )
 
     /**

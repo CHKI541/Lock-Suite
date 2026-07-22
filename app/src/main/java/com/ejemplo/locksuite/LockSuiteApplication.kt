@@ -37,6 +37,9 @@ class LockSuiteApplication : Application() {
             e.printStackTrace()
         }
 
+        // 3b. Garantizar que la VPN se inicie inmediatamente si la requiere la configuración
+        com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(this)
+
         // 4. Marcar el dispositivo como "En línea" de forma casi instantánea al iniciar la app
         //    (solo escribe el timestamp lastSeen, sin esperar la sincronización completa)
         try {

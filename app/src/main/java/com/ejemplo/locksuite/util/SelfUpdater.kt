@@ -279,11 +279,11 @@ object SelfUpdater {
             }
             val pendingIntent = PendingIntent.getBroadcast(context, 9922, intent, flags)
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-            val triggerAtMs = System.currentTimeMillis() + 120_000
+            val triggerAtMs = android.os.SystemClock.elapsedRealtime() + 120_000
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAtMs, pendingIntent)
+                alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pendingIntent)
             } else {
-                alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerAtMs, pendingIntent)
+                alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pendingIntent)
             }
         } catch (e: Exception) {
             Log.w("SelfUpdater", "Error al programar timeout de instalación: ${e.message}")

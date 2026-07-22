@@ -126,6 +126,24 @@ class PolicyManager(private val context: Context) {
         refreshInstallRestriction()
     }
 
+    fun setHideSuspendedApps(block: Boolean) {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        prefs.edit().putBoolean("hide_suspended_apps", block).apply()
+        // Re-enforce on current suspended apps
+        val appController = AppController(context)
+        val installedApps = appController.getUserApps()
+        for (app in installedApps) {
+            if (app.isSuspended) {
+                appController.suspendApp(app.packageName, true)
+            }
+        }
+    }
+
+    fun isHideSuspendedApps(): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        return prefs.getBoolean("hide_suspended_apps", false)
+    }
+
     fun setUninstallAppsBlocked(block: Boolean) =
         setRestriction(UserManager.DISALLOW_UNINSTALL_APPS, block)
 
@@ -237,14 +255,26 @@ class PolicyManager(private val context: Context) {
     fun setTetheringBlocked(block: Boolean) =
         setRestriction(UserManager.DISALLOW_CONFIG_TETHERING, block)
 
+    fun disablePrivateDns() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                dpm.setGlobalSetting(adminComponent, "private_dns_mode", "off")
+                android.util.Log.i("PolicyManager", "DNS Privado desactivado a nivel global (PRIVATE_DNS_MODE=off)")
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "No se pudo desactivar DNS Privado: ${e.message}")
+        }
+    }
+
     fun setVpnConfigBlocked(block: Boolean): Boolean {
         return try {
             if (block) {
-                // Forzar a LockSuite como la VPN permanente (Always-on) sin modo lockdown estricto.
-                // Esto bloquea que el usuario pueda desactivar o quitar la VPN en Ajustes, pero permite el tráfico de internet normal.
+                // Forzar a LockSuite como la VPN permanente (Always-on) con modo lockdown estricto.
+                // Esto impide que el usuario desactive la VPN o navegue sin el filtro activo.
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                         dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
+                        disablePrivateDns()
                         android.util.Log.i("PolicyManager", "Always-on VPN activa (lockdown=false) sobre ${context.packageName}")
                     }
                 } catch (e: Exception) {
@@ -274,6 +304,8 @@ class PolicyManager(private val context: Context) {
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("global_ad_blocking", enabled).apply()
             
             if (enabled) {
+                disablePrivateDns()
+
                 // Arrancar la VPN para que filtre las consultas DNS de anuncios
                 try {
                     val prepareIntent = VpnService.prepare(context)
@@ -405,11 +437,204 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setMercadoPagoBlockOffers(enabled: Boolean) {
-        PrefsHelper.getMdmPrefs(context).edit().putBoolean("mercadopago_block_offers", enabled).apply()
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean("mercadopago_block_offers", enabled)
+            .putBoolean("mp_offers_accessibility", enabled)
+            .putBoolean("mp_offers_vpn", enabled)
+            .apply()
     }
 
     fun isMercadoPagoBlockOffersEnabled(): Boolean {
-        return PrefsHelper.getMdmPrefs(context).getBoolean("mercadopago_block_offers", false)
+        return isMercadoPagoBlockOffersAccessibilityEnabled() || isMercadoPagoBlockOffersVpnEnabled()
+    }
+
+    fun setMercadoPagoBlockOffersAccessibility(enabled: Boolean) {
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("mp_offers_accessibility", enabled).apply()
+    }
+
+    fun isMercadoPagoBlockOffersAccessibilityEnabled(): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        return prefs.getBoolean("mp_offers_accessibility", prefs.getBoolean("mercadopago_block_offers", false))
+    }
+
+    fun setMercadoPagoBlockOffersVpn(enabled: Boolean) {
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("mp_offers_vpn", enabled).apply()
+        if (enabled) {
+            // Asegurar que la VPN esté corriendo para filtrar peticiones DNS
+            try {
+                com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun isMercadoPagoBlockOffersVpnEnabled(): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        return prefs.getBoolean("mp_offers_vpn", prefs.getBoolean("mercadopago_block_offers", false))
+    }
+
+    // ─────────────────────────────────────────────
+    // BLOQUEO TOTAL DE INTERNET POR APP
+    // ─────────────────────────────────────────────
+
+    fun setPerAppInternetBlocked(packageName: String, blocked: Boolean) {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val currentSet = prefs.getStringSet("per_app_internet_blocked", emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (blocked) {
+            currentSet.add(packageName)
+        } else {
+            currentSet.remove(packageName)
+        }
+        prefs.edit().putStringSet("per_app_internet_blocked", currentSet).apply()
+
+        if (blocked) {
+            try {
+                com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+    }
+
+    fun isPerAppInternetBlocked(packageName: String): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val currentSet = prefs.getStringSet("per_app_internet_blocked", emptySet()) ?: emptySet()
+        return currentSet.contains(packageName)
+    }
+
+    fun getPerAppInternetBlockedPackages(): Set<String> {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        return prefs.getStringSet("per_app_internet_blocked", emptySet()) ?: emptySet()
+    }
+
+    // ─────────────────────────────────────────────
+    // SISTEMA DE PERFILES GUARDADOS (PRESETS) Y RESPALDOS HMAC
+    // ─────────────────────────────────────────────
+
+    fun exportPolicyPresetJson(presetName: String = "Perfil LockSuite"): String {
+        val dataObj = org.json.JSONObject()
+        
+        val restrictionsObj = org.json.JSONObject()
+        val allRestrictions = listOf(
+            UserManager.DISALLOW_FACTORY_RESET,
+            UserManager.DISALLOW_INSTALL_APPS,
+            UserManager.DISALLOW_UNINSTALL_APPS,
+            UserManager.DISALLOW_DEBUGGING_FEATURES,
+            UserManager.DISALLOW_USER_SWITCH,
+            UserManager.DISALLOW_MODIFY_ACCOUNTS,
+            UserManager.DISALLOW_SAFE_BOOT,
+            UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
+            UserManager.DISALLOW_CONFIG_WIFI,
+            UserManager.DISALLOW_NETWORK_RESET,
+            UserManager.DISALLOW_CONFIG_VPN,
+            UserManager.DISALLOW_ADJUST_VOLUME,
+            UserManager.DISALLOW_APPS_CONTROL,
+            UserManager.DISALLOW_BLUETOOTH_SHARING,
+            UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
+            UserManager.DISALLOW_CONFIG_TETHERING
+        )
+        for (r in allRestrictions) {
+            restrictionsObj.put(r, isRestrictionEnabled(r))
+        }
+        dataObj.put("restrictions", restrictionsObj)
+        dataObj.put("cameraDisabled", isCameraDisabled())
+        dataObj.put("screenCaptureBlocked", isScreenCaptureBlocked())
+        dataObj.put("statusBarDisabled", isStatusBarDisabled())
+        dataObj.put("keyguardDisabled", isKeyguardDisabled())
+        dataObj.put("internetBlocked", isInternetBlocked())
+        dataObj.put("adBlockingEnabled", isAdBlockingEnabled())
+        dataObj.put("gifsBlocked", isGifsBlocked())
+        dataObj.put("whatsappBlockStatus", isWhatsAppBlockStatusEnabled())
+        dataObj.put("whatsappBlockChannels", isWhatsAppBlockChannelsEnabled())
+        dataObj.put("mercadoPagoBlockOffersAccessibility", isMercadoPagoBlockOffersAccessibilityEnabled())
+        dataObj.put("mercadoPagoBlockOffersVpn", isMercadoPagoBlockOffersVpnEnabled())
+        
+        val perAppNetArr = org.json.JSONArray()
+        getPerAppInternetBlockedPackages().forEach { perAppNetArr.put(it) }
+        dataObj.put("perAppInternetBlocked", perAppNetArr)
+
+        val rootObj = org.json.JSONObject()
+        rootObj.put("presetName", presetName)
+        rootObj.put("createdAt", System.currentTimeMillis())
+        rootObj.put("version", 1)
+        rootObj.put("data", dataObj)
+        
+        val dataString = dataObj.toString()
+        val signature = computeHmacSha256(dataString)
+        rootObj.put("signature", signature)
+
+        return rootObj.toString(2)
+    }
+
+    fun importPolicyPresetJson(jsonString: String): Boolean {
+        try {
+            val rootObj = org.json.JSONObject(jsonString)
+            val dataObj = rootObj.getJSONObject("data")
+            val signature = rootObj.optString("signature", "")
+            
+            // Verificación HMAC Anti-Evasión
+            val computedSignature = computeHmacSha256(dataObj.toString())
+            if (!computedSignature.equals(signature, ignoreCase = true)) {
+                android.util.Log.e("PolicyManager", "🚨 FIRMA HMAC INVÁLIDA: El archivo de respaldo ha sido alterado o corrupto.")
+                throw SecurityException("Firma del archivo de respaldo inválida. Archivo alterado no autorizado.")
+            }
+
+            // Aplicar restricciones DPM
+            val restrictionsObj = dataObj.getJSONObject("restrictions")
+            val keys = restrictionsObj.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val enabled = restrictionsObj.getBoolean(key)
+                if (enabled) {
+                    setRestriction(key, true)
+                } else {
+                    setRestriction(key, false)
+                }
+            }
+
+            setCameraDisabled(dataObj.optBoolean("cameraDisabled", false))
+            setScreenCaptureBlocked(dataObj.optBoolean("screenCaptureBlocked", false))
+            setStatusBarDisabled(dataObj.optBoolean("statusBarDisabled", false))
+            setKeyguardDisabled(dataObj.optBoolean("keyguardDisabled", false))
+            setInternetBlocked(dataObj.optBoolean("internetBlocked", false))
+            setAdBlockingEnabled(dataObj.optBoolean("adBlockingEnabled", false))
+            setGifsBlocked(dataObj.optBoolean("gifsBlocked", false))
+            setWhatsAppBlockStatus(dataObj.optBoolean("whatsappBlockStatus", false))
+            setWhatsAppBlockChannels(dataObj.optBoolean("whatsappBlockChannels", false))
+            setMercadoPagoBlockOffersAccessibility(dataObj.optBoolean("mercadoPagoBlockOffersAccessibility", false))
+            setMercadoPagoBlockOffersVpn(dataObj.optBoolean("mercadoPagoBlockOffersVpn", false))
+
+            val perAppNetArr = dataObj.optJSONArray("perAppInternetBlocked")
+            if (perAppNetArr != null) {
+                val prefs = PrefsHelper.getMdmPrefs(context)
+                val set = mutableSetOf<String>()
+                for (i in 0 until perAppNetArr.length()) {
+                    set.add(perAppNetArr.getString(i))
+                }
+                prefs.edit().putStringSet("per_app_internet_blocked", set).apply()
+            }
+
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+            return true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return false
+        }
+    }
+
+    private fun computeHmacSha256(data: String): String {
+        return try {
+            val secretKey = "LockSuiteMDM_Preset_HMAC_SecretKey_2026"
+            val sha256Hmac = javax.crypto.Mac.getInstance("HmacSHA256")
+            val secretKeySpec = javax.crypto.spec.SecretKeySpec(secretKey.toByteArray(Charsets.UTF_8), "HmacSHA256")
+            sha256Hmac.init(secretKeySpec)
+            val hash = sha256Hmac.doFinal(data.toByteArray(Charsets.UTF_8))
+            hash.joinToString("") { "%02x".format(it) }
+        } catch (e: Exception) {
+            ""
+        }
     }
 
     // ─────────────────────────────────────────────

@@ -39,13 +39,15 @@
             </intent-filter>
         </receiver>
 
-        <!-- BOOT RECEIVER (Persistencia ante reinicio) -->
+        <!-- BOOT RECEIVER (Persistencia ante reinicio y actualizaciones OTA) -->
         <receiver
             android:name=".receiver.BootReceiver"
+            android:directBootAware="true"
             android:exported="true">
             <intent-filter android:priority="999">
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
@@ -227,6 +229,19 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/store_widget_info" />
+        </receiver>
+
+        <!-- ADMIN PANEL APP WIDGET PROVIDER (Acceso directo al Panel de Administración con icono de engranaje) -->
+        <receiver
+            android:name=".widget.AdminWidgetProvider"
+            android:label="Panel Admin"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/admin_widget_info" />
         </receiver>
 
     </application>

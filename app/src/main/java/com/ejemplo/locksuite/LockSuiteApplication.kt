@@ -6,11 +6,29 @@ import android.os.Build
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.service.WatchdogForegroundService
 import com.google.firebase.FirebaseApp
+import com.ejemplo.locksuite.dns.DomainRuleEngine
+import com.ejemplo.locksuite.dns.DnsActivityBuffer
+import com.ejemplo.locksuite.dns.DomainRuleManager
 
 class LockSuiteApplication : Application() {
 
+    companion object {
+        lateinit var domainRuleEngine: DomainRuleEngine
+            private set
+        lateinit var dnsActivityBuffer: DnsActivityBuffer
+            private set
+        lateinit var domainRuleManager: DomainRuleManager
+            private set
+    }
+
     override fun onCreate() {
         super.onCreate()
+
+        // 0. Inicializar motor de reglas DNS (ANTES de que arranque la VPN)
+        domainRuleEngine = DomainRuleEngine()
+        dnsActivityBuffer = DnsActivityBuffer()
+        domainRuleManager = DomainRuleManager(this, domainRuleEngine)
+        domainRuleManager.loadRules()
         
         // 1. Inicializar Firebase
         try {

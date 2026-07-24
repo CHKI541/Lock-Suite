@@ -169,10 +169,35 @@ class KosherVpnService : VpnService() {
             return
         }
 
+        // Intentar resolver el UID y paquete dueño del socket al principio para logging y reglas personalizadas
+        val ownerUid = resolveOwnerUid(packet)
+        var logPackage = "desconocido"
+        if (ownerUid != android.os.Process.INVALID_UID) {
+            val packageName = packageManager.getPackagesForUid(ownerUid)?.firstOrNull()
+            if (packageName != null) {
+                logPackage = packageName
+            }
+        }
+
+        // ── Reglas personalizadas DNS ──
+        val customRule = com.ejemplo.locksuite.LockSuiteApplication.domainRuleEngine.effectiveRule(queriedDomain)
+        if (customRule == com.ejemplo.locksuite.dns.RuleType.BLOCK) {
+            android.util.Log.i("KosherVPN", "🚫 BLOQUEADO DNS CUSTOM 0.0.0.0 dominio=$queriedDomain de la app=$logPackage")
+            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
+            NetworkForwarder.sendBlockedDnsResponse(packet, output)
+            return
+        } else if (customRule == com.ejemplo.locksuite.dns.RuleType.ALLOW) {
+            android.util.Log.i("KosherVPN", "✅ PERMITIDO DNS CUSTOM dominio=$queriedDomain de la app=$logPackage")
+            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.ALLOWED)
+            NetworkForwarder.forwardDnsQuery(packet, output, this)
+            return
+        }
+
         // 1. Bloqueo global de anuncios (AdBlocker) si la opción está activa por el administrador
         val isAdBlockerActive = PrefsHelper.getMdmPrefs(this).getBoolean("global_ad_blocking", false)
         if (isAdBlockerActive && AdBlocker.isBlocked(queriedDomain)) {
             android.util.Log.i("KosherVPN", "BLOQUEADO ANUNCIO GLOBAL: $queriedDomain")
+            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
             // No responder para causar timeout DNS en la petición del anuncio
             return
         }
@@ -185,39 +210,33 @@ class KosherVpnService : VpnService() {
                                  queriedDomain.contains("gboard-stickers")
             if (isTenorOrGiphy) {
                 android.util.Log.i("KosherVPN", "🚫 BLOQUEADO GIFS/STICKERS/TENOR: $queriedDomain")
+                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
                 return
             }
         }
 
-        // 1. Intentar resolver el UID dueño del socket
-        val ownerUid = resolveOwnerUid(packet)
         var isBlocked = false
-        var logPackage = "desconocido"
 
-        if (ownerUid != android.os.Process.INVALID_UID) {
-            val packageName = packageManager.getPackagesForUid(ownerUid)?.firstOrNull()
-            if (packageName != null) {
-                logPackage = packageName
-                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
-                if (policyManager.isPerAppInternetBlocked(packageName)) {
-                    isBlocked = true
-                    android.util.Log.i("KosherVPN", "🚫 BLOQUEADO INTERNET TOTAL POR APP ($packageName): $queriedDomain")
-                } else if (WebViewBlockManager.isBlocked(this, packageName)) {
-                    val coreDomains = WebViewPolicy.getCoreDomainsFor(packageName)
-                    if (coreDomains != null) {
-                        // Whitelist estricta para apps conocidas (ej. Waze/DiDi)
-                        val isCore = coreDomains.any { queriedDomain == it || queriedDomain.endsWith(".$it") }
-                        isBlocked = !isCore
-                    } else {
-                        // Auto-Whitelist dinámica basada en packageName + infraestructura común para cualquier app genérica
-                        val isAllowed = WebViewPolicy.isDomainAllowedForGenericApp(packageName, queriedDomain)
-                        isBlocked = !isAllowed
-                    }
-                } else if (packageName == "com.mercadopago.wallet") {
-                    if (policyManager.isMercadoPagoBlockOffersVpnEnabled()) {
-                        if (WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
-                            isBlocked = true
-                        }
+        if (logPackage != "desconocido") {
+            val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
+            if (policyManager.isPerAppInternetBlocked(logPackage)) {
+                isBlocked = true
+                android.util.Log.i("KosherVPN", "🚫 BLOQUEADO INTERNET TOTAL POR APP ($logPackage): $queriedDomain")
+            } else if (WebViewBlockManager.isBlocked(this, logPackage)) {
+                val coreDomains = WebViewPolicy.getCoreDomainsFor(logPackage)
+                if (coreDomains != null) {
+                    // Whitelist estricta para apps conocidas (ej. Waze/DiDi)
+                    val isCore = coreDomains.any { queriedDomain == it || queriedDomain.endsWith(".$it") }
+                    isBlocked = !isCore
+                } else {
+                    // Auto-Whitelist dinámica basada en packageName + infraestructura común para cualquier app genérica
+                    val isAllowed = WebViewPolicy.isDomainAllowedForGenericApp(logPackage, queriedDomain)
+                    isBlocked = !isAllowed
+                }
+            } else if (logPackage == "com.mercadopago.wallet") {
+                if (policyManager.isMercadoPagoBlockOffersVpnEnabled()) {
+                    if (WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
+                        isBlocked = true
                     }
                 }
             }
@@ -232,6 +251,14 @@ class KosherVpnService : VpnService() {
             }
             logPackage = "fallback-global"
         }
+
+        // Registrar en el buffer de actividad
+        com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(
+            queriedDomain,
+            logPackage,
+            if (isBlocked) com.ejemplo.locksuite.dns.DnsAction.BLOCKED
+            else com.ejemplo.locksuite.dns.DnsAction.ALLOWED
+        )
 
         android.util.Log.d(
             "KosherVPN",

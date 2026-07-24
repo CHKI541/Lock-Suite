@@ -56,6 +56,8 @@ import com.ejemplo.locksuite.security.SessionManager
 import com.ejemplo.locksuite.util.PrefsHelper
 import com.ejemplo.locksuite.util.LocaleManager
 import com.google.firebase.database.FirebaseDatabase
+import com.ejemplo.locksuite.dns.*
+import com.ejemplo.locksuite.LockSuiteApplication
 
 class DashboardActivity : ComponentActivity() {
 
@@ -383,10 +385,11 @@ fun DashboardScreen(onLogout: () -> Unit) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            TabRow(
+            ScrollableTabRow(
                 selectedTabIndex = selectedTab,
                 containerColor = navyDark,
                 contentColor = accentOrange,
+                edgePadding = 0.dp,
                 indicator = { tabPositions ->
                     TabRowDefaults.SecondaryIndicator(
                         modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
@@ -414,6 +417,11 @@ fun DashboardScreen(onLogout: () -> Unit) {
                     onClick = { selectedTab = 3 },
                     text = { Text(LocaleManager.t("Presets"), color = if (selectedTab == 3) accentOrange else Color.Gray) }
                 )
+                Tab(
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
+                    text = { Text(LocaleManager.t("DNS"), color = if (selectedTab == 4) accentOrange else Color.Gray) }
+                )
             }
 
             when (selectedTab) {
@@ -425,6 +433,7 @@ fun DashboardScreen(onLogout: () -> Unit) {
                     onTriggerUninstallReauth = { showReauthDialogForUninstall = true }
                 )
                 3 -> PresetsTabContent(context)
+                4 -> DnsActivityTabContent(context)
             }
         }
     }
@@ -2413,6 +2422,223 @@ fun ServicesTabContent(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun DnsActivityTabContent(context: Context) {
+    val engine = remember { LockSuiteApplication.domainRuleEngine }
+    val buffer = remember { LockSuiteApplication.dnsActivityBuffer }
+    val ruleManager = remember { LockSuiteApplication.domainRuleManager }
+
+    var windowMinutes by remember { mutableIntStateOf(5) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    // Auto-refresh cada 2 segundos mientras la pantalla está visible
+    LaunchedEffect(windowMinutes) {
+        while (true) {
+            kotlinx.coroutines.delay(2000)
+            refreshKey++
+        }
+    }
+
+    // También refrescar cuando llega un nuevo evento DNS
+    LaunchedEffect(Unit) {
+        buffer.events.collect { refreshKey++ }
+    }
+
+    val activity = remember(refreshKey, windowMinutes, searchQuery) {
+        val snapshot = buffer.snapshot(windowMinutes * 60_000L)
+        val filtered = if (searchQuery.isBlank()) snapshot
+                       else snapshot.filter { it.domain.contains(searchQuery, ignoreCase = true) }
+        filtered.groupBy { it.domain }
+            .map { (domain, hits) ->
+                val sorted = hits.sortedBy { it.timestampMillis }
+                DomainActivitySummary(
+                    domain = domain,
+                    firstSeenMillis = sorted.first().timestampMillis,
+                    lastSeenMillis = sorted.last().timestampMillis,
+                    hitCount = sorted.size,
+                    lastAction = sorted.last().action,
+                    explicitRule = engine.explicitRule(domain),
+                    effectiveRule = engine.effectiveRule(domain)
+                )
+            }
+            .sortedByDescending { it.lastSeenMillis }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Selector de ventana temporal
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(1, 5, 15, 30, 60).forEach { minutes ->
+                FilterChip(
+                    selected = minutes == windowMinutes,
+                    onClick = { windowMinutes = minutes; refreshKey++ },
+                    label = { Text(if (minutes == 60) "1h" else "${minutes}m") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFFFF6D00),
+                        selectedLabelColor = Color.White
+                    )
+                )
+            }
+        }
+
+        // Barra de búsqueda
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            placeholder = { Text("Buscar dominio...") },
+            leadingIcon = { Icon(Icons.Default.Search, "Buscar") },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(0xFFFF6D00),
+                cursorColor = Color(0xFFFF6D00)
+            )
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Contador
+        Text(
+            "${activity.size} dominios en los últimos ${if (windowMinutes == 60) "60 min" else "$windowMinutes min"}",
+            modifier = Modifier.padding(horizontal = 16.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.Gray
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Lista de dominios
+        if (activity.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "Sin actividad DNS en esta ventana de tiempo.\n" +
+                    "Abrí una app y volvé acá para ver sus dominios.",
+                    textAlign = TextAlign.Center,
+                    color = Color.Gray
+                )
+            }
+        } else {
+            LazyColumn {
+                items(activity, key = { it.domain }) { summary ->
+                    DnsActivityRow(
+                        summary = summary,
+                        onBlock = {
+                            ruleManager.setRule(summary.domain, RuleType.BLOCK)
+                            refreshKey++
+                        },
+                        onAllow = {
+                            ruleManager.setRule(summary.domain, RuleType.ALLOW)
+                            refreshKey++
+                        },
+                        onClearRule = {
+                            ruleManager.clearRule(summary.domain)
+                            refreshKey++
+                        }
+                    )
+                    HorizontalDivider(
+                        color = Color.White.copy(alpha = 0.1f),
+                        thickness = 0.5.dp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DnsActivityRow(
+    summary: DomainActivitySummary,
+    onBlock: () -> Unit,
+    onAllow: () -> Unit,
+    onClearRule: () -> Unit
+) {
+    val fmt = remember { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Indicador visual de estado
+        val indicatorColor = when (summary.effectiveRule) {
+            RuleType.BLOCK -> Color(0xFFFF1744) // Rojo
+            RuleType.ALLOW -> Color(0xFF00E676) // Verde
+            else -> Color(0xFFFF6D00) // Naranja (sin regla)
+        }
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(indicatorColor)
+        )
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                summary.domain,
+                fontWeight = FontWeight.Medium,
+                color = Color.White,
+                fontSize = 13.sp,
+                maxLines = 1
+            )
+
+            val rango = if (summary.firstSeenMillis == summary.lastSeenMillis) {
+                fmt.format(java.util.Date(summary.lastSeenMillis))
+            } else {
+                "${fmt.format(java.util.Date(summary.firstSeenMillis))} → ${fmt.format(java.util.Date(summary.lastSeenMillis))}"
+            }
+            Text(
+                "$rango  ·  ${summary.hitCount}x",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
+
+            val (estado, color) = when {
+                summary.effectiveRule == RuleType.BLOCK && summary.explicitRule == null ->
+                    "🔒 Bloqueado (heredado)" to Color(0xFFFF5252)
+                summary.effectiveRule == RuleType.BLOCK ->
+                    "🔒 Bloqueado" to Color(0xFFFF5252)
+                summary.effectiveRule == RuleType.ALLOW ->
+                    "✅ Permitido" to Color(0xFF69F0AE)
+                else ->
+                    "" to Color.Transparent
+            }
+            if (estado.isNotEmpty()) {
+                Text(estado, color = color, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+
+        // Botón de acción contextual
+        when {
+            // Bloqueado por herencia → ofrecer excepción para este subdominio
+            summary.effectiveRule == RuleType.BLOCK && summary.explicitRule == null ->
+                TextButton(onClick = onAllow) {
+                    Text("Permitir", color = Color(0xFF69F0AE), fontSize = 11.sp)
+                }
+            // Bloqueado explícitamente → quitar bloqueo
+            summary.explicitRule == RuleType.BLOCK ->
+                TextButton(onClick = onClearRule) {
+                    Text("Desbloquear", color = Color(0xFF69F0AE), fontSize = 11.sp)
+                }
+            // Permitido explícitamente → quitar excepción
+            summary.explicitRule == RuleType.ALLOW ->
+                TextButton(onClick = onClearRule) {
+                    Text("Quitar", color = Color(0xFFFF5252), fontSize = 11.sp)
+                }
+            // Sin regla → ofrecer bloquear
+            else ->
+                TextButton(onClick = onBlock) {
+                    Text("Bloquear", color = Color(0xFFFF5252), fontSize = 11.sp)
+                }
         }
     }
 }

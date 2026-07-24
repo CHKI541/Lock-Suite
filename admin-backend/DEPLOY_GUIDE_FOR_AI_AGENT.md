@@ -11,6 +11,8 @@ datos del proyecto real para no tener que volver a pedirlos.
 - El archivo `admin-backend/public/firebase-config.js` ya tiene la
   configuración real cargada — no hace falta tocarlo.
 - El archivo `admin-backend/.firebaserc` ya apunta al proyecto correcto.
+- **Credenciales de Firebase sin login interactivo (Service Account)**: Existe un archivo de llave privada JSON en `C:\Users\israe\OneDrive\Documentos\Lock Suite segunda version\admin-backend\locksuite-nueva-firebase-adminsdk-fbsvc-dac7996bff.json`. Para desplegar sin hacer `firebase login` interactivo, define la variable de entorno `$env:GOOGLE_APPLICATION_CREDENTIALS` con la ruta de esta llave.
+- **Script de Automatización Completa**: Hay un script en la raíz del proyecto llamado `deploy_all.ps1`. Al ejecutarlo (por ejemplo, `.\deploy_all.ps1 -VersionName "0.4.8"`), compilará el APK de producción, actualizará la versión en `build.gradle.kts` y `version.json`, copiará los APKs a la carpeta del backend, se autenticará con la cuenta de servicio, desplegará en Firebase y subirá los cambios a GitHub en un solo paso.
 
 ---
 

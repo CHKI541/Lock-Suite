@@ -68,15 +68,30 @@ class BootReceiver : BroadcastReceiver() {
                 } catch (e: Exception) {
                     false
                 }
+                val hasPerAppInternetBlocked = try {
+                    com.ejemplo.locksuite.mdm.PolicyManager(context)
+                        .getPerAppInternetBlockedPackages()
+                        .isNotEmpty()
+                } catch (e: Exception) {
+                    false
+                }
+                val hasMercadoPagoVpnBlock = try {
+                    com.ejemplo.locksuite.mdm.PolicyManager(context)
+                        .isMercadoPagoBlockOffersVpnEnabled()
+                } catch (e: Exception) {
+                    false
+                }
 
-                if (isVpnConfigBlocked || hasAdBlocking || hasGifsBlocked || hasWebViewBlocked) {
+                if (isVpnConfigBlocked || hasAdBlocking || hasGifsBlocked || hasWebViewBlocked ||
+                    hasPerAppInternetBlocked || hasMercadoPagoVpnBlock
+                ) {
                     val vpnIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         context.startForegroundService(vpnIntent)
                     } else {
                         context.startService(vpnIntent)
                     }
-                    android.util.Log.i("BootReceiver", "Re-arrancando KosherVpnService (VpnBlocked=$isVpnConfigBlocked, WebView=$hasWebViewBlocked, AdBlock=$hasAdBlocking, Gifs=$hasGifsBlocked).")
+                    android.util.Log.i("BootReceiver", "Re-arrancando KosherVpnService (VpnBlocked=$isVpnConfigBlocked, WebView=$hasWebViewBlocked, PerApp=$hasPerAppInternetBlocked, MercadoPago=$hasMercadoPagoVpnBlock, AdBlock=$hasAdBlocking, Gifs=$hasGifsBlocked).")
                 }
             } catch (e: Exception) {
                 android.util.Log.e("BootReceiver", "Fallo al intentar iniciar KosherVpnService: ${e.message}")
@@ -84,4 +99,3 @@ class BootReceiver : BroadcastReceiver() {
         }
     }
 }
-

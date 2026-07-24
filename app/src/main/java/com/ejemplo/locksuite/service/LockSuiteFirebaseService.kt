@@ -31,13 +31,14 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         // de un backend autenticado y controlado por Firebase Cloud Functions), procesamos directamente.
         val signature = data["signature"]
         val timestamp = data["timestamp"]
-
-        if (signature != null && timestamp != null) {
-            // Validar la firma criptográfica si viene de la app de control local antigua (evita inyección y replay attacks)
-            if (!verifyFcmSignature(command, timestamp, signature)) {
-                return
-            }
+        if (commandId.isNullOrBlank() || signature.isNullOrBlank() || timestamp.isNullOrBlank() ||
+            !verifyFcmSignature(command, commandId, timestamp, signature) ||
+            isReplay(commandId)
+        ) {
+            android.util.Log.w("LockSuiteFCM", "Comando FCM rechazado: autenticación o replay inválido.")
+            return
         }
+        recordCommand(commandId)
 
         val packagesStr = data["packages"]
         val packagesList = packagesStr?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
@@ -405,7 +406,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         }
     }
 
-    private fun verifyFcmSignature(command: String, timestamp: String, signature: String): Boolean {
+    private fun verifyFcmSignature(command: String, commandId: String, timestamp: String, signature: String): Boolean {
         return try {
             val timeMs = timestamp.toLongOrNull() ?: return false
             // Bloquear si el mensaje tiene más de 5 minutos (evita replay attacks)
@@ -413,12 +414,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 return false
             }
 
-            val secret = com.ejemplo.locksuite.util.Constants.getFcmSecret()
+            val secret = com.ejemplo.locksuite.util.FirebaseDeviceSync.getOrCreateCommandSecret(this)
             val mac = Mac.getInstance("HmacSHA256")
             val secretKey = SecretKeySpec(secret.toByteArray(), "HmacSHA256")
             mac.init(secretKey)
             
-            val message = "$command:$timestamp"
+            val message = "$command:$commandId:$timestamp"
             val expectedBytes = mac.doFinal(message.toByteArray())
             val expectedSig = Base64.encodeToString(expectedBytes, Base64.NO_WRAP)
 
@@ -427,6 +428,22 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
             e.printStackTrace()
             false
         }
+    }
+
+    private fun isReplay(commandId: String): Boolean =
+        com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
+            .getStringSet("processed_command_ids", emptySet())
+            ?.contains(commandId) == true
+
+    private fun recordCommand(commandId: String) {
+        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
+        val processed = (prefs.getStringSet("processed_command_ids", emptySet()) ?: emptySet())
+            .toMutableSet()
+        processed.add(commandId)
+        // Mantener el almacenamiento acotado; UUID no tiene orden temporal, pero
+        // todos los IDs recientes siguen bloqueados hasta que el conjunto rote.
+        while (processed.size > 100) processed.remove(processed.first())
+        prefs.edit().putStringSet("processed_command_ids", processed).apply()
     }
 
     override fun onNewToken(token: String) {

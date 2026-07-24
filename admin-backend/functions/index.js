@@ -158,7 +158,24 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     }
 
     const commandId = crypto.randomUUID();
+    const commandSecret = (await admin.database().ref(`deviceSecrets/${deviceId}/commandSecret`).once("value")).val();
+    const hasCommandSecret = typeof commandSecret === "string" && commandSecret.length >= 32;
+    // Migración controlada: un cliente anterior a 0.5.0 no puede verificar la
+    // firma por dispositivo. Solo se le permite recibir la actualización; no
+    // puede ejecutar ninguna política hasta volver a sincronizar ya actualizado.
+    if (!hasCommandSecret && command !== "UPDATE_LOCKSUITE") {
+      res.status(412).json({ error: "El dispositivo no tiene credencial de comandos. Actualiza y sincroniza LockSuite antes de administrarlo." });
+      return;
+    }
     const payload = { command, commandId };
+    if (hasCommandSecret) {
+      const timestamp = String(Date.now());
+      const signature = crypto
+        .createHmac("sha256", commandSecret)
+        .update(`${command}:${commandId}:${timestamp}`, "utf8")
+        .digest("base64");
+      Object.assign(payload, { timestamp, signature });
+    }
 
     if (command === "CHANGE_PIN") {
       if (!newPin || !/^\d{4,16}$/.test(newPin)) {
@@ -217,4 +234,3 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     res.status(status).json({ error: e.message || "Error interno del servidor." });
   }
 });
-

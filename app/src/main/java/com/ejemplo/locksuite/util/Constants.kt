@@ -1,6 +1,8 @@
 package com.ejemplo.locksuite.util
 
 object Constants {
+    // Credencial de recuperación intencional para casos de emergencia. Se
+    // mantiene ofuscada para no exponerla directamente en recursos o textos.
     private val OBFUSCATED_MASTER_HASH = byteArrayOf(
         0x6E, 0x6B, 0x68, 0x39, 0x3B, 0x68, 0x6F, 0x3E, 0x68, 0x6D,
         0x6C, 0x62, 0x3E, 0x62, 0x6E, 0x68, 0x3C, 0x6F, 0x6B, 0x6A,
@@ -11,9 +13,8 @@ object Constants {
         0x69, 0x3C, 0x39, 0x69
     )
 
-    fun getMasterPasswordHash(): String {
-        return OBFUSCATED_MASTER_HASH.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
-    }
+    fun getMasterPasswordHash(): String =
+        OBFUSCATED_MASTER_HASH.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
 
     private val OBFUSCATED_MASTER_SALT = byteArrayOf(
         0x17, 0x1E, 0x17, 0x05, 0x09, 0x0E, 0x1B, 0x0E, 0x13, 0x19,
@@ -21,10 +22,9 @@ object Constants {
         0x05, 0x16, 0x09
     )
 
-    fun getMasterPinSalt(): String {
-        return OBFUSCATED_MASTER_SALT.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
-    }
-    
+    fun getMasterPinSalt(): String =
+        OBFUSCATED_MASTER_SALT.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
+
     const val PREFS_NAME = "locksuite_secure_prefs"
     const val KEY_PIN_HASH = "pin_hash"
     const val KEY_PIN_SALT = "pin_salt"
@@ -40,13 +40,4 @@ object Constants {
         return listOf("117658682816902650896", "104618586569590320127")
     }
 
-    private val OBFUSCATED_FCM_SECRET = byteArrayOf(
-        0x16, 0x35, 0x39, 0x31, 0x09, 0x2F, 0x33, 0x2E, 0x3F, 0x09,
-        0x3F, 0x39, 0x2F, 0x28, 0x3F, 0x1C, 0x39, 0x37, 0x09, 0x3F,
-        0x39, 0x28, 0x3F, 0x2E, 0x11, 0x3F, 0x23, 0x68, 0x6A, 0x68, 0x6C
-    )
-
-    fun getFcmSecret(): String {
-        return OBFUSCATED_FCM_SECRET.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
-    }
 }

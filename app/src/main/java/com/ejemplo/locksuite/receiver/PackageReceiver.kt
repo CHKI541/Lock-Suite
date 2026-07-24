@@ -86,6 +86,41 @@ class PackageReceiver : BroadcastReceiver() {
                 return
             }
 
+            // Re-suspender de forma inmediata el paquete si fue instalado o actualizado y debe estar suspendido
+            if (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED) {
+                try {
+                    val appController = AppController(context)
+                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                    
+                    // 1. Si es Play Store y debe estar suspendida
+                    if (packageName == "com.android.vending") {
+                        val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
+                        if (shouldSuspendPlayStore) {
+                            appController.suspendApp(packageName, true)
+                        }
+                    }
+                    
+                    // 2. Si es un navegador y los navegadores deben estar suspendidos
+                    if (policyManager.areBrowsersSuspended() && isPackageBrowser(context, packageName)) {
+                        appController.suspendApp(packageName, true)
+                    }
+                    
+                    // 3. Si es Android System WebView y debe estar suspendido
+                    val isWebView = packageName == "com.google.android.webview" || packageName == "com.android.webview"
+                    if (isWebView && policyManager.isSystemWebViewSuspended()) {
+                        appController.suspendApp(packageName, true)
+                    }
+                    
+                    // 4. Si la app estaba suspendida individualmente por el administrador
+                    val isIndividuallySuspended = prefs.getBoolean("suspend_$packageName", false)
+                    if (isIndividuallySuspended) {
+                        appController.suspendApp(packageName, true)
+                    }
+                } catch (e: Exception) {
+                    Log.e("PackageReceiver", "Error al re-suspender paquete tras actualización: $packageName", e)
+                }
+            }
+
             try {
                 Log.i("PackageReceiver", "Sincronizando información de apps tras cambio en los paquetes.")
                 FirebaseDeviceSync.syncDeviceInfo(context)
@@ -93,6 +128,18 @@ class PackageReceiver : BroadcastReceiver() {
                 e.printStackTrace()
             }
         }
+    }
+
+    private fun isPackageBrowser(context: Context, packageName: String): Boolean {
+        val pm = context.packageManager
+        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.google.com"))
+        val list = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            pm.queryIntentActivities(intent, android.content.pm.PackageManager.ResolveInfoFlags.of(android.content.pm.PackageManager.MATCH_ALL.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_ALL)
+        }
+        return list.any { it.activityInfo.packageName == packageName }
     }
 
     private fun cancelUpdateTimeoutAlarm(context: Context) {

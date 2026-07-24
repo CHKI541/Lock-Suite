@@ -64,6 +64,7 @@ object PinManager {
         return result == 0
     }
 
+    /** Verifica la credencial de recuperación local para la purga de emergencia. */
     fun verifyMasterPassword(input: String): Boolean {
         val digest = MessageDigest.getInstance("SHA-256")
         digest.update(Constants.getMasterPinSalt().toByteArray())

@@ -1,517 +1,473 @@
-# 📘 Manual Técnico Exhaustivo y Documentación de Arquitectura LockSuite MDM
+# 📘 Manual Técnico Completo — LockSuite MDM
+
+> **Versión cubierta:** 0.5.0  
+> **Última actualización:** Julio 2026  
+> **Autor:** Documentación técnica oficial del sistema LockSuite / KosherLock
 
 ---
 
 ## 📄 TABLA DE CONTENIDOS
 
-1. [Visión General y Filosofía de Diseño del Sistema](#1-visión-general-y-filosofía-de-diseño-del-sistema)
-2. [Arquitectura de Software de la Aplicación Android Nativa](#2-arquitectura-de-software-de-la-aplicación-android-nativa)
-   - 2.1. Controlador de Políticas MDM (`PolicyManager.kt`)
-   - 2.2. Motor de Filtrado DNS de Red sin Consumo de Batería (`KosherVpnService.kt`)
-   - 2.3. Servicio de Inspección Visual DOM (`LockSuiteAccessibilityService.kt`)
-   - 2.4. Gestor de Paquetes y Visibilidad de Apps (`AppController.kt`)
-   - 2.5. Receptor de Comandos Remotos Firebase (`LockSuiteFirebaseService.kt`)
-   - 2.6. Monitores de Sistema e Instalación (`PackageReceiver.kt`, `PackageInstallStatusReceiver.kt`)
-   - 2.7. Arranque Resiliente en Reinicios (`BootReceiver.kt`)
-   - 2.8. Sistema de Actualización Transparente (`SelfUpdater.kt`)
-3. [Detalle Minucioso de las Funciones de Bloqueo y Control](#3-detalle-minucioso-de-las-funciones-de-bloqueo-y-control)
-   - 3.1. Restricciones Nativas del Sistema Operativo (DPM - 25 Restricciones Documentadas)
-   - 3.2. Módulo Kosher VPN & Filtrado DNS de Cero Consumo de Batería
-   - 3.3. Bloqueo Total de Internet por Aplicación (Per-App Internet Blocking)
-   - 3.4. Bloqueo Dual de Mercado Pago (Accesibilidad vs VPN DNS)
-   - 3.5. Ocultar Aplicaciones al Suspender ("Ocultar al suspender")
-   - 3.6. Sistema de Presets (.locksuite) con Firma Criptográfica HMAC SHA-256
-   - 3.7. Capa de Protección Visual de Imágenes (Silhouette & AI Content Gate)
-   - 3.8. Modo Stealth y Lanzador Oculto
-   - 3.9. Tienda de Apps Administrada y Gestión de APKs
-4. [Arquitectura y Guía Completa del Panel de Administración Web](#4-arquitectura-y-guía-completa-del-panel-de-administración-web)
-   - 4.1. Diseño Estético y Sistema de Interfaz Web
-   - 4.2. Flujo de Comunicación Bidireccional en Tiempo Real (FCM + Realtime Database)
-   - 4.3. Manual de Operación Pantalla por Pantalla del Panel Web
-5. [Guía de Instalación, Aprovisionamiento y Despliegue MDM](#5-guía-de-instalación-aprovisionamiento-y-despliegue-mdm)
-   - 5.1. Requisitos de Hardware y Sistema Operativo
-   - 5.2. Métodos de Aprovisionamiento Device Owner (ADB y Código QR Zero-Touch)
-   - 5.3. Despliegue de Backend en Google Cloud / Firebase Functions
-6. [Matriz de Diagnóstico y Resolución de Problemas (Troubleshooting)](#6-matriz-de-diagnóstico-y-resolución-de-problemas-troubleshooting)
+1. [Visión General y Filosofía de Diseño](#1-visión-general-y-filosofía-de-diseño)
+2. [Arquitectura de Software](#2-arquitectura-de-software)
+   - 2.1. PolicyManager.kt — Motor Central de Políticas MDM
+   - 2.2. AppController.kt — Gestor de Aplicaciones
+   - 2.3. KosherVpnService.kt — Motor de Filtrado DNS
+   - 2.4. LockSuiteAccessibilityService.kt — Inspección Visual
+   - 2.5. LockSuiteFirebaseService.kt — Receptor de Comandos Remotos
+   - 2.6. FirebaseDeviceSync.kt — Sincronización de Estado al Panel Web
+   - 2.7. BootReceiver.kt — Arranque Resiliente
+   - 2.8. SelfUpdater.kt — Actualizaciones OTA Silenciosas
+   - 2.9. WebViewBlockManager.kt — Bloqueo de WebViews por App
+   - 2.10. ImageBlockManager.kt — Filtrado Visual de Imágenes
+   - 2.11. DomainRuleManager.kt — Reglas DNS Personalizadas
+3. [Restricciones Nativas del Sistema Operativo (DPM)](#3-restricciones-nativas-del-sistema-operativo-dpm)
+4. [Bloqueos de Hardware](#4-bloqueos-de-hardware)
+5. [Módulo Kosher VPN y Filtrado DNS](#5-módulo-kosher-vpn-y-filtrado-dns)
+   - 5.1. Arquitectura de la VPN Local
+   - 5.2. Bloqueo Total de Internet por Aplicación (Per-App Internet Blocking)
+   - 5.3. Bloqueo Global de Anuncios (Ad Blocking)
+   - 5.4. Bloqueo de GIFs (Tenor / Giphy)
+   - 5.5. Bloqueo de DNS Privado
+   - 5.6. Always-On VPN con Lockdown
+   - 5.7. Bloqueo de WebView por Aplicación (WebView Policy)
+   - 5.8. Reglas DNS Personalizadas (Custom DNS Rules)
+6. [Control de Aplicaciones](#6-control-de-aplicaciones)
+   - 6.1. Suspensión de Aplicaciones
+   - 6.2. Ocultamiento de Aplicaciones (Hide)
+   - 6.3. Ocultar al Suspender (Hide on Suspend)
+   - 6.4. Bloqueo Masivo de Navegadores Web
+   - 6.5. Suspensión de Android System WebView
+   - 6.6. Desinstalación Silenciosa
+   - 6.7. Tienda de Apps Administrada
+7. [Protecciones de Contenido Específicas por App](#7-protecciones-de-contenido-específicas-por-app)
+   - 7.1. Bloqueo de Estado de WhatsApp
+   - 7.2. Bloqueo de Canales de WhatsApp
+   - 7.3. Bloqueo Dual de Ofertas Mercado Pago
+   - 7.4. Filtrado Visual de Imágenes por App (Silueta / AI Gate)
+   - 7.5. Filtrado de Imágenes en Google Maps
+8. [Sistema FRP — Factory Reset Protection](#8-sistema-frp--factory-reset-protection)
+   - 8.1. ¿Qué es el FRP y para qué sirve en LockSuite?
+   - 8.2. Método Oficial (Android 11+)
+   - 8.3. Método Legacy (Android 8–10)
+   - 8.4. FRP Hardening — Endurecimiento Adicional
+   - 8.5. Cuentas Autorizadas FRP por Defecto
+   - 8.6. Relación entre FRP y la restricción DISALLOW_MODIFY_ACCOUNTS
+9. [Sistema de Presets y Respaldo HMAC](#9-sistema-de-presets-y-respaldo-hmac)
+   - 9.1. ¿Qué es un Preset?
+   - 9.2. Estructura Interna del Archivo .locksuite
+   - 9.3. Firma Criptográfica HMAC-SHA256
+   - 9.4. Importar y Exportar Presets
+   - 9.5. Presets Guardados Localmente
+10. [Modo Stealth y Lanzador Oculto](#10-modo-stealth-y-lanzador-oculto)
+11. [Persistencia y Restauración de Políticas al Reiniciar](#11-persistencia-y-restauración-de-políticas-al-reiniciar)
+12. [Panel Web de Administración](#12-panel-web-de-administración)
+    - 12.1. Arquitectura del Panel Web
+    - 12.2. Flujo de Comunicación FCM Bidireccional
+    - 12.3. Sincronización de Estado del Dispositivo (FirebaseDeviceSync)
+    - 12.4. Pantallas y Pestañas del Panel Web
+13. [Sistema de Actualización OTA](#13-sistema-de-actualización-ota)
+14. [Instalación y Aprovisionamiento MDM](#14-instalación-y-aprovisionamiento-mdm)
+    - 14.1. Requisitos Previos
+    - 14.2. Aprovisionamiento por ADB
+    - 14.3. Aprovisionamiento por QR (Zero-Touch)
+15. [Matriz de Diagnóstico y Troubleshooting](#15-matriz-de-diagnóstico-y-troubleshooting)
 
 ---
 
-## 1. VISIÓN GENERAL Y FILOSOFÍA DE DISEÑO DEL SISTEMA
+## 1. VISIÓN GENERAL Y FILOSOFÍA DE DISEÑO
 
-**LockSuite MDM** es un sistema integral de **Gestión de Dispositivos Móviles (Mobile Device Management - MDM)** y filtro de protección personalizado diseñado para dispositivos con sistema operativo Android. Su propósito fundamental es ofrecer un control absoluto, inalterable y administrado remotamente sobre la seguridad, conectividad y disponibilidad de aplicaciones en el teléfono del usuario final.
+**LockSuite MDM** (también conocido como **KosherLock**) es un sistema integral de **Gestión de Dispositivos Móviles (MDM — Mobile Device Management)** diseñado para Android, con un enfoque en la protección de contenido y la administración centralizada de dispositivos bajo principios de privacidad y filtrado de contenido.
 
-### 1.1. El Paradigma de Propietario de Dispositivo (Device Owner)
+### 1.1. ¿Qué problema resuelve LockSuite?
 
-A diferencia de las aplicaciones convencionales de control parental que utilizan permisos comunes de accesibilidad o administradores de dispositivos antiguos (susceptibles de ser desinstalados o anulados por el usuario), LockSuite se aprovisiona a nivel de **Device Owner** (Propietario del Dispositivo), el nivel de privilegio más alto otorgado por la API de Android (`android.app.admin.DevicePolicyManager`).
+Las soluciones de control parental convencionales (como Google Family Link o aplicaciones de terceros) son fácilmente eludibles por un usuario técnico: pueden desinstalarse, sus permisos pueden revocarse, y en el peor caso, un simple formateo de fábrica elimina toda restricción. **LockSuite fue diseñado para que esto sea imposible.**
 
-Bajo este paradigma:
-- La aplicación LockSuite forma parte indisociable de la capa de gestión del sistema operativo.
-- El usuario final no puede desinstalar LockSuite, deshabilitar sus permisos ni detener sus procesos en segundo plano.
-- Las opciones de depuración USB (ADB), formateo de fábrica (Recovery/Hardware Reset) y arranque en Modo Seguro quedan neutralizadas a nivel de firmware.
+LockSuite se instala en el nivel de mayor privilegio que Android concede a una aplicación: el nivel **Device Owner** (Propietario del Dispositivo). Bajo este nivel:
 
-### 1.2. Filtrado Comunitario Kosher y Protección Multicapa
+- El usuario final **no puede desinstalar LockSuite** bajo ninguna circunstancia.
+- **No puede revocar sus permisos** desde los Ajustes.
+- **No puede eludir las restricciones** reiniciando en Modo Seguro.
+- **No puede formatear el teléfono** sin que LockSuite lo permita.
+- Las restricciones **sobreviven a reinicios** y se reaplican automáticamente.
 
-LockSuite combina tres capas de defensa independientes pero sincronizadas en tiempo real:
-1. **Capa Nativa del Sistema Operativo**: Restricciones físicas y de software ejecutadas por la API del Device Policy Manager (DPM).
-2. **Capa de Red DNS (Kosher VPN)**: Un motor tunelizado local que intercepta solicitudes de resolución de nombres de dominio (DNS) en tiempo real con latencia nula y sin retransmitir tráfico a servidores externos.
-3. **Capa de Inspección Visual (Accessibility Engine)**: Un analizador de interfaz gráfica de usuario que monitorea los elementos renderizados en pantalla (`AccessibilityNodeInfo`) para bloquear secciones específicas dentro de apps cerradas de terceros (como Mercado Pago o WhatsApp).
+### 1.2. Las Tres Capas de Protección
 
----
-
-## 2. ARQUITECTURA DE SOFTWARE DE LA APLICACIÓN ANDROID NATIVA
-
-El proyecto nativo Android de LockSuite se organiza bajo una arquitectura limpia y orientada a servicios resilientes, ubicada en el paquete base `com.ejemplo.locksuite`.
+LockSuite opera mediante tres capas de defensa independientes que trabajan en simultáneo:
 
 ```
-                        ┌─────────────────────────────────────────┐
-                        │      Panel Web de Administración        │
-                        │    (Firebase Hosting & Cloud Run)       │
-                        └────────────────────┬────────────────────┘
-                                             │ (Comandos FCM Cifrados)
-                                             ▼
-                        ┌─────────────────────────────────────────┐
-                        │       LockSuiteFirebaseService          │
-                        │  (Receptor de Comandos & Emisor ACK)    │
-                        └────────────────────┬────────────────────┘
-                                             │
-      ┌──────────────────────────────────────┼──────────────────────────────────────┐
-      │                                      │                                      │
-      ▼                                      ▼                                      ▼
-┌───────────┐                          ┌───────────┐                          ┌───────────┐
-│ Policy    │                          │ Kosher    │                          │ LockSuite │
-│ Manager   │                          │ Vpn       │                          │ Access    │
-│           │                          │ Service   │                          │ ibility   │
-└─────┬─────┘                          └─────┬─────┘                          └─────┬─────┘
-      │ (DPM Restriction APIs)               │ (Local TUN DNS Filter)               │ (DOM Node Inspector)
-      ▼                                      ▼                                      ▼
-┌───────────┐                          ┌───────────┐                          ┌───────────┐
-│ Sistema   │                          │ Capa UDP  │                          │ Interfaz  │
-│ Android   │                          │ Red Socket│                          │ Gráfica UI│
-└───────────┘                          └───────────┘                          └───────────┘
+CAPA 1 — SISTEMA OPERATIVO (DevicePolicyManager)
+  └── Restricciones nativas de Android: bloqueo de fábrica, ADB,
+      instalación de apps, Bluetooth, Wi-Fi, cámara, etc.
+
+CAPA 2 — RED (KosherVpnService)
+  └── VPN local 100% en el dispositivo. Intercepta solicitudes DNS
+      y bloquea dominios, IPs de apps específicas, anuncios, GIFs,
+      ofertas de Mercado Pago, etc. Cero latencia, sin batería extra.
+
+CAPA 3 — VISUAL (LockSuiteAccessibilityService)
+  └── Monitorea la interfaz gráfica en tiempo real. Si el usuario
+      navega a una sección prohibida (ej. "Ofertas" en Mercado Pago),
+      ejecuta un rebote instantáneo antes de que el usuario la vea.
 ```
 
-### 2.1. Controlador de Políticas MDM (`PolicyManager.kt`)
+Gracias a esta triple capa, eludir LockSuite requeriría sortear simultáneamente tres sistemas completamente diferentes e independientes, lo que resulta prácticamente imposible para un usuario no técnico.
 
-Ubicación: `com.ejemplo.locksuite.mdm.PolicyManager`
+### 1.3. Público Objetivo
 
-**PolicyManager** es el singleton central que encapsula todas las llamadas a la API `android.app.admin.DevicePolicyManager` y `android.os.UserManager`. Sus responsabilidades principales incluyen:
-
-1. **Gestión de Restricciones del Usuario**: Aplicar o remover llaves de restricción nativas mediante `dpm.addUserRestriction()` y `dpm.clearUserRestriction()`.
-2. **Control de Visibilidad y Suspensión**: Coordinar con `AppController` la ocultación y suspensión de aplicaciones.
-3. **Gestión de Persistencia Local**: Guardar las políticas activas en almacenamiento encriptado `SharedPreferences` para garantizar su restaurabilidad inmediata tras un reinicio del sistema.
-4. **Firma y Verificación Criptográfica de Presets**: Importar y exportar archivos `.locksuite` validando su firma criptográfica **HMAC SHA-256** mediante el secreto maestro `LockSuiteMDM_Preset_HMAC_SecretKey_2026`.
-
-### 2.2. Motor de Filtrado DNS de Red sin Consumo de Batería (`KosherVpnService.kt`)
-
-Ubicación: `com.ejemplo.locksuite.service.KosherVpnService`
-
-`KosherVpnService` extiende la clase nativa `android.net.VpnService`. A diferencia de soluciones de VPN comerciales que reencaminan el tráfico de Internet hacia servidores remotos (lo que produce consumo masivo de batería, sobrecalentamiento y latencia), la VPN de LockSuite es **100% local**:
-
-- **Construcción de la Interfaz TUN**:
-  Establece una interfaz virtual local asignando la dirección IP `10.1.10.1` y configurando las rutas para capturar únicamente el tráfico dirigido a servidores DNS (puerto UDP/TCP 53).
-- **Inspección Cero-Carga**:
-  El servicio ignora los paquetes de datos pesados (descargas HTTPS, streaming de video, llamadas VoIP) y deja que fluyan directamente por el hardware de red nativo del dispositivo. Solo examina paquetes de consulta de nombres de dominio de unos pocos bytes.
-- **Respuesta Instantánea `0.0.0.0`**:
-  Al detectar una solicitud de resolución DNS para un dominio bloqueado o para una app configurada con **Bloqueo Total de Internet**, el motor responde de inmediato con una respuesta DNS simulada conteniendo la IP de bucle nulo `0.0.0.0`. El sistema operativo del teléfono interpreta la respuesta en menos de 1 milisegundo y cancela la conexión sin intentar reintentos innecesarios.
-
-### 2.3. Servicio de Inspección Visual DOM (`LockSuiteAccessibilityService.kt`)
-
-Ubicación: `com.ejemplo.locksuite.service.LockSuiteAccessibilityService`
-
-Este servicio de accesibilidad monitorea constantemente los eventos de la interfaz de usuario (`AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED`, `TYPE_WINDOW_CONTENT_CHANGED`).
-
-- **Detección de Pantallas Específicas**:
-  Inspecciona el nombre de paquete de la aplicación visible en primer plano (`event.packageName`).
-- **Navegación y Análisis del Árbol de Nodos**:
-  Recorre recursivamente los elementos visuales (`AccessibilityNodeInfo`) buscando coincidencias de texto, identificadores de vista o descripciones de contenido.
-- **Acción Inmediata de Rebote**:
-  Si el servicio detecta la apertura de una sección restringida (por ejemplo, la pestaña de Ofertas en Mercado Pago), ejecuta instantáneamente la acción global `performGlobalAction(GLOBAL_ACTION_BACK)`, forzando a la app a rebotar hacia la pantalla previa antes de que el usuario interactúe con el contenido no deseado.
-
-### 2.4. Gestor de Paquetes y Visibilidad de Apps (`AppController.kt`)
-
-Ubicación: `com.ejemplo.locksuite.mdm.AppController`
-
-`AppController` es la clase encargada de traducir los comandos de bloqueo individual de aplicaciones a las APIs nativas de Android:
-
-- **Suspensión de Paquetes (`dpm.setPackagesSuspended`)**:
-  Marca la aplicación como suspendida por el administrador. El icono en la pantalla de inicio se vuelve gris y se muestra un diálogo del sistema impidiendo su apertura.
-- **Ocultamiento de Paquetes (`dpm.setApplicationHidden`)**:
-  Desactiva la visibilidad del paquete en todo el sistema operativo. La aplicación desaparece por completo del cajón de aplicaciones, del menú de ajustes y de la pantalla principal.
-- **Combinación "Ocultar al suspender"**:
-  Cuando esta política está activa en `PolicyManager`, al enviar la orden de suspender una app, `AppController` invoca adicionalmente `setApplicationHidden(true)` para que el icono desaparezca completamente en lugar de quedar visible en gris.
-
-### 2.5. Receptor de Comandos Remotos Firebase (`LockSuiteFirebaseService.kt`)
-
-Ubicación: `com.ejemplo.locksuite.service.LockSuiteFirebaseService`
-
-Hereda de `FirebaseMessagingService` y actúa como la antena receptora de la consola web:
-
-1. **Recepción de Payloads FCM**: Recibe notificaciones push silenciosas de alta prioridad que contienen un objeto JSON de comando (por ejemplo: `{ "command": "SET_FACTORY_RESET_BLOCKED", "value": true, "commandId": "cmd_98234" }`).
-2. **Despacho Interno**: Enruta el comando al componente correspondiente (`PolicyManager`, `KosherVpnService` o `AppController`).
-3. **Emisión de Acknowledge (ACK)**: Tras aplicar la política exitosamente, escribe inmediatamente una confirmación en el nodo `commandAcks/{deviceId}/{commandId}` de Firebase Realtime Database para que la interfaz del panel web actualice el estado a "Aplicado" con un indicador verde.
-
-### 2.6. Monitores de Sistema e Instalación (`PackageReceiver.kt`, `PackageInstallStatusReceiver.kt`)
-
-Ubicación: `com.ejemplo.locksuite.receiver.*`
-
-- `PackageReceiver.kt`: Escucha los eventos globales del sistema `ACTION_PACKAGE_ADDED`, `ACTION_PACKAGE_REPLACED` y `ACTION_PACKAGE_REMOVED`. Si un usuario intenta instalar una aplicación sin autorización, el receptor detecta la nueva instalación en tiempo real y la bloquea o suspende de inmediato si la política de instalación restringida está activa.
-- `PackageInstallStatusReceiver.kt`: Recibe los callbacks del instalador del sistema durante la descarga y actualización de aplicaciones desde la tienda administrada de LockSuite.
-
-### 2.7. Arranque Resiliente en Reinicios (`BootReceiver.kt`)
-
-Ubicación: `com.ejemplo.locksuite.receiver.BootReceiver`
-
-Escucha las intenciones de inicio del dispositivo (`ACTION_BOOT_COMPLETED`, `ACTION_LOCKED_BOOT_COMPLETED`). Tan pronto como el hardware enciende:
-1. Re-inicializa inmediatamente todas las restricciones nativas en `PolicyManager`.
-2. Inicia el servicio `KosherVpnService` en primer plano.
-3. Asegura que el estado de las aplicaciones bloqueadas permanezca inalterado antes de que el usuario ingrese su PIN de desbloqueo.
-
-### 2.8. Sistema de Actualización Transparente (`SelfUpdater.kt`)
-
-Ubicación: `com.ejemplo.locksuite.util.SelfUpdater`
-
-Permite la actualización remota y silenciosa de la aplicación LockSuite o de apps asociadas:
-- Descarga el paquete `.apk` de actualización desde una URL HTTPS segura.
-- Inicia el proceso de instalación mediante la API `PackageInstaller` del Device Owner sin requerir confirmación ni intervención táctil por parte del usuario.
+LockSuite fue diseñado para administradores comunitarios (mashgichim, rabinos, coordinadores de instituciones) que necesitan distribuir teléfonos con restricciones de contenido definitivas a usuarios que no deben poder modificar esas restricciones. También puede usarse en contextos empresariales como MDM corporativo.
 
 ---
 
-## 3. DETALLE MINUCIOSO DE LAS FUNCIONES DE BLOQUEO Y CONTROL
+## 2. ARQUITECTURA DE SOFTWARE
 
-### 3.1. Restricciones Nativas del Sistema Operativo (DPM - 25 Restricciones Documentadas)
-
-La siguiente tabla describe en detalle cada una de las 25 restricciones nativas administradas por `PolicyManager.kt` mediante la API `DevicePolicyManager`:
-
-| Restricción | Clave de Restricción Nativa Android | Comportamiento Técnico y Efecto Visual en el Celular |
-| :--- | :--- | :--- |
-| **Bloqueo de Formateo de Fábrica** | `DISALLOW_FACTORY_RESET` | Deshabilita y oculta la opción "Restablecer datos de fábrica" en los ajustes. Neutraliza el formateo por combinación de botones físicos (Menú Recovery). |
-| **Bloqueo de Instalación de Apps** | `DISALLOW_INSTALL_APPS` | Bloquea el servicio instalador de paquetes de Android (`PackageInstaller`). Al intentar abrir un APK, se muestra el mensaje "Acción no permitida por su administrador". |
-| **Bloqueo de Fuentes Desconocidas** | `DISALLOW_INSTALL_UNKNOWN_SOURCES` | Impide activar la casilla de instalación de APKs desde administradores de archivos o navegadores web. |
-| **Bloqueo de Desinstalación** | `DISALLOW_UNINSTALL_APPS` | Desactiva la opción "Desinstalar" en todas las aplicaciones del dispositivo. El botón aparece en gris inhabilitado. |
-| **Bloqueo de Depuración USB / ADB** | `DISALLOW_DEBUGGING_FEATURES` | Inhabilita las Opciones de Desarrollador y el puente ADB. Si se conecta el teléfono a una computadora, los comandos ADB son rechazados. |
-| **Bloqueo de Modo Seguro** | `DISALLOW_SAFE_BOOT` | Evita que el usuario inicie el celular presionando los botones de volumen para entrar en "Modo Seguro", donde se cargan solo apps de fábrica. |
-| **Bloqueo de Cambio de Usuario** | `DISALLOW_USER_SWITCH` | Deshabilita el menú de cambio de usuario en la barra de notificaciones y ajustes, evitando crear perfiles secundarios o de invitado. |
-| **Bloqueo de Agregar Usuarios** | `DISALLOW_ADD_USER` | Prohíbe la creación de nuevos usuarios o perfiles de trabajo en el almacenamiento del sistema. |
-| **Bloqueo de Modificación de Cuentas** | `DISALLOW_MODIFY_ACCOUNTS` | Inhabilita la opción de añadir, sincronizar o remover cuentas de Google, correo electrónico o redes sociales desde Ajustes. |
-| **Bloqueo de Configuración de Bluetooth** | `DISALLOW_CONFIG_BLUETOOTH` | Oculta los ajustes de emparejamiento Bluetooth, evitando vincular nuevos dispositivos o transferir archivos por este medio. |
-| **Bloqueo de Compartir Bluetooth** | `DISALLOW_BLUETOOTH_SHARING` | Deshabilita la pila del protocolo OPP (Object Push Profile) de Bluetooth para envío de documentos o fotos. |
-| **Bloqueo Total de Bluetooth** | `DISALLOW_BLUETOOTH` | Apaga el chip físico de Bluetooth y bloquea su encendido desde el panel de control o ajustes rápidos. |
-| **Bloqueo de Zona Wi-Fi / Compartir Datos**| `DISALLOW_CONFIG_TETHERING` | Inhabilita la opción "Zona Wi-Fi portátil", tethering USB y compartición de Internet por Bluetooth. |
-| **Bloqueo de Configuración Wi-Fi** | `DISALLOW_CONFIG_WIFI` | Impide agregar, modificar o eliminar redes Wi-Fi guardadas en el dispositivo. |
-| **Bloqueo de Redes Móviles** | `DISALLOW_CONFIG_CELLULAR_NETWORKS` | Oculta el menú de selección de APN, itinerancia de datos y preferencia de red móvil (4G/5G). |
-| **Bloqueo de Montaje de Medios OTG / SD** | `DISALLOW_MOUNT_PHYSICAL_MEDIA` | Bloquea la lectura y escritura en memorias pendrive USB conectadas por adaptador OTG o tarjetas MicroSD externas. |
-| **Bloqueo de Transferencia USB** | `DISALLOW_USB_FILE_TRANSFER` | Inhabilita los protocolos MTP (Media Transfer Protocol) y PTP al conectar el teléfono a una PC; el puerto solo permite carga eléctrica. |
-| **Bloqueo de Fondo de Pantalla** | `DISALLOW_SET_WALLPAPER` | Inhabilita el cambio de fondo de pantalla desde la galería, ajustes o aplicaciones de terceros. |
-| **Bloqueo de Certificados de Confianza** | `DISALLOW_CONFIG_CREDENTIALS` | Impide instalar certificados CA de usuario o alterar el almacén de credenciales del sistema. |
-| **Bloqueo de Llamadas Salientes** | `DISALLOW_OUTGOING_CALLS` | Deshabilita la realización de llamadas telefónicas comunes (excepto números de emergencia). |
-| **Bloqueo de Envíos SMS** | `DISALLOW_SMS` | Deshabilita el envío de mensajes de texto SMS a través de la red celular. |
-| **Bloqueo de Diálogos de Error del Sistema**| `DISALLOW_SYSTEM_ERROR_DIALOGS` | Suprime las ventanas emergentes de error "La aplicación se ha detenido" para evitar que el usuario acceda al menú de información de la app. |
-| **Bloqueo de Ajustes de Fecha y Hora** | `DISALLOW_CONFIG_DATE_TIME` | Prohíbe modificar manualmente la fecha y hora del sistema, evitando saltarse restricciones temporales. |
-| **Bloqueo de Ajustes de Ubicación** | `DISALLOW_SHARE_LOCATION` | Inhabilita apagar el sensor GPS o modificar la precisión de los servicios de localización. |
-| **Bloqueo de Ajustes de Pantalla / Sleep** | `DISALLOW_CONFIG_SCREEN_TIMEOUT` | Impide alterar el tiempo de espera de apagado automático de la pantalla. |
-
----
-
-### 3.2. Módulo Kosher VPN & Filtrado DNS de Cero Consumo de Batería
-
-#### Diagrama de Flujo del Paquete UDP DNS
+El proyecto Android se organiza bajo el paquete base `com.ejemplo.locksuite`. A continuación se describen en detalle todos los componentes de software del sistema.
 
 ```
-[ Solicitud DNS de App ] ──► (UDP Port 53) ──► [ Interfaz Virtual TUN ]
-                                                        │
-                                                        ▼
-                                           [ KosherVpnService ]
-                                                        │
-                                   ┌────────────────────┴────────────────────┐
-                                   │ ¿Dominio Bloqueado o App en Per-App Net? │
-                                   └────────────────────┬────────────────────┘
-                                                        │
-                                       ┌────────────────┴────────────────┐
-                                       │                                 │
-                                   (SI) ▼                                ▼ (NO)
-                        ┌──────────────────────┐              ┌──────────────────────┐
-                        │ Retornar 0.0.0.0     │              │ Dejar Fluir por      │
-                        │ Respuesta Local <1ms │              │ Hardware Nativo Red  │
-                        └──────────────────────┘              └──────────────────────┘
+                ┌─────────────────────────────────────┐
+                │    Panel Web de Administración       │
+                │  (Firebase Hosting + Cloud Run)      │
+                └─────────────┬───────────────────────┘
+                              │ Comandos FCM cifrados
+                              ▼
+                ┌─────────────────────────────────────┐
+                │     LockSuiteFirebaseService         │
+                │  (Receptor FCM + Emisor de ACK)      │
+                └──────┬──────────┬───────────┬────────┘
+                       │          │           │
+              ┌────────┘   ┌──────┘    ┌──────┘
+              ▼            ▼           ▼
+        PolicyManager  AppController  KosherVpnService
+        (Restricciones  (Apps:        (Filtrado DNS
+         DPM/UserMgr)   suspend,       por red)
+                        hide, etc.)
+              │
+              ▼
+        FirebaseDeviceSync
+        (Sincroniza estado
+         al panel web)
 ```
 
-- **Captura Eficiente de Encabezados**:
-  El motor de la VPN utiliza un buffer nativo de lectura de sockets UDP. Solamente decodifica los primeros bytes de la cabecera DNS (RFC 1035) para extraer el campo *QNAME* (el nombre de dominio consultado).
-- **Lista de Dominios en Memoria RAM**:
-  Los dominios restringidos (sitios de contenido explícito, redes de anuncios, servidores de juegos, redes sociales) se almacenan en un conjunto encriptado `HashSet<String>` en memoria RAM. La comprobación se realiza en complejidad `O(1)`, garantizando que el filtrado no ralentice la navegación en lo absoluto.
+### 2.1. `PolicyManager.kt` — Motor Central de Políticas MDM
 
----
+**Ruta:** `com.ejemplo.locksuite.mdm.PolicyManager`
 
-### 3.3. Bloqueo Total de Internet por Aplicación (Per-App Internet Blocking)
+`PolicyManager` es el **singleton central** que encapsula y centraliza absolutamente todas las llamadas a la API `DevicePolicyManager` (DPM) y `UserManager` de Android. Es el componente más importante del sistema.
 
-El bloqueo selectivo de Internet permite privar de acceso a la red a una app específica sin afectar la conectividad del resto del celular.
+Sus responsabilidades son:
 
-1. **Resolución de UID Linux**:
-   Cada aplicación en Android se ejecuta bajo un identificador de usuario de Linux único asignado durante la instalación (`Linux UID`). `PolicyManager` obtiene este identificador mediante `context.packageManager.getPackageUid(packageName, 0)`.
-2. **Inspección de Socket en VPN**:
-   Cuando `KosherVpnService` intercepta una consulta DNS, consulta el UID del socket emisor a través de la API del sistema `VpnService`.
-3. **Aislamiento Instantáneo**:
-   Si el UID coincide con una app en la lista de `per_app_internet_blocked`, la VPN devuelve inmediatamente `0.0.0.0` para todas sus solicitudes DNS. La aplicación bloqueada mostrará una pantalla de "Sin conexión a Internet" o quedará intentando conectar indefinidamente, mientras que otras apps como WhatsApp o el navegador funcionarán a máxima velocidad.
+1. **Aplicar y remover restricciones nativas del SO** mediante `dpm.addUserRestriction()` y `dpm.clearUserRestriction()`.
+2. **Deshabilitar hardware del dispositivo** (cámara, barra de estado, capturas de pantalla, llave de bloqueo).
+3. **Gestionar el bloqueo total de Internet** mediante un proxy local.
+4. **Gestionar bloqueos de contenido** (VPN, bloqueo de WebViews, Mercado Pago, WhatsApp, GIFs, anuncios).
+5. **Controlar suspensión y ocultamiento de navegadores** y del motor WebView.
+6. **Implementar el sistema FRP** (Factory Reset Protection) con doble fallback.
+7. **Exportar e importar Presets** firmados con HMAC-SHA256.
+8. **Persistir el estado** de todas las políticas en `SharedPreferences` encriptado para garantizar su restauración tras un reinicio.
+9. **Replicar el estado** completo del dispositivo llamando a `FirebaseDeviceSync.syncDeviceInfo()` tras cada cambio.
 
----
+#### Método `setRestriction(restriction, enable)` — El corazón del sistema
 
-### 3.4. Bloqueo Dual de Mercado Pago (Accesibilidad vs VPN DNS)
-
-LockSuite ofrece dos aproximaciones complementarias para neutralizar las secciones de ofertas, descuentos y tentaciones comerciales en Mercado Pago:
-
-```
-                                  [ Mercado Pago App ]
-                                           │
-                    ┌──────────────────────┴──────────────────────┐
-                    │                                             │
-                    ▼                                             ▼
-        [ Método A: Accesibilidad ]                   [ Método B: Kosher VPN ]
-                    │                                             │
-        Inspecciona el árbol DOM                      Intercepta la petición DNS
-        en busca de "Ofertas"                         a api.mercadopago.com/promotions
-                    │                                             │
-                    ▼                                             ▼
-        Ejecuta GLOBAL_ACTION_BACK                    Responde IP 0.0.0.0
-        Rebote instantáneo de pantalla                Carga limpia sin contenido
-```
-
-#### Cuadro Comparativo de Ambos Métodos:
-
-| Criterio | Método A: Servicio de Accesibilidad | Método B: Filtro VPN DNS |
-| :--- | :--- | :--- |
-| **Mecanismo** | Inspección visual de nodos `AccessibilityNodeInfo`. | Interceptación de solicitudes DNS en capa de red. |
-| **Comportamiento Visual** | Al tocar la pestaña "Ofertas", la pantalla rebota hacia atrás inmediatamente. | La pestaña abre, pero se muestra vacía con un aviso de error de carga. |
-| **Requisito de Permisos** | Requiere activar el permiso de Accesibilidad en el teléfono. | Requiere activar el perfil de VPN local en el teléfono. |
-| **Efectividad ante Cambios** | Inmune a cambios de servidor; detecta el texto visible en español. | Inmune a actualizaciones de la app; bloquea la API de promociones. |
-
----
-
-### 3.5. Ocultar Aplicaciones al Suspender ("Ocultar al suspender")
-
-Cuando se requiere inhabilitar una aplicación, el administrador puede elegir entre dos comportamientos:
-
-1. **Modo Estándar (Solo Suspender)**:
-   - Invoca `dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)`.
-   - **Resultado**: El icono permanece en la pantalla de inicio, pero con un tono grisáceo. Al tocarlo, salta una advertencia del sistema notificando la suspensión.
-2. **Modo Avanzado ("Ocultar al suspender" ACTIVADO)**:
-   - Invoca de forma coordinada `setPackagesSuspended(true)` y `setApplicationHidden(true)`.
-   - **Resultado**: El icono desaparece 100% de la pantalla de inicio, del menú de aplicaciones y de las búsquedas del sistema. El usuario no percibe la presencia de la app en su dispositivo.
-
----
-
-### 3.6. Sistema de Presets (.locksuite) con Firma Criptográfica HMAC SHA-256
-
-El sistema de Presets permite empaquetar toda la configuración de seguridad del dispositivo en un archivo portable `.locksuite`.
-
-#### Estructura Interna del Archivo `.locksuite`
-
-```json
-{
-  "version": 2,
-  "presetName": "Bloqueo Estricto Trabajo",
-  "timestamp": 1784678400000,
-  "policies": {
-    "factoryResetBlocked": true,
-    "installAppsBlocked": true,
-    "debuggingBlocked": true,
-    "hideSuspendedApps": true,
-    "perAppInternetBlocked": [
-      "com.instagram.android",
-      "com.zhiliaoapp.musically"
-    ],
-    "suspendedPackages": [
-      "com.android.chrome"
-    ],
-    "hiddenPackages": [
-      "com.facebook.katana"
-    ],
-    "mercadoPagoAccessibilityBlocked": true,
-    "mercadoPagoVpnBlocked": true
-  },
-  "hmacSignature": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+```kotlin
+private fun setRestriction(restriction: String, enable: Boolean): Boolean {
+    return try {
+        if (enable) {
+            dpm.addUserRestriction(adminComponent, restriction)
+        } else {
+            dpm.clearUserRestriction(adminComponent, restriction)
+        }
+        saveState(restriction, enable) // Persiste en SharedPreferences
+        true
+    } catch (e: Exception) { false }
 }
 ```
 
-#### Proceso de Firma y Validación Antimanipulación (HMAC SHA-256)
+Este método privado centraliza toda la lógica de activación/desactivación de restricciones nativas de Android. Guarda además el estado en disco para sobrevivir a reinicios del dispositivo.
 
-1. **Clave Secreta Maestra**:
-   Existe una clave simétrica compartida entre la App Android y el Panel Web: `"LockSuiteMDM_Preset_HMAC_SecretKey_2026"`.
-2. **Generación del Hash**:
-   Se concatenan los valores ordenados de las políticas y el timestamp. Se calcula la firma HMAC-SHA256 y se adjunta en el campo `hmacSignature`.
-3. **Verificación en Importación**:
-   Antes de aplicar cualquier política desde un archivo `.locksuite` importado:
-   - La aplicación toma el objeto `policies`, reconstruye la cadena original y vuelve a generar la firma localmente usando su propia clave secreta.
-   - Si la firma generada no es 100% idéntica a la firma del archivo (lo que ocurriría si un usuario abre el JSON e intenta cambiar un `true` a `false`), el archivo es **rechazado al instante** sin aplicar ningún cambio.
+#### Método `reapplyAllRestrictions()` — Restauración al arrancar
 
----
+Este método es invocado por `BootReceiver` cada vez que el teléfono reinicia. Recorre la lista completa de restricciones guardadas en `SharedPreferences` y las vuelve a aplicar una por una, garantizando que el dispositivo esté protegido desde el primer segundo tras el encendido, antes incluso de que el usuario ingrese su PIN.
 
-### 3.7. Capa de Protección Visual de Imágenes (Silhouette & AI Content Gate)
+#### Método `clearAllRestrictions()` — Purga completa
 
-Módulo dedicado al filtrado y moderación visual en aplicaciones con alto contenido de imágenes:
-
-- **Modo Silueta (Capa 1)**: Aplica un filtro gráfico de renderizado que convierte las imágenes detectadas en figuras vectoriales planas o siluetas de bajo contraste.
-- **AI Content Gate (Capa 2)**: Superpone una capa flotante de atenuación sobre la vista gráfica (`WindowManager`), bloqueando la visualización de imágenes potencialmente no aptas en navegadores web o redes sociales.
+Invocado únicamente cuando un administrador quiere liberar completamente el dispositivo. Elimina todas las restricciones, detiene la VPN, habilita la Play Store, reactiva los navegadores y limpia todas las preferencias guardadas.
 
 ---
 
-### 3.8. Modo Stealth y Lanzador Oculto
+### 2.2. `AppController.kt` — Gestor de Aplicaciones
 
-Para garantizar que el usuario final no pueda acceder a la interfaz de administración local de LockSuite:
+**Ruta:** `com.ejemplo.locksuite.mdm.AppController`
 
-- **Desactivación del Componente Lanzador**:
-  LockSuite ejecuta `packageManager.setComponentEnabledSetting()` sobre su propio `LauncherActivity`, cambiando el estado a `COMPONENT_ENABLED_STATE_DISABLED`.
-- **Efecto**:
-  El icono de LockSuite desaparece por completo del cajón de aplicaciones de Android.
-- **Acceso Administrativo de Emergencia**:
-  El administrador puede volver a desplegar la consola local marcando un código secreto (por ejemplo `*#*#56257847#*#*`) en el teclado de llamadas del celular, desencadenando el receptor de difusión `SecretCodeReceiver`.
+`AppController` traduce los comandos de control de aplicaciones individuales a las APIs nativas de Android. Mantiene una lista interna de paquetes **críticos del sistema** que nunca pueden ser suspendidos ni ocultados (hacerlo rompería el dispositivo):
 
----
+**Paquetes protegidos (no suspendibles/ocultables):**
+- `com.android.systemui` (interfaz del sistema)
+- `com.android.settings` (ajustes)
+- `com.android.phone` (teléfono)
+- `com.google.android.gms` (Google Play Services)
+- `com.ejemplo.locksuite` (la propia app)
+- El launcher activo del dispositivo
 
-### 3.9. Tienda de Apps Administrada y Gestión de APKs
+También existe una categoría intermedia (`partialBlockOnly`): apps como **Gboard** que no pueden suspenderse/ocultarse, pero sí pueden tener restricciones de contenido como bloqueo de imágenes o WebView.
 
-LockSuite actúa como un repositorio de distribución de software corporativo/comunitario:
+#### Método principal `getUserApps()` — Inventario de Apps
 
-- **Catálogo Administrado**: Muestra una lista de aplicaciones autorizadas para instalación.
-- **Instalación Directa Silenciosa**: Al presionar "Instalar" desde la app o desde el panel web, LockSuite descarga la APK en un directorio encriptado temporal y solicita la instalación a la API nativa `PackageInstaller` de Android. Al poseer privilegios de Device Owner, la instalación se completa sin mostrar confirmaciones ni solicitar permisos al usuario.
+Devuelve un listado completo de todas las apps instaladas en el dispositivo, enriquecido con su estado actual en LockSuite:
 
----
-
-## 4. ARQUITECTURA Y GUÍA COMPLETA DEL PANEL DE ADMINISTRACIÓN WEB
-
-La consola de administración centralizada está alojada en **Firebase Hosting** y conectada con microservicios en **Google Cloud Run** y **Firebase Realtime Database**.
-
-```
-[ Interfaz Web Admin ] ──► (JavaScript app.js) ──► [ Realtime Database ]
-          │                                                  │
-          ▼                                                  ▼
-[ Cloud Function sendCommandV8 ] ──► [ Firebase Cloud Messaging (FCM) ]
-                                                     │
-                                                     ▼
-                                        [ Dispositivo Android ]
+```kotlin
+AppInfoData(
+    packageName,   // Nombre de paquete
+    label,         // Nombre visible
+    icon,          // Ícono en bitmap
+    isHidden,      // ¿Está oculta por DPM?
+    isSuspended,   // ¿Está suspendida?
+    appType,       // "Usuario", "Preinstalada" o "Sistema"
+    isWebViewBlocked,    // ¿WebView bloqueado?
+    isInternetBlocked,   // ¿Sin acceso a Internet?
+    isCritical,          // ¿Es sistema crítico?
+    imageBlockingMode    // "none", "layer1", "layer2", "both"
+)
 ```
 
-### 4.1. Diseño Estético y Sistema de Interfaz Web
+---
 
-El panel web fue desarrollado bajo pautas de diseño modernas de alto nivel:
-- **Paleta de Colores Curada**: Fondos oscuros profundos (`#0B192C`, `#1E3E62`), tarjetas con efecto de vidrio esmerilado (*Glassmorphism*), acentos dorados/azules y tipografía Inter de Google Fonts.
-- **Indicadores Dinámicos**: Iconos animados de estado de batería, barra de estado de conexión WebSocket/FCM en tiempo real y micro-animaciones al presionar interruptores de control.
+### 2.3. `KosherVpnService.kt` — Motor de Filtrado DNS
+
+**Ruta:** `com.ejemplo.locksuite.service.KosherVpnService`
+
+Extiende `android.net.VpnService`. Crea un túnel VPN **100% local** en el dispositivo. El tráfico de datos nunca sale hacia servidores externos — todo el filtrado ocurre dentro del propio teléfono.
+
+**Principio de funcionamiento:**
+1. Establece una interfaz virtual `TUN` con IP `10.1.10.1`.
+2. Captura únicamente los paquetes UDP/TCP dirigidos al puerto 53 (DNS).
+3. Lee los primeros bytes del encabezado DNS para extraer el campo `QNAME` (el dominio consultado).
+4. Si el dominio está en la lista negra, responde inmediatamente con `0.0.0.0`, cancelando la conexión.
+5. Si el dominio no está bloqueado, deja pasar la consulta hacia el servidor DNS real del dispositivo.
+
+**¿Por qué no consume batería?**  
+Porque la VPN ignora completamente el tráfico pesado (videos, imágenes, HTTPS). Solo inspecciona paquetes DNS de unos pocos bytes. El motor de resolución de dominios usa un `HashSet<String>` en RAM con complejidad de búsqueda `O(1)`.
 
 ---
 
-### 4.2. Flujo de Comunicación Bidireccional en Tiempo Real (FCM + Realtime Database)
+### 2.4. `LockSuiteAccessibilityService.kt` — Inspección Visual
 
-1. **Envío de Comando**:
-   Al presionar un interruptor en el panel web (por ejemplo, "Bloquear Reset de Fábrica"), `app.js` invoca la Cloud Function `sendCommandV8` pasando la ID del dispositivo objetivo y el payload del comando.
-2. **Entrega Ultrarrápida por FCM**:
-   Firebase Cloud Messaging entrega el paquete de datos al celular a través del canal Push de alta prioridad en menos de 1 segundo.
-3. **Confirmación Acknowledge (ACK)**:
-   La app Android procesa el comando y escribe un registro en `commandAcks/{deviceId}/{commandId}` con el estado `"applied"`.
-4. **Actualización de la Interfaz Web**:
-   El panel web escucha ese nodo en tiempo real. Al recibir el ACK, muestra un mensaje flotante (Toast) en verde notificando *"Política aplicada con éxito en el dispositivo"*.
+**Ruta:** `com.ejemplo.locksuite.service.LockSuiteAccessibilityService`
 
----
+Servicio de accesibilidad que monitorea constantemente los eventos de cambio de pantalla del sistema (`AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED`, `TYPE_WINDOW_CONTENT_CHANGED`).
 
-### 4.3. Manual de Operación Pantalla por Pantalla del Panel Web
+**Cómo funciona:**
+1. Detecta qué aplicación está visible en primer plano (`event.packageName`).
+2. Recorre recursivamente el árbol de nodos de interfaz (`AccessibilityNodeInfo`).
+3. Busca coincidencias de texto, IDs de vista o descripciones de contenido.
+4. Si detecta una sección prohibida, ejecuta `performGlobalAction(GLOBAL_ACTION_BACK)` para rebotar la pantalla instantáneamente.
 
-#### Pestaña 1: "Dispositivos Conectados"
-- **Ficha del Dispositivo**: Muestra la marca, modelo, versión de Android, dirección IP pública/privada, porcentaje de batería y estado del canal VPN.
-- **Acciones Rápidas**: Botón de "Reiniciar Servicio", "Sincronizar Políticas" y "Localizar Dispositivo".
-
-#### Pestaña 2: "Políticas de Sistema"
-Contiene los interruptores maestros para activar o desactivar las restricciones nativas descritas en la Sección 3.1:
-- Switch `Restringir Formateo de Fábrica`
-- Switch `Restringir Depuración USB (ADB)`
-- Switch `Restringir Instalación de APKs`
-- Switch `Restringir Bluetooth y Compartir Datos`
-- Switch `Bloqueo Dual Mercado Pago (Accesibilidad / VPN)`
-
-#### Pestaña 3: "Gestión de Aplicaciones"
-- **Buscador y Filtros**: Permite buscar aplicaciones instaladas por nombre o nombre de paquete (`packageName`).
-- **Interruptor Global "Ocultar al suspender"**: Determina si las apps suspendidas mostrarán icono gris o desaparecerán por completo.
-- **Menú de Opciones por App (⚙️)**:
-  - **Bloquear Totalmente (Ocultar)**: Hace desaparecer la app del dispositivo.
-  - **Suspender App**: Deshabilita la ejecución de la app.
-  - **Bloqueo Total de Internet**: Priva a la app de acceso a la red dejando el resto del celular conectado.
-  - **Filtro de Imágenes (Silueta / AI Gate)**: Configura el nivel de filtrado visual para esa app específica.
-
-#### Pestaña 4: "Perfiles / Presets"
-- **Crear Nuevo Preset**: Permite tomar el estado actual de todas las llaves y guardarlo con un nombre (ej. *"Modo Estudio Estricto"*).
-- **Aplicar Preset**: Envía una orden masiva al dispositivo para reconfigurar todas sus políticas en un solo clic.
-- **Exportar Backup (.locksuite)**: Descarga un archivo JSON firmado criptográficamente con HMAC SHA-256 a la computadora del administrador.
-- **Importar Backup (.locksuite)**: Permite subir un archivo de preset desde la computadora. El sistema valida automáticamente la firma digital antes de permitir su aplicación.
+**Casos de uso activos:**
+- Detectar y bloquear la pestaña "Ofertas" en Mercado Pago.
+- Detectar y bloquear la sección "Estados" en WhatsApp.
+- Detectar y bloquear la sección "Canales" en WhatsApp.
 
 ---
 
-## 5. GUÍA DE INSTALACIÓN, APROVISIONAMIENTO Y DESPLIEGUE MDM
+### 2.5. `LockSuiteFirebaseService.kt` — Receptor de Comandos Remotos
 
-### 5.1. Requisitos de Hardware y Sistema Operativo
+**Ruta:** `com.ejemplo.locksuite.service.LockSuiteFirebaseService`
 
-- **Dispositivo Móvil**: Smartphone o Tablet con Android 8.0 (Oreo) o superior (compatible con Android 9, 10, 11, 12, 13, 14 y 15+).
-- **Estado de Fábrica**: Para aprovisionar como Device Owner, el dispositivo debe estar recién formateado (en la pantalla inicial de bienvenida "Hola") o no debe tener ninguna cuenta de Google vinculada.
+Extiende `FirebaseMessagingService`. Es la "antena" del sistema: recibe los comandos enviados desde el panel web de administración.
 
----
+**Ciclo completo de un comando remoto:**
 
-### 5.2. Métodos de Aprovisionamiento Device Owner
-
-#### Método 1: Aprovisionamiento por Consola ADB (Recomendado para Pruebas)
-
-1. En el teléfono recién iniciado o sin cuentas Google, active las **Opciones de Desarrollador** y habilite la **Depuración USB**.
-2. Conecte el teléfono a la computadora mediante un cable USB.
-3. Abra una consola de comandos (Terminal / PowerShell) y verifique la conexión ejecutando:
-   ```bash
-   adb devices
-   ```
-4. Instale la aplicación LockSuite en el dispositivo:
-   ```bash
-   adb install -r app-release.apk
-   ```
-5. Otorgue los privilegios de **Device Owner** ejecutando el siguiente comando exacto:
-   ```bash
-   adb shell dpm set-device-owner com.ejemplo.locksuite/.receiver.LockSuiteDeviceAdminReceiver
-   ```
-6. Si el comando responde `Success: Device owner set to package...`, el dispositivo ha quedado aprovisionado exitosamente.
-
-#### Método 2: Aprovisionamiento por Código QR (Zero-Touch Provisioning para Despliegue Masivo)
-
-1. En la pantalla de bienvenida inicial de un teléfono formateado de fábrica ("Hola" / "Welcome"), toque la pantalla **6 veces seguidas en el mismo lugar**.
-2. Se abrirá el escáner de código QR integrado de Android.
-3. Escanee el código QR de aprovisionamiento de LockSuite (que contiene el enlace de descarga de la APK, el hash SHA-256 del paquete y las credenciales de configuración inicial).
-4. El teléfono se conectará a Wi-Fi, descargará e instalará LockSuite automáticamente y se configurará como Device Owner de manera 100% transparente.
+```
+1. Admin presiona un switch en el Panel Web
+       ↓
+2. app.js llama a Cloud Function sendCommandV8
+       ↓
+3. FCM entrega el payload al dispositivo (< 1 segundo)
+       ↓
+4. LockSuiteFirebaseService.onMessageReceived()
+       ↓
+5. Dispatch interno: PolicyManager / AppController / KosherVpnService
+       ↓
+6. Política aplicada con éxito
+       ↓
+7. ACK escrito en commandAcks/{deviceId}/{commandId}
+       ↓
+8. Panel Web escucha el ACK → muestra "✅ Aplicado"
+```
 
 ---
 
-### 5.3. Despliegue de Backend en Google Cloud / Firebase Functions
+### 2.6. `FirebaseDeviceSync.kt` — Sincronización de Estado
 
-Para desplegar la infraestructura web del panel de administración:
+**Ruta:** `com.ejemplo.locksuite.util.FirebaseDeviceSync`
 
-1. Instale las herramientas de línea de comandos de Firebase (`firebase-tools`).
-2. Acceda a la carpeta `admin-backend`:
-   ```bash
-   cd admin-backend
-   ```
-3. Inicie sesión en Firebase:
-   ```bash
-   firebase login
-   ```
-4. Despliegue los servicios de Hosting y Cloud Functions:
-   ```bash
-   firebase deploy --only hosting,functions
-   ```
+Este componente es responsable de mantener el panel web sincronizado con el estado real del dispositivo. Se invoca automáticamente después de cualquier cambio de política.
 
----
+**Datos sincronizados al panel web:**
+- Información del dispositivo: modelo, fabricante, versión Android.
+- Versión actual de LockSuite instalada (`versionCode`, `versionName`).
+- Estado de todas las restricciones DPM (25+ campos booleanos).
+- Estado de hardware: cámara, captura de pantalla, barra de estado.
+- Estado de VPN, bloqueo de internet, ad blocking, GIFs.
+- Estado de bloqueos específicos: WhatsApp, Mercado Pago, modo Stealth.
+- Lista completa de apps instaladas con su estado individual.
+- Token FCM para recibir futuros comandos remotos.
+- Timestamp `lastSeen` para detectar si el dispositivo está en línea.
 
-## 6. MATRIZ DE DIAGNÓSTICO Y RESOLUCIÓN DE PROBLEMAS (TROUBLESHOOTING)
-
-| Síntoma / Error | Causa Probable | Solución Técnica |
-| :--- | :--- | :--- |
-| **El comando `set-device-owner` da error "Not allowed to set the device owner because there are already users on the device"**. | Existe una cuenta de Google, WhatsApp o usuario secundario vinculado en el teléfono. | Vaya a Ajustes > Cuentas y elimine todas las cuentas vinculadas, o restablezca el teléfono a valores de fábrica antes de ejecutar el comando ADB. |
-| **Los comandos enviados desde el Panel Web no se aplican en el celular**. | El dispositivo perdió la conexión a Internet o el servicio `LockSuiteFirebaseService` fue detenido. | Verifique que el celular tenga señal Wi-Fi/4G. Presione el botón "Reiniciar Servicio" en el panel web para forzar la reconexión de FCM. |
-| **Una app con "Bloqueo Total de Internet" sigue cargando contenido**. | La aplicación tiene datos en caché o está utilizando direcciones IP directas codificadas en lugar de consultas DNS. | Borre la caché de la aplicación en el teléfono. Asegúrese de que el servicio `KosherVpnService` esté activo en el área de notificaciones. |
-| **Al importar un archivo `.locksuite` sale el error "Firma de seguridad inválida"**. | El archivo JSON fue modificado manualmente o se guardó con una clave secreta diferente. | No edite el archivo `.locksuite` con editores de texto. Genere un nuevo archivo de respaldo directamente desde la función "Exportar Backup" del panel web. |
-| **La sección de Ofertas en Mercado Pago no rebota**. | El servicio de accesibilidad de LockSuite se desactivó en los ajustes de Android. | Acceda a Ajustes > Accesibilidad > Servicios Instalados y asegúrese de que `LockSuiteAccessibilityService` esté activado. |
-| **El icono de una aplicación suspendida sigue apareciendo en gris**. | La opción "Ocultar al suspender" está desactivada en la configuración global. | Ingrese a la pestaña "Gestión de Aplicaciones" del panel web y active la casilla "Ocultar icono al suspender apps". |
+**Autenticación:** Utiliza **Firebase Authentication anónima**. El primer acceso crea una sesión anónima que se reutiliza en las llamadas subsiguientes para no generar overhead.
 
 ---
 
-*Documento técnico de arquitectura y manual de usuario oficial para el sistema LockSuite MDM.*  
-*Versión de Software: 2.4.0-Release | Año: 2026*
+### 2.7. `BootReceiver.kt` — Arranque Resiliente
+
+**Ruta:** `com.ejemplo.locksuite.receiver.BootReceiver`
+
+Escucha los intents `ACTION_BOOT_COMPLETED` y `ACTION_LOCKED_BOOT_COMPLETED`. En cuanto el hardware del teléfono enciende:
+
+1. Invoca `PolicyManager.reapplyAllRestrictions()` para restaurar todas las políticas.
+2. Inicia `KosherVpnService` en primer plano si hay políticas de VPN activas.
+3. Garantiza que el estado de apps suspendidas se mantenga inalterado.
+
+Esto significa que aunque el usuario fuerce un reinicio del teléfono, **LockSuite estará activo antes de que el usuario pueda interactuar con el dispositivo**.
+
+---
+
+### 2.8. `SelfUpdater.kt` — Actualizaciones OTA Silenciosas
+
+**Ruta:** `com.ejemplo.locksuite.util.SelfUpdater`
+
+Permite que la aplicación LockSuite se actualice a sí misma sin intervención del usuario, sin mostrar ningún diálogo de confirmación ni requerir permisos adicionales.
+
+**Proceso de actualización:**
+
+1. Consulta el archivo `version.json` en GitHub Raw o en Firebase Hosting.
+2. Compara el `versionCode` del servidor con el `versionCode` instalado.
+3. Si hay una versión más nueva, descarga la APK a un archivo temporal en el caché del sistema.
+4. Utiliza la API `PackageInstaller` del Device Owner para instalar el APK silenciosamente.
+5. La instalación se completa sin diálogos ni solicitudes al usuario.
+
+**URLs de consulta:**
+- Principal: `https://raw.githubusercontent.com/CHKI541/Lock-Suite/main/admin-backend/public/version.json`
+- Fallback: `https://locksuite-nueva.web.app/version.json`
+
+---
+
+### 2.9. `WebViewBlockManager.kt` — Bloqueo de WebViews
+
+**Ruta:** `com.ejemplo.locksuite.mdm.WebViewBlockManager`
+
+Objeto singleton que gestiona la lista de aplicaciones cuyos **WebViews internos** están bloqueados. Cuando una app tiene el bloqueo de WebView activo, el motor DNS de `KosherVpnService` aplica la política definida en `WebViewPolicy.kt` para interceptar los dominios que esa app intenta cargar dentro de sus vistas web integradas.
+
+**Operaciones:**
+- `setBlocked(context, packageName, blocked)` — Activa o desactiva el bloqueo para una app.
+- `isBlocked(context, packageName)` — Consulta si una app tiene el bloqueo activo.
+- `getBlockedPackages(context)` — Devuelve el conjunto completo de apps bloqueadas.
+- Utiliza un caché en memoria (`@Volatile`) para minimizar accesos a disco.
+
+---
+
+### 2.10. `ImageBlockManager.kt` — Filtrado Visual de Imágenes
+
+**Ruta:** `com.ejemplo.locksuite.mdm.ImageBlockManager`
+
+Gestiona el sistema de filtrado visual de imágenes. Soporta hasta tres modos por aplicación:
+
+| Modo | Descripción |
+|------|-------------|
+| `none` | Sin filtrado de imágenes |
+| `layer1` | Capa 1 (Silueta): Las imágenes se degradan visualmente a contornos planos |
+| `layer2` | Capa 2 (AI Gate): Se superpone una capa de atenuación sobre las imágenes |
+| `both` | Ambas capas simultáneamente para máxima protección |
+
+Adicionalmente gestiona:
+- **Modo AI Global** (`isGlobalAiEnabled`): Activa la Capa 2 en todo el sistema.
+- **Bloqueo de imágenes en Google Maps** (`isMapsImageBlockingEnabled`): Evita la visualización de fotos de Street View y reseñas.
+
+---
+
+### 2.11. `DomainRuleManager.kt` — Reglas DNS Personalizadas
+
+**Ruta:** `com.ejemplo.locksuite.dns.DomainRuleManager`
+
+Permite al administrador definir reglas DNS personalizadas más allá de las listas preconfiguradas. Soporta dos tipos de reglas:
+
+- `RuleType.BLOCK` — El dominio siempre recibe respuesta `0.0.0.0`.
+- `RuleType.ALLOW` — El dominio siempre está permitido (actúa como lista blanca que anula bloqueos globales).
+
+Las reglas se almacenan en `SharedPreferences` y se cargan en un **Trie** (`DomainRuleTrie.kt`) para búsqueda eficiente por sufijo de dominio (permite reglas del tipo `*.ejemplo.com`).
+
+**Recarga atómica:** Cada vez que se modifica una regla, el Trie completo se reconstruye de forma atómica desde cero para garantizar consistencia.
+
+---
+
+## 3. RESTRICCIONES NATIVAS DEL SISTEMA OPERATIVO (DPM)
+
+Estas restricciones son aplicadas directamente por la API `DevicePolicyManager` de Android. Una vez activadas, el sistema operativo las hace cumplir a nivel de kernel — ninguna app puede eludirlas.
+
+| # | Función en PolicyManager | Restricción Nativa Android | Efecto en el Dispositivo |
+|---|---|---|---|
+| 1 | `setFactoryResetBlocked(true)` | `DISALLOW_FACTORY_RESET` | Desaparece la opción "Restablecer datos de fábrica" en Ajustes. El menú Recovery también queda bloqueado. |
+| 2 | `setInstallAppsBlocked(true)` | `DISALLOW_INSTALL_APPS` (nativo) o control programático | Bloquea el instalador de paquetes. Cualquier intento de instalar un APK muestra "No permitido por el administrador". Si hay apps en la lista de permitidas, se activa en modo programático para filtrar por código sin bloquear a nivel de OS. |
+| 3 | `setUninstallAppsBlocked(true)` | `DISALLOW_UNINSTALL_APPS` | El botón "Desinstalar" aparece en gris e inactivo en todas las apps del sistema. |
+| 4 | `setDebuggingFeaturesBlocked(true)` | `DISALLOW_DEBUGGING_FEATURES` | Deshabilita las Opciones de Desarrollador y ADB. Los comandos ADB son rechazados aunque el cable esté conectado. |
+| 5 | `setSafeBootBlocked(true)` | `DISALLOW_SAFE_BOOT` | Evita que el usuario inicie el teléfono en Modo Seguro (que solo carga apps del sistema, eludiendo todas las restricciones). |
+| 6 | `setUserSwitchBlocked(true)` | `DISALLOW_USER_SWITCH` | Deshabilita el cambio de usuario y la creación de perfiles de invitado o de trabajo. |
+| 7 | `setModifyAccountsBlocked(true)` | `DISALLOW_MODIFY_ACCOUNTS` | Prohíbe agregar, eliminar o sincronizar cuentas de Google, email u otros servicios desde Ajustes. **Nota:** Esta restricción no se aplica automáticamente al activar FRP (desde v0.4.6). |
+| 8 | `setUnknownSourcesBlocked(true)` | `DISALLOW_INSTALL_UNKNOWN_SOURCES` | Impide activar "Instalar apps de fuentes desconocidas" en Ajustes, bloqueando APKs de navegadores o gestores de archivos. |
+| 9 | `setWifiConfigBlocked(true)` | `DISALLOW_CONFIG_WIFI` + `DISALLOW_NETWORK_RESET` + `no_config_mobile_networks` | Triple bloqueo: no se puede agregar/editar redes Wi-Fi, no se puede resetear la configuración de red, y no se pueden modificar los ajustes de red móvil (APN, datos en roaming). |
+| 10 | `setBluetoothBlocked(true)` | `DISALLOW_BLUETOOTH` | Apaga el chip Bluetooth y bloquea su encendido desde ajustes rápidos o Ajustes. |
+| 11 | `setBluetoothSharingBlocked(true)` | `DISALLOW_BLUETOOTH_SHARING` | Deshabilita el protocolo OPP de Bluetooth. No se pueden enviar archivos, fotos o documentos por Bluetooth. |
+| 12 | `setExternalMediaBlocked(true)` | `DISALLOW_MOUNT_PHYSICAL_MEDIA` | Bloquea el montaje de memorias USB (OTG) y tarjetas MicroSD externas. |
+| 13 | `setTetheringBlocked(true)` | `DISALLOW_CONFIG_TETHERING` | Deshabilita la Zona Wi-Fi portátil, el tethering USB y el tethering Bluetooth. |
+| 14 | `setAdjustVolumeBlocked(true)` | `DISALLOW_ADJUST_VOLUME` | Los botones físicos de volumen no tienen efecto. El nivel de volumen queda fijo. |
+| 15 | `setAppsControlBlocked(true)` | `DISALLOW_APPS_CONTROL` | El usuario no puede ir a Ajustes > Apps y modificar permisos, borrar datos ni forzar el cierre de apps. |
+| 16 | `setVpnConfigBlocked(true)` | `DISALLOW_CONFIG_VPN` | Prohíbe al usuario instalar, modificar o deshabilitar perfiles de VPN externos. Combina esto con Always-On para que solo la VPN de LockSuite pueda correr. |
+
+---
+
+## 4. BLOQUEOS DE HARDWARE
+
+Estos bloqueos se aplican mediante APIs específicas del DPM, no mediante `UserManager` como las restricciones anteriores.
+
+### 4.1. Bloqueo de Cámara
+
+```kotlin
+fun setCameraDisabled(disabled: Boolean)
+```
+
+Invoca `dpm.setCameraDisabled(adminComponent, disabled)`. Desactiva físicamente el acceso a la cámara trasera y frontal para todas las aplicaciones. Las apps de cámara abren pero muestran una pantalla negra o un error de permiso.
+
+### 4.2. Bloqueo de Capturas de Pantalla
+
+```kotlin
+fun setScreenCaptureBlocked(block: Boolean)
+```
+
+Invoca `dpm.setScreenCaptureDisabled(adminComponent, block)`. Impide que el usuario tome capturas de pantalla con botones físicos o con apps de grabación. También agrega automáticamente el flag `FLAG_SECURE` a la ventana del Dashboard, protegiendo la propia interfaz de administración de LockSuite de ser fotografiada.
+
+### 4.3. Bloqueo de Barra de Estado
+
+```kotlin
+fun setStatusBarDisabled(disabled: Boolean)
+```
+
+Invoca `dpm.setStatusBarDisabled(adminComponent, disabled)`. Cuando está activo, el usuario no puede deslizar hacia abajo para abrir el panel de notificaciones ni el panel de ajustes rápidos (Wi-Fi, Bluetooth, Modo Avión, etc.).
+
+### 4.4. Bloqueo de Pantalla de Bloqueo (Keyguard)
+
+```kotlin
+fun setKeyguardDisabled(disabled: Boolean)
+```
+
+Invoca `dpm.setKeyguardDisabled(adminComponent, disabled)`. Cuando está activo, el teléfono no requiere PIN ni patrón para desbloquearse — la pantalla se enciende directamente al home. Útil en contextos de dispositivos compartidos de exhibición.
+
+### 4.5. Bloqueo Total de Internet (Proxy Global)
+
+```kotlin
+fun setInternetBlocked(block: Boolean)
+```
+
+Técnica: en lugar de cortar las conexiones directamente (lo que requeriría permisos de root), LockSuite configura un **proxy HTTP recomendado** apuntando a una dirección inexistente (`127.0.0.1:9999`) mediante `dpm.setRecommendedGlobalProxy()`. Esto hace que todas las conexiones de red fallen silenciosamente. La VPN de LockSuite permanece funcional porque no pasa por el proxy del sistema.
+
+---
+
+*[Parte 1 de 3 — Secciones 1 a 4 completadas]*

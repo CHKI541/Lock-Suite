@@ -104,23 +104,9 @@ class AppController(private val context: Context) {
         }
 
         if (suspend) {
-            var osSuspendedSuccess = false
             if (!isCurrentlyOsSuspended) {
                 try {
-                    val unapplied = dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
-                    osSuspendedSuccess = unapplied.isEmpty() || !unapplied.contains(packageName)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            } else {
-                osSuspendedSuccess = true
-            }
-
-            val hideSuspendedOption = PolicyManager(context).isHideSuspendedApps()
-            if (hideSuspendedOption || !osSuspendedSuccess) {
-                android.util.Log.w("AppController", "Aplicando ocultamiento de icono para app suspendida: $packageName")
-                try {
-                    dpm.setApplicationHidden(adminComponent, packageName, true)
+                    dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -131,16 +117,6 @@ class AppController(private val context: Context) {
                 dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), false)
             } catch (e: Exception) {
                 e.printStackTrace()
-            }
-
-            // Si fue ocultada mediante el fallback de suspensión (y no por preferencia explícita del usuario), des-ocultarla
-            val isExplicitlyHiddenByUser = PrefsHelper.getMdmPrefs(context).getBoolean("hide_$packageName", false)
-            if (!isExplicitlyHiddenByUser) {
-                try {
-                    dpm.setApplicationHidden(adminComponent, packageName, false)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
             }
         }
 

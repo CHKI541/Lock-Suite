@@ -22,12 +22,30 @@ package com.ejemplo.locksuite.util
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
+import android.util.Base64
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
+import java.security.SecureRandom
 
 object FirebaseDeviceSync {
+
+    private const val COMMAND_SECRET_KEY = "command_auth_secret"
+
+    /**
+     * Credencial aleatoria por dispositivo para autenticar comandos FCM. No se
+     * incluye en la APK y queda protegida por el almacén cifrado local.
+     */
+    fun getOrCreateCommandSecret(context: Context): String {
+        val prefs = PrefsHelper.getEncryptedPrefs(context)
+        prefs.getString(COMMAND_SECRET_KEY, null)?.let { return it }
+        val entropy = ByteArray(32)
+        SecureRandom().nextBytes(entropy)
+        return Base64.encodeToString(entropy, Base64.NO_WRAP).also { secret ->
+            prefs.edit().putString(COMMAND_SECRET_KEY, secret).commit()
+        }
+    }
 
     fun deviceId(context: Context): String =
         Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
@@ -66,7 +84,8 @@ object FirebaseDeviceSync {
             secretsRef.updateChildren(
                 mapOf(
                     "pinHash" to pinHash,
-                    "pinSalt" to pinSalt
+                    "pinSalt" to pinSalt,
+                    "commandSecret" to getOrCreateCommandSecret(context)
                 )
             ).addOnFailureListener { it.printStackTrace() }
 
@@ -139,6 +158,12 @@ object FirebaseDeviceSync {
         val currentVersionName = pInfo?.versionName ?: "Unknown"
 
         withAuth {
+            // La Function usa esta credencial para firmar cada comando. No se
+            // replica bajo /devices, que el panel consume habitualmente.
+            FirebaseDatabase.getInstance()
+                .getReference("deviceSecrets/${deviceId(context)}/commandSecret")
+                .setValue(getOrCreateCommandSecret(context))
+                .addOnFailureListener { it.printStackTrace() }
             writeFields(
                 context,
                 mapOf(

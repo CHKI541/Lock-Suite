@@ -14,8 +14,8 @@ android {
         applicationId = "com.ejemplo.locksuite"
         minSdk = 24
         targetSdk = 34
-        versionCode = 36
-        versionName = "0.4.6"
+        versionCode = 51
+        versionName = "0.4.8"
 
         ndk {
             abiFilters.addAll(setOf("arm64-v8a"))
@@ -29,11 +29,12 @@ android {
             if (localPropertiesFile.exists()) {
                 localPropertiesFile.inputStream().use { properties.load(it) }
             }
-            keyAlias = properties.getProperty("RELEASE_KEY_ALIAS", "locksuite-alias")
-            keyPassword = properties.getProperty("RELEASE_KEY_PASSWORD", "look.suite.22")
-            val storeFilePath = properties.getProperty("RELEASE_STORE_FILE", "C:/Users/israe/OneDrive/Documentos/locksuite-release-key.jks")
+            keyAlias = properties.getProperty("RELEASE_KEY_ALIAS")
+            keyPassword = properties.getProperty("RELEASE_KEY_PASSWORD")
+            val storeFilePath = properties.getProperty("RELEASE_STORE_FILE")
+                ?: throw GradleException("RELEASE_STORE_FILE debe configurarse en local.properties para compilar release")
             storeFile = file(storeFilePath)
-            storePassword = properties.getProperty("RELEASE_STORE_PASSWORD", "look.suite.22")
+            storePassword = properties.getProperty("RELEASE_STORE_PASSWORD")
         }
     }
 

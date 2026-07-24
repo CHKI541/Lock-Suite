@@ -106,7 +106,14 @@ class KosherVpnService : VpnService() {
 
             vpnInterface = builder.establish()
 
-            dnsExecutor = java.util.concurrent.Executors.newFixedThreadPool(16)
+            // Las respuestas terminan en una sola interfaz TUN. Un pool acotado
+            // evita picos de hilos/CPU ante muchas consultas DNS sin sacrificar
+            // la concurrencia normal de resolución.
+            dnsExecutor = java.util.concurrent.ThreadPoolExecutor(
+                2, 4, 30, java.util.concurrent.TimeUnit.SECONDS,
+                java.util.concurrent.ArrayBlockingQueue(128),
+                java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
+            )
             running = true
             Thread { runFilterLoop() }.start()
             android.util.Log.i("KosherVPN", "Servicio VPN iniciado exitosamente.")

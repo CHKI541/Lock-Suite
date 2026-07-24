@@ -12,6 +12,9 @@ object WebViewBlockManager {
     fun setBlocked(context: Context, packageName: String, blocked: Boolean): Boolean {
         prefs(context).edit().putBoolean(KEY_PREFIX + packageName, blocked).apply()
         synchronized(this) { cachedBlockedSet = null } // Invalida caché
+        if (blocked) {
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+        }
         return true
     }
 

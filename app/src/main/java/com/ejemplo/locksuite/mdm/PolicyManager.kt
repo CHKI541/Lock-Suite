@@ -1062,7 +1062,6 @@ class PolicyManager(private val context: Context) {
     private fun setLegacyFrpHardening(enabled: Boolean) {
         listOf(
             UserManager.DISALLOW_FACTORY_RESET,
-            UserManager.DISALLOW_MODIFY_ACCOUNTS,
             UserManager.DISALLOW_SAFE_BOOT
         ).forEach { restriction ->
             try {

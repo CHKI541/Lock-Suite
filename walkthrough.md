@@ -1,4 +1,4 @@
-# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.4.5)
+# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.4.6)
 
 ---
 
@@ -7,24 +7,22 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 ---
 
-## 🚀 Historial Reciente de Mejoras y Correcciones (Hasta v0.4.5)
+## 🚀 Historial Reciente de Mejoras y Correcciones (Hasta v0.4.6)
 
-### 1. Perfiles Locales (Presets) y Exportación/Importación Segura (v0.4.5)
-- **Mejora:** Se implementó una nueva pestaña de **Presets (Perfiles)** en la aplicación de Android (`DashboardActivity.kt`).
-- **Guardado Local:** Permite al administrador guardar la configuración de políticas actual con un nombre descriptivo.
-- **Respaldos Criptográficos (`.locksuite`):** Permite exportar e importar las políticas del dispositivo a un archivo local. Para evitar que el usuario manipule las restricciones editando el JSON manualmente, el archivo se firma y valida mediante un código de autenticación **HMAC-SHA256** con una clave interna secreta en `PolicyManager.kt`.
-- **UI Integrada:** Se añadió soporte en la interfaz para seleccionar archivos locales, mostrar errores de firma (si fue manipulado) y aplicar el backup instantáneamente.
+### 1. Corrección del Bloqueo de Cuentas Google en FRP (v0.4.6)
+- **Problema:** Al activar el bloqueo de Factory Reset Protection (FRP), se bloqueaba automáticamente la posibilidad de agregar o modificar cualquier cuenta de Google en el celular.
+- **Causa:** En la función `setLegacyFrpHardening` en `PolicyManager.kt`, se aplicaba automáticamente la restricción `UserManager.DISALLOW_MODIFY_ACCOUNTS` del sistema Android.
+- **Solución:** Se eliminó esta restricción del flujo automático de FRP. Ahora el usuario puede agregar y administrar cuentas en el celular con normalidad mientras que el FRP sigue activo y restringido únicamente a las cuentas propietarias especificadas por LockSuite. Si se desea bloquear las cuentas de manera explícita, se puede seguir activando la restricción a demanda desde el panel de control general ("Bloquear modificación de cuentas").
 
-### 2. Ocultar Íconos de Apps Suspendidas (v0.4.5)
-- **Mejora:** Se agregó la opción de **"Ocultar icono al suspender aplicaciones"** (`setHideSuspendedApps`) en la sección de opciones avanzadas.
-- **Funcionamiento:** Anteriormente, las aplicaciones restringidas aparecían con el ícono gris de suspendido. Al activar esta opción, `PolicyManager` usa la API de propietario de dispositivo `setApplicationHidden()` para hacer desaparecer por completo la aplicación del launcher de Android, simulando una desinstalación para el usuario pero preservando sus datos para cuando sea desbloqueada.
+### 2. Perfiles Locales (Presets) y Exportación/Importación Segura (v0.4.5)
+- **Mejora:** Pestaña de **Presets (Perfiles)** en la aplicación de Android (`DashboardActivity.kt`) para guardar la configuración de políticas actual localmente.
+- **Respaldos Criptográficos (`.locksuite`):** Permite exportar e importar las políticas firmando y validando el archivo con **HMAC-SHA256** para evitar alteraciones manuales del JSON.
 
-### 3. Autocompletado y Control Remoto Separado de Mercado Pago (v0.4.4 y v0.4.5)
-- **Mejoras:** Se subió la versión oficial de APK autoinstalable (`v0.4.5` / `versionCode 35`) enlazada con el repositorio público en GitHub para actualizaciones directas vía OTA (`SelfUpdater.kt`).
-- **Sincronización Firebase:** Despliegue automático de las reglas de base de datos, Hosting (con el archivo `version.json` apuntando a la versión 0.4.5) y Cloud Functions a la consola de Firebase (`locksuite-nueva`).
+### 3. Ocultar Íconos de Apps Suspendidas (v0.4.5)
+- **Mejora:** Opción de **"Ocultar icono al suspender aplicaciones"** que usa `setApplicationHidden()` para hacer desaparecer por completo la aplicación del launcher de Android en lugar de mostrarla con el ícono gris de suspendido.
 
 ### 4. Reparación de la VPN y Redirección DNS (v0.4.3)
-- **Mejoras de conectividad:** Se eliminó el Lockdown estricto (`lockdownEnabled = false`), se implementó la inyección correcta del Checksum UDP en IPv6 según el RFC 2460, y se desautorizó el tráfico de la propia app de MDM (`addDisallowedApplication`) en el túnel VPN.
+- **Mejoras de conectividad:** Se eliminó el Lockdown estricto (`lockdownEnabled = false`), se implementó la inyección del Checksum UDP en IPv6 (RFC 2460), y se desautorizó el tráfico de la propia app de MDM en el túnel VPN.
 
 ---
 
@@ -32,12 +30,13 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 - **Android App Core**:
   - `app/src/main/java/.../ui/dashboard/DashboardActivity.kt`: Interfaz del panel Android con la nueva sección de Presets y backups HMAC.
-  - `app/src/main/java/.../mdm/PolicyManager.kt`: Controlador de las APIs de Device Owner, encriptación HMAC, exportación e importación.
+  - `app/src/main/java/.../mdm/PolicyManager.kt`: Controlador de las APIs de Device Owner, encriptación HMAC, exportación e importación (FRP modificado en v0.4.6).
   - `app/src/main/java/.../service/KosherVpnService.kt`: Servicio VPN DNS en Capa 3.
   - `app/src/main/java/.../service/LockSuiteAccessibilityService.kt`: Servicio de Accesibilidad e intercepción visual.
 
 - **Panel Web & Cloud Functions (Desplegados en Firebase)**:
   - `admin-backend/public/index.html` & `app.js`: Interfaz de administración en tiempo real.
-  - `admin-backend/public/version.json`: Registro de versión live para Auto-Update OTA (actualizado a v0.4.5 / VC 35).
+  - `admin-backend/public/version.json`: Registro de versión live para Auto-Update OTA (actualizado a v0.4.6 / VC 36).
   - `admin-backend/functions/index.js`: Envíos FCM de comandos a los dispositivos.
+
 

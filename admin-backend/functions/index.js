@@ -43,7 +43,20 @@ const ALLOWED_COMMANDS = new Set([
   "BLOCK_WHATSAPP_STATUS", "UNBLOCK_WHATSAPP_STATUS", "BLOCK_WHATSAPP_CHANNELS",
   "UNBLOCK_WHATSAPP_CHANNELS", "CHANGE_PIN", "ENABLE_STEALTH", "DISABLE_STEALTH",
   "BLOCK_GIFS", "UNBLOCK_GIFS", "UPDATE_APP", "UPDATE_LOCKSUITE", "VERIFY_PIN",
+  "BLOCK_APP_INTERNET", "UNBLOCK_APP_INTERNET", "UNSUSPEND_ALL_APPS",
+  "SET_HIDE_SUSPENDED_APPS", "APPLY_PRESET_PROFILE",
+  "BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY",
+  "BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN",
+  "BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS",
 ]);
+
+function canonicalCommandPayload(payload) {
+  return Object.keys(payload)
+    .filter((key) => key !== "signature")
+    .sort()
+    .map((key) => `${key}=${payload[key] ?? ""}`)
+    .join("\n");
+}
 
 // Helper para verificar admin por email
 async function checkAdminByEmail(email) {
@@ -123,7 +136,10 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     // Verificar que es admin autorizado
     await checkAdminByEmail(adminEmail);
 
-    const { deviceId, command, packages, devicePin, rememberDevice, newPin } = req.body || {};
+    const {
+      deviceId, command, packages, devicePin, rememberDevice, newPin,
+      enabled, presetJson
+    } = req.body || {};
 
     if (!deviceId || typeof deviceId !== "string") {
       res.status(400).json({ error: "Falta deviceId." });
@@ -168,14 +184,6 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       return;
     }
     const payload = { command, commandId };
-    if (hasCommandSecret) {
-      const timestamp = String(Date.now());
-      const signature = crypto
-        .createHmac("sha256", commandSecret)
-        .update(`${command}:${commandId}:${timestamp}`, "utf8")
-        .digest("base64");
-      Object.assign(payload, { timestamp, signature });
-    }
 
     if (command === "CHANGE_PIN") {
       if (!newPin || !/^\d{4,16}$/.test(newPin)) {
@@ -187,7 +195,9 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       payload.pinHash = pinHash;
       payload.pinSalt = pinSalt;
 
-      await admin.database().ref(`deviceSecrets/${deviceId}`).set({ pinHash, pinSalt });
+      // No reemplazar el nodo completo: contiene la credencial de firma de
+      // comandos del dispositivo, que debe sobrevivir a un cambio de PIN.
+      await admin.database().ref(`deviceSecrets/${deviceId}`).update({ pinHash, pinSalt });
       await deviceRef.child("hasPinConfigured").set(true);
       await deviceRef.child("info/hasPinConfigured").set(true).catch(() => {});
       await deviceRef.child("pinHash").remove().catch(() => {});
@@ -203,12 +213,39 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       payload.packages = clean.join(",");
       await deviceRef.child("allowedPackages").set(clean);
       await deviceRef.child("info/allowedPackages").set(clean).catch(() => {});
+    } else if (command === "SET_HIDE_SUSPENDED_APPS") {
+      if (typeof enabled !== "boolean") {
+        res.status(400).json({ error: "Falta el valor enabled para la política." });
+        return;
+      }
+      payload.enabled = String(enabled);
+    } else if (command === "APPLY_PRESET_PROFILE") {
+      if (typeof presetJson !== "string" || presetJson.length === 0) {
+        res.status(400).json({ error: "Falta el perfil a aplicar." });
+        return;
+      }
+      // El payload data de FCM tiene un límite estricto. Evitamos simular un
+      // envío que FCM rechazaría; los perfiles grandes requieren la ruta de
+      // sincronización dedicada que se revisará en la siguiente etapa.
+      if (Buffer.byteLength(presetJson, "utf8") > 3000) {
+        res.status(413).json({ error: "El perfil es demasiado grande para enviarlo de forma remota." });
+        return;
+      }
+      payload.presetJson = presetJson;
     } else if (typeof packages === "string" && packages.trim().length > 0) {
       const clean = packages.split(",").map(p => p.trim()).filter(p => /^[a-zA-Z0-9_.]+$/.test(p));
       if (clean.length > 0) payload.packages = clean.join(",");
     } else if (Array.isArray(packages) && packages.length > 0) {
       const clean = packages.map(p => String(p).trim()).filter(p => /^[a-zA-Z0-9_.]+$/.test(p));
       if (clean.length > 0) payload.packages = clean.join(",");
+    }
+
+    if (hasCommandSecret) {
+      payload.timestamp = String(Date.now());
+      payload.signature = crypto
+        .createHmac("sha256", commandSecret)
+        .update(canonicalCommandPayload(payload), "utf8")
+        .digest("base64");
     }
 
     await admin.messaging().send({

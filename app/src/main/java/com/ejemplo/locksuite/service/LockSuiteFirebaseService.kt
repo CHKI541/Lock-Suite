@@ -32,7 +32,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         val signature = data["signature"]
         val timestamp = data["timestamp"]
         if (commandId.isNullOrBlank() || signature.isNullOrBlank() || timestamp.isNullOrBlank() ||
-            !verifyFcmSignature(command, commandId, timestamp, signature) ||
+            !verifyFcmSignature(data, timestamp, signature) ||
             isReplay(commandId)
         ) {
             android.util.Log.w("LockSuiteFCM", "Comando FCM rechazado: autenticación o replay inválido.")
@@ -46,7 +46,8 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         val requiresPackages = setOf(
             "HIDE_APP", "UNHIDE_APP", "SUSPEND_APP", "UNSUSPEND_APP", 
             "BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW", "SET_IMAGE_BLOCK_NONE", 
-            "SET_IMAGE_BLOCK_LAYER_1", "SET_IMAGE_BLOCK_LAYER_2", "SET_IMAGE_BLOCK_BOTH"
+            "SET_IMAGE_BLOCK_LAYER_1", "SET_IMAGE_BLOCK_LAYER_2", "SET_IMAGE_BLOCK_BOTH",
+            "BLOCK_APP_INTERNET", "UNBLOCK_APP_INTERNET"
         )
         if (requiresPackages.contains(command) && packagesList.isEmpty()) {
             android.util.Log.w("LockSuiteFCM", "Comando $command requiere una lista de paquetes, pero se recibió vacía.")
@@ -406,7 +407,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         }
     }
 
-    private fun verifyFcmSignature(command: String, commandId: String, timestamp: String, signature: String): Boolean {
+    private fun verifyFcmSignature(data: Map<String, String>, timestamp: String, signature: String): Boolean {
         return try {
             val timeMs = timestamp.toLongOrNull() ?: return false
             // Bloquear si el mensaje tiene más de 5 minutos (evita replay attacks)
@@ -419,7 +420,11 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
             val secretKey = SecretKeySpec(secret.toByteArray(), "HmacSHA256")
             mac.init(secretKey)
             
-            val message = "$command:$commandId:$timestamp"
+            val message = data
+                .filterKeys { it != "signature" }
+                .toSortedMap()
+                .entries
+                .joinToString("\n") { (key, value) -> "$key=$value" }
             val expectedBytes = mac.doFinal(message.toByteArray())
             val expectedSig = Base64.encodeToString(expectedBytes, Base64.NO_WRAP)
 

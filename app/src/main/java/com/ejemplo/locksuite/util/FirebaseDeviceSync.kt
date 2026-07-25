@@ -178,7 +178,7 @@ object FirebaseDeviceSync {
                     "wifiBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_WIFI),
                     "bluetoothBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH),
                     "vpnBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_VPN),
-                    "installAppsBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_INSTALL_APPS),
+                    "installAppsBlocked" to policyManager.isInstallAppsBlocked(),
                     "uninstallAppsBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_UNINSTALL_APPS),
                     "factoryResetBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_FACTORY_RESET),
                     "adbBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_DEBUGGING_FEATURES),

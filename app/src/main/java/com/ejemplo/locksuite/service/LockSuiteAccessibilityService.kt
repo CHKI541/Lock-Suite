@@ -107,7 +107,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // Modificar el serviceInfo existente para preservar capacidades cargadas del XML (canTakeScreenshot)
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                          AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+                          AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                          AccessibilityEvent.TYPE_VIEW_SELECTED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.flags = info.flags or
                      AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or 
@@ -226,14 +227,18 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private fun runLayer1NodeBlocking(activePkg: String) {
         val root = rootInActiveWindow ?: return
-        val rootPkg = root.packageName?.toString() ?: ""
-        if (rootPkg != activePkg && isSystemOrInputPackage(rootPkg)) {
-            // Ignorar escaneo si la ventana activa es del sistema o teclado, para no borrar overlays
-            return
+        try {
+            val rootPkg = root.packageName?.toString() ?: ""
+            if (rootPkg != activePkg && isSystemOrInputPackage(rootPkg)) {
+                // Ignorar escaneo si la ventana activa es del sistema o teclado, para no borrar overlays
+                return
+            }
+            val foundKeys = mutableSetOf<String>()
+            scanNode(root, foundKeys)
+            overlayManager.clearStaleRegions("layer1:", foundKeys)
+        } finally {
+            root.recycle()
         }
-        val foundKeys = mutableSetOf<String>()
-        scanNode(root, foundKeys)
-        overlayManager.clearStaleRegions("layer1:", foundKeys)
     }
 
     private fun scanNode(node: AccessibilityNodeInfo, foundKeys: MutableSet<String>) {
@@ -248,7 +253,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
         }
         for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { scanNode(it, foundKeys) }
+            val child = node.getChild(i) ?: continue
+            try {
+                scanNode(child, foundKeys)
+            } finally {
+                child.recycle()
+            }
         }
     }
 
@@ -275,6 +285,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                         // Volver a verificar que seguimos en la misma app para evitar falsos positivos
                         val currentRoot = rootInActiveWindow
                         val currentPkg = currentRoot?.packageName?.toString() ?: ""
+                        currentRoot?.recycle()
                         if (currentPkg == targetPackageName || isSystemOrInputPackage(currentPkg)) {
                             processScreenshotByGrid(bitmap, isMapsStrict)
                         } else {
@@ -669,8 +680,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         var current = node
         var depth = 0
         while (current != null && depth < 5) {
-            if (current.isSelected) return true
-            current = current.parent
+            val parent = current.parent
+            val selected = current.isSelected
+            current.recycle()
+            if (selected) return true
+            current = parent
             depth++
         }
         return false
@@ -680,12 +694,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         var current = node
         var depth = 0
         while (current != null && depth < 5) {
+            val parent = current.parent
+            var clicked = false
             if (current.isClickable) {
-                if (current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                    return true
-                }
+                clicked = current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             }
-            current = current.parent
+            current.recycle()
+            if (clicked) return true
+            current = parent
             depth++
         }
         return false
@@ -694,20 +710,33 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun scanForUpdatesTab(blockStatus: Boolean, blockChannels: Boolean) {
         val root = rootInActiveWindow ?: return
         val rootPkg = root.packageName?.toString() ?: ""
-        if (rootPkg != PKG_WHATSAPP && rootPkg != PKG_WHATSAPP_BUSINESS) return
-
-        val enTabRestringida = UPDATES_TAB_LABELS.any { label ->
-            root.findAccessibilityNodeInfosByText(label).any { isNodeOrParentSelected(it) }
+        if (rootPkg != PKG_WHATSAPP && rootPkg != PKG_WHATSAPP_BUSINESS) {
+            root.recycle()
+            return
         }
-        if (enTabRestringida) {
-            redirectAwayFromUpdatesTab(root)
+
+        try {
+            var enTabRestringida = false
+            for (label in UPDATES_TAB_LABELS) {
+                for (node in root.findAccessibilityNodeInfosByText(label)) {
+                    if (isNodeOrParentSelected(node)) enTabRestringida = true
+                }
+            }
+            if (enTabRestringida) {
+                redirectAwayFromUpdatesTab(root)
+            }
+        } finally {
+            root.recycle()
         }
     }
 
     private fun redirectAwayFromUpdatesTab(root: AccessibilityNodeInfo) {
-        val chatsNode = CHATS_TAB_LABELS
-            .flatMap { root.findAccessibilityNodeInfosByText(it) }
-            .firstOrNull()
+        var chatsNode: AccessibilityNodeInfo? = null
+        for (label in CHATS_TAB_LABELS) {
+            for (node in root.findAccessibilityNodeInfosByText(label)) {
+                if (chatsNode == null) chatsNode = node else node.recycle()
+            }
+        }
 
         val clickOk = clickNodeOrClickableParent(chatsNode)
         if (!clickOk) {
@@ -725,6 +754,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed({
             val currentRoot = rootInActiveWindow
             val currentClassName = currentRoot?.className?.toString() ?: lastWaWindowClassName ?: ""
+            currentRoot?.recycle()
             if (classifyWhatsAppContent(currentClassName) != WhatsAppRestrictedContent.NONE) {
                 performGlobalAction(GLOBAL_ACTION_HOME)
             }

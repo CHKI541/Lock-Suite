@@ -21,6 +21,7 @@ class KosherVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     @Volatile private var running = false
+    private val lifecycleLock = Any()
     private lateinit var connectivityManager: ConnectivityManager
     private var dnsExecutor: java.util.concurrent.ExecutorService? = null
 
@@ -36,6 +37,7 @@ class KosherVpnService : VpnService() {
         if (action == "STOP_VPN") {
             stopVpn()
             stopSelf()
+            return START_NOT_STICKY
         } else {
             startVpn()
         }
@@ -66,7 +68,9 @@ class KosherVpnService : VpnService() {
     }
 
     private fun startVpn() {
-        if (running) return
+        synchronized(lifecycleLock) {
+            if (running) return
+        }
         try {
             startForeground(9002, buildNotification())
 
@@ -104,7 +108,14 @@ class KosherVpnService : VpnService() {
                 }
             }
 
-            vpnInterface = builder.establish()
+            val establishedInterface = builder.establish()
+            if (establishedInterface == null) {
+                android.util.Log.e("KosherVPN", "Android did not authorize the VPN interface; filter not started.")
+                stopForeground(true)
+                stopSelf()
+                return
+            }
+            vpnInterface = establishedInterface
 
             // Las respuestas terminan en una sola interfaz TUN. Un pool acotado
             // evita picos de hilos/CPU ante muchas consultas DNS sin sacrificar
@@ -114,23 +125,31 @@ class KosherVpnService : VpnService() {
                 java.util.concurrent.ArrayBlockingQueue(128),
                 java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy()
             )
-            running = true
-            Thread { runFilterLoop() }.start()
+            synchronized(lifecycleLock) {
+                running = true
+            }
+            Thread({ runFilterLoop() }, "LockSuiteDnsFilter").start()
             android.util.Log.i("KosherVPN", "Servicio VPN iniciado exitosamente.")
         } catch (e: Exception) {
             android.util.Log.e("KosherVPN", "Error al iniciar VPN: ${e.message}")
+            stopVpn()
+            stopSelf()
         }
     }
 
     private fun runFilterLoop() {
         val iface = vpnInterface ?: return
-        val input = FileInputStream(iface.fileDescriptor)
-        val output = FileOutputStream(iface.fileDescriptor)
-        val buffer = ByteArray(4096)
+        var input: FileInputStream? = null
+        var output: FileOutputStream? = null
 
         try {
+            val tunnelInput = FileInputStream(iface.fileDescriptor)
+            val tunnelOutput = FileOutputStream(iface.fileDescriptor)
+            input = tunnelInput
+            output = tunnelOutput
+            val buffer = ByteArray(4096)
             while (running) {
-                val length = input.read(buffer)
+                val length = tunnelInput.read(buffer)
                 if (length <= 0) {
                     try {
                         Thread.sleep(30) // Evitar ocupación inútil de CPU y salvar batería
@@ -148,23 +167,42 @@ class KosherVpnService : VpnService() {
                 if (executor != null && !executor.isShutdown) {
                     executor.execute {
                         try {
-                            handleDnsQuery(packet, output)
+                            handleDnsQuery(packet, tunnelOutput)
                         } catch (e: Exception) {
                             android.util.Log.e("KosherVPN", "Error en consulta DNS asíncrona: ${e.message}")
                         }
                     }
                 } else {
-                    handleDnsQuery(packet, output)
+                    handleDnsQuery(packet, tunnelOutput)
                 }
             }
         } catch (e: Exception) {
             android.util.Log.e("KosherVPN", "Error en bucle de filtrado VPN: ${e.message}")
         } finally {
             try {
-                input.close()
-                output.close()
+                input?.close()
+                output?.close()
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("KosherVPN", "Error cerrando la interfaz VPN", e)
+            }
+
+            // Si el hilo termina inesperadamente, no dejar el servicio marcado como
+            // activo. Así el watchdog puede iniciarlo de nuevo en vez de conservar
+            // una notificación sin filtro real.
+            val shouldStopService = synchronized(lifecycleLock) {
+                if (vpnInterface === iface) {
+                    running = false
+                    vpnInterface = null
+                    dnsExecutor?.shutdownNow()
+                    dnsExecutor = null
+                    true
+                } else {
+                    false
+                }
+            }
+            if (shouldStopService) {
+                stopForeground(true)
+                stopSelf()
             }
         }
     }
@@ -205,7 +243,7 @@ class KosherVpnService : VpnService() {
         if (isAdBlockerActive && AdBlocker.isBlocked(queriedDomain)) {
             android.util.Log.i("KosherVPN", "BLOQUEADO ANUNCIO GLOBAL: $queriedDomain")
             com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
-            // No responder para causar timeout DNS en la petición del anuncio
+            NetworkForwarder.sendBlockedDnsResponse(packet, output)
             return
         }
 
@@ -218,6 +256,7 @@ class KosherVpnService : VpnService() {
             if (isTenorOrGiphy) {
                 android.util.Log.i("KosherVPN", "🚫 BLOQUEADO GIFS/STICKERS/TENOR: $queriedDomain")
                 com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
+                NetworkForwarder.sendBlockedDnsResponse(packet, output)
                 return
             }
         }
@@ -326,19 +365,26 @@ class KosherVpnService : VpnService() {
     }
 
     private fun stopVpn() {
-        running = false
-        try {
-            dnsExecutor?.shutdownNow()
+        val interfaceToClose: ParcelFileDescriptor?
+        val executorToStop: java.util.concurrent.ExecutorService?
+        synchronized(lifecycleLock) {
+            running = false
+            executorToStop = dnsExecutor
             dnsExecutor = null
-        } catch (e: Exception) {
-            e.printStackTrace()
+            interfaceToClose = vpnInterface
+            vpnInterface = null
         }
         try {
-            vpnInterface?.close()
+            executorToStop?.shutdownNow()
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.w("KosherVPN", "Error cerrando ejecutor DNS", e)
         }
-        vpnInterface = null
+        try {
+            interfaceToClose?.close()
+        } catch (e: Exception) {
+            android.util.Log.w("KosherVPN", "Error cerrando interfaz VPN", e)
+        }
+        stopForeground(true)
         android.util.Log.i("KosherVPN", "Servicio VPN detenido.")
     }
 

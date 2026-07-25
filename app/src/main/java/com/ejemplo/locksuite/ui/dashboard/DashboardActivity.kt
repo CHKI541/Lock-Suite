@@ -139,12 +139,9 @@ class DashboardActivity : ComponentActivity() {
         }
     }
 
-    override fun onStop() {
-        super.onStop()
-        if (!isChangingConfigurations) {
-            SessionManager.closeSession()
-            finish()
-        }
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        SessionManager.updateInteraction()
     }
 
     override fun onUserLeaveHint() {
@@ -613,7 +610,7 @@ fun PoliciesTabContent(context: Context) {
                 )
                 PolicySwitchRow(
                     label = "Bloquear Instalación de Apps",
-                    isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_INSTALL_APPS) },
+                    isChecked = remember(refreshKey) { policyManager.isInstallAppsBlocked() },
                     onCheckedChange = { policyManager.setInstallAppsBlocked(it).also { refreshKey++ } }
                 )
                 PolicySwitchRow(
@@ -1160,6 +1157,7 @@ fun AppRowItem(
         hideState = app.isHidden
         suspendState = app.isSuspended
         webviewState = app.isWebViewBlocked
+        perAppNetState = app.isInternetBlocked
         imageBlockingMode = app.imageBlockingMode
     }
 

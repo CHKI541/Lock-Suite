@@ -576,6 +576,7 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                     }
                 }
             });
+            return true;
         } else {
             sidebarStatusMsg.textContent = "✓ Comando enviado";
             setTimeout(() => {
@@ -583,18 +584,20 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                 if (a) a.disabled = false;
                 if (i) i();
             }, 4000);
+            return true;
         }
-        break;
     } catch (e) {
         if ("PIN_REQUIRED" === e.message || "PIN_INCORRECT" === e.message) {
             if ("PIN_INCORRECT" === e.message) {
-                delete verifiedDevicePins[selectedDeviceId];
+                delete verifiedDevicePins[e];
             }
             o = "PIN_INCORRECT" === e.message ? "PIN incorrecto. Intentá de nuevo." : "";
             const t = await showPinModal(r, o);
             if (!t) {
-                sidebarStatusMsg.textContent = "Cancelado — PIN requerido.", i && i();
-                break;
+                sidebarStatusMsg.textContent = "Cancelado — PIN requerido.";
+                if (a) a.disabled = false;
+                if (i) i();
+                return false;
             }
             d = t.pin, s = t.remember;
             verifiedDevicePins[selectedDeviceId] = t.pin;
@@ -604,10 +607,11 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             }
             continue;
         }
-        sidebarStatusMsg.textContent = "✗ Error: " + (e.message || "desconocido"), i && i();
-        break;
+        sidebarStatusMsg.textContent = "✗ Error: " + (e.message || "desconocido");
+        if (a) a.disabled = false;
+        if (i) i();
+        return false;
     }
-    a && (a.disabled = !1);
 }
 
 function showPinModal(e, t) {
@@ -1022,9 +1026,6 @@ if (mainTabDevices && mainTabGroups && mainTabArchived && mainTabGlobalSettings)
         closeGroupSidebar();
     });
 
-        closeGroupSidebar();
-    });
-
     const mainTabPresets = document.getElementById("main-tab-presets");
     const presetsContainer = document.getElementById("presets-container");
     const presetsList = document.getElementById("presets-list");
@@ -1354,7 +1355,7 @@ function applyPresetToDeviceModal(preset) {
     const targetId = deviceId.trim();
     const presetJsonStr = JSON.stringify(preset);
 
-    runCommandOnDevice(targetId, "APPLY_PRESET_PROFILE", { presetJson: presetJsonStr });
+    runCommandOnDevice(targetId, "APPLY_PRESET_PROFILE", null, null, null, { presetJson: presetJsonStr });
 }
 
 // 2. Renderizar Lista de Tarjetas de Grupos

@@ -99,7 +99,11 @@
         <service
             android:name="com.ejemplo.locksuite.service.KosherVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse"
             android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="dns_content_filter_vpn" />
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>

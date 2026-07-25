@@ -14,6 +14,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -23,6 +24,8 @@ object SelfUpdater {
 
     suspend fun checkAndPerformUpdate(context: Context, showToasts: Boolean = false, onProgress: ((Int) -> Unit)? = null): String? {
         return withContext(Dispatchers.IO) {
+            var temporaryInstallAccessPrepared = false
+            var installCommitSubmitted = false
             try {
                 if (showToasts) {
                     withContext(Dispatchers.Main) {
@@ -30,16 +33,7 @@ object SelfUpdater {
                     }
                 }
 
-                val urlConnection = URL(VERSION_URL).openConnection() as HttpURLConnection
-                urlConnection.connectTimeout = 10000
-                urlConnection.readTimeout = 10000
-                urlConnection.connect()
-
-                if (urlConnection.responseCode != HttpURLConnection.HTTP_OK) {
-                    return@withContext "Error al consultar versión: HTTP ${urlConnection.responseCode}"
-                }
-
-                val responseText = urlConnection.inputStream.bufferedReader().use { it.readText() }
+                val responseText = fetchVersionManifest()
                 val json = JSONObject(responseText)
                 val serverVersionCode = json.optInt("versionCode", 0)
                 val apkUrl = json.optString("url", "")
@@ -105,7 +99,10 @@ object SelfUpdater {
                 }
 
                 // Levantar restricciones ANTES de crear la sesión (Android valida al crear, no al commit)
-                prepareTemporaryInstallAccess(context)
+                if (!prepareTemporaryInstallAccess(context)) {
+                    return@withContext "No se pudieron preparar los permisos temporales de instalación."
+                }
+                temporaryInstallAccessPrepared = true
 
                 val pm = context.packageManager
                 val packageInstaller = pm.packageInstaller
@@ -143,11 +140,15 @@ object SelfUpdater {
                 )
 
                 session.commit(pendingIntent.intentSender)
+                installCommitSubmitted = true
                 session.close()
 
                 tempFile.delete()
                 return@withContext null
             } catch (e: Exception) {
+                if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
+                    com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()
+                }
                 Log.e("SelfUpdater", "Error de actualización", e)
                 return@withContext "Error de actualización: ${e.message}"
             }
@@ -156,6 +157,8 @@ object SelfUpdater {
 
     suspend fun downloadAndInstallApk(context: Context, apkUrl: String, packageName: String, label: String, onProgress: ((Int) -> Unit)? = null): String? {
         return withContext(Dispatchers.IO) {
+            var temporaryInstallAccessPrepared = false
+            var installCommitSubmitted = false
             try {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Iniciando descarga de $label...", Toast.LENGTH_SHORT).show()
@@ -197,7 +200,10 @@ object SelfUpdater {
                 }
 
                 // Levantar restricciones ANTES de crear la sesión (Android valida al crear, no al commit)
-                prepareTemporaryInstallAccess(context)
+                if (!prepareTemporaryInstallAccess(context)) {
+                    return@withContext "No se pudieron preparar los permisos temporales de instalación."
+                }
+                temporaryInstallAccessPrepared = true
 
                 val pm = context.packageManager
                 val packageInstaller = pm.packageInstaller
@@ -235,18 +241,22 @@ object SelfUpdater {
                 )
 
                 session.commit(pendingIntent.intentSender)
+                installCommitSubmitted = true
                 session.close()
 
                 tempFile.delete()
                 return@withContext null
             } catch (e: Exception) {
+                if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
+                    com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()
+                }
                 Log.e("SelfUpdater", "Error al instalar $label", e)
                 return@withContext "Error al instalar $label: ${e.message}"
             }
         }
     }
 
-    private fun prepareTemporaryInstallAccess(context: Context) {
+    private fun prepareTemporaryInstallAccess(context: Context): Boolean {
         try {
             PrefsHelper.getMdmPrefs(context)
                 .edit()
@@ -254,21 +264,32 @@ object SelfUpdater {
                 .apply()
 
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+                ?: throw IllegalStateException("DevicePolicyManager no disponible")
             val adminComponent = android.content.ComponentName(context, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
+            if (!dpm.isDeviceOwnerApp(context.packageName)) {
+                throw IllegalStateException("LockSuite no es el propietario del dispositivo")
+            }
 
-            dpm?.clearUserRestriction(adminComponent, android.os.UserManager.DISALLOW_INSTALL_APPS)
-            dpm?.clearUserRestriction(adminComponent, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+            // Programar el cierre de seguridad antes de abrir la ventana de
+            // instalación. Si no puede programarse, las políticas no se relajan.
+            if (!scheduleInstallSafetyTimeout(context)) {
+                throw IllegalStateException("No se pudo programar el cierre de seguridad de instalación")
+            }
 
-            scheduleInstallSafetyTimeout(context)
+            dpm.clearUserRestriction(adminComponent, android.os.UserManager.DISALLOW_INSTALL_APPS)
+            dpm.clearUserRestriction(adminComponent, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
 
             // Esperar a que Android propague el cambio de política antes de createSession()
             Thread.sleep(500)
+            return true
         } catch (e: Exception) {
             Log.w("SelfUpdater", "Error al preparar permisos temporales de instalación: ${e.message}")
+            com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()
+            return false
         }
     }
 
-    private fun scheduleInstallSafetyTimeout(context: Context) {
+    private fun scheduleInstallSafetyTimeout(context: Context): Boolean {
         try {
             val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
                 action = "INSTALL_SAFETY_TIMEOUT"
@@ -286,8 +307,34 @@ object SelfUpdater {
             } else {
                 alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pendingIntent)
             }
+            return true
         } catch (e: Exception) {
             Log.w("SelfUpdater", "Error al programar timeout de instalación: ${e.message}")
+            return false
         }
+    }
+
+    private fun fetchVersionManifest(): String {
+        var lastFailure: Exception? = null
+        for (manifestUrl in listOf(VERSION_URL, FALLBACK_VERSION_URL)) {
+            try {
+                val connection = URL(manifestUrl).openConnection() as HttpURLConnection
+                connection.connectTimeout = 10_000
+                connection.readTimeout = 10_000
+                connection.instanceFollowRedirects = false
+                try {
+                    if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                        throw IOException("HTTP ${connection.responseCode} al consultar $manifestUrl")
+                    }
+                    return connection.inputStream.bufferedReader().use { reader -> reader.readText() }
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (e: Exception) {
+                lastFailure = e
+                Log.w("SelfUpdater", "No se pudo consultar manifiesto OTA: $manifestUrl", e)
+            }
+        }
+        throw IOException("No se pudo consultar ningún manifiesto OTA", lastFailure)
     }
 }

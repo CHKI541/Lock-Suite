@@ -57,20 +57,29 @@ class PolicyManager(private val context: Context) {
         setRestriction(UserManager.DISALLOW_FACTORY_RESET, block)
 
     fun setInstallAppsBlocked(block: Boolean): Boolean {
-        PrefsHelper.getMdmPrefs(context).edit().putBoolean("install_apps_blocked_admin", block).apply()
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val previousState = prefs.getBoolean("install_apps_blocked_admin", false)
+        prefs.edit().putBoolean("install_apps_blocked_admin", block).apply()
+        if (refreshInstallRestriction()) {
+            return true
+        }
+
+        // No mostrar un estado que Android no aceptó. Restauramos la intención
+        // anterior y procuramos reimponerla antes de informar el fallo.
+        prefs.edit().putBoolean("install_apps_blocked_admin", previousState).apply()
         refreshInstallRestriction()
-        return true
+        return false
     }
 
     fun isInstallAppsBlocked(): Boolean {
         return PrefsHelper.getMdmPrefs(context).getBoolean("install_apps_blocked_admin", false)
     }
 
-    fun refreshInstallRestriction() {
+    fun refreshInstallRestriction(): Boolean {
         val prefs = PrefsHelper.getMdmPrefs(context)
         if (prefs.getBoolean("mdm_install_in_progress", false)) {
             android.util.Log.i("PolicyManager", "Instalación MDM en progreso: omitiendo refreshInstallRestriction")
-            return
+            return true
         }
 
         val isBlocked = prefs.getBoolean("install_apps_blocked_admin", false)
@@ -81,11 +90,11 @@ class PolicyManager(private val context: Context) {
         if (isBlocked) {
             if (hasAllowedApps) {
                 // Bloqueo programático: permite instalaciones, pero filtra por código
-                setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)
+                if (!setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)) return false
                 prefs.edit().putBoolean("install_blocked_programmatic", true).apply()
             } else {
                 // Bloqueo nativo estricto: bloquea a nivel de OS
-                setRestriction(UserManager.DISALLOW_INSTALL_APPS, true)
+                if (!setRestriction(UserManager.DISALLOW_INSTALL_APPS, true)) return false
                 prefs.edit().putBoolean("install_blocked_programmatic", false).apply()
             }
             try {
@@ -93,19 +102,20 @@ class PolicyManager(private val context: Context) {
                 val isPlayStoreSuspended = prefs.getBoolean("suspend_com.android.vending", true)
                 appController.suspendApp("com.android.vending", isPlayStoreSuspended)
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("PolicyManager", "No se pudo actualizar el estado de Play Store", e)
             }
         } else {
             // Sin bloqueo
-            setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)
+            if (!setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)) return false
             prefs.edit().putBoolean("install_blocked_programmatic", false).apply()
             try {
                 val isPlayStoreSuspended = prefs.getBoolean("suspend_com.android.vending", false)
                 appController.suspendApp("com.android.vending", isPlayStoreSuspended)
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.w("PolicyManager", "No se pudo actualizar el estado de Play Store", e)
             }
         }
+        return true
     }
 
     fun restoreInstallRestrictions() {

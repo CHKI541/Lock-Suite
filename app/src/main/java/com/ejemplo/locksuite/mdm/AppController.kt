@@ -20,6 +20,11 @@ class AppController(private val context: Context) {
     private val pm = context.packageManager
     private val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
 
+    // La lista de launchers no cambia durante la vida corta de este controlador.
+    // Resolverla una sola vez evita una consulta al PackageManager por cada app de
+    // la grilla (y por cada verificacion de ocultamiento/suspension).
+    private val launcherPackages: Set<String> by lazy { queryLauncherPackages() }
+
     private val systemEssential = setOf(
         "com.android.systemui", 
         "com.android.settings",
@@ -40,7 +45,7 @@ class AppController(private val context: Context) {
     )
 
     fun isCritical(packageName: String): Boolean {
-        return packageName in systemEssential || getLauncherPackages().contains(packageName)
+        return packageName in systemEssential || packageName in launcherPackages
     }
 
     // Devuelve true si la app NO puede ocultarse ni suspenderse (pero sí puede tener
@@ -57,7 +62,11 @@ class AppController(private val context: Context) {
             return !hide
         }
         return try {
-            dpm.setApplicationHidden(adminComponent, packageName, hide)
+            val applied = dpm.setApplicationHidden(adminComponent, packageName, hide)
+            if (!applied) {
+                android.util.Log.w("AppController", "Android no aplico ocultamiento para $packageName")
+                return false
+            }
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", hide).apply()
             
             // Si des-ocultamos la app y estaba marcada como suspendida, aplicamos la suspensión física en este momento
@@ -73,8 +82,8 @@ class AppController(private val context: Context) {
             }
             true
         } catch (e: Exception) {
-            e.printStackTrace()
-            !hide
+            android.util.Log.e("AppController", "No se pudo cambiar ocultamiento de $packageName", e)
+            false
         }
     }
 
@@ -94,8 +103,6 @@ class AppController(private val context: Context) {
         }
         
         android.util.Log.i("AppController", "suspendApp: $packageName -> suspend=$suspend")
-        // Siempre guardar la preferencia de estado deseado
-        PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", suspend).apply()
 
         val isCurrentlyOsSuspended = try {
             dpm.isPackageSuspended(adminComponent, packageName)
@@ -103,24 +110,24 @@ class AppController(private val context: Context) {
             false
         }
 
-        if (suspend) {
-            if (!isCurrentlyOsSuspended) {
-                try {
-                    dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+        return try {
+            val unapplied = if (suspend && isCurrentlyOsSuspended) {
+                emptyArray()
+            } else {
+                dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), suspend)
             }
-        } else {
-            // Des-suspender en el SO si estaba suspendida
-            try {
-                dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), false)
-            } catch (e: Exception) {
-                e.printStackTrace()
+            if (unapplied.contains(packageName)) {
+                android.util.Log.w("AppController", "Android no aplico suspension para $packageName")
+                false
+            } else {
+                // Solo reflejar como aplicada una politica que el SO confirmo.
+                PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", suspend).apply()
+                true
             }
+        } catch (e: Exception) {
+            android.util.Log.e("AppController", "No se pudo cambiar suspension de $packageName", e)
+            false
         }
-
-        return true
     }
 
     fun isAppSuspended(packageName: String): Boolean {
@@ -164,6 +171,7 @@ class AppController(private val context: Context) {
             PackageManager.GET_UNINSTALLED_PACKAGES
         }
         val installedApps = pm.getInstalledApplications(flags)
+        val policyManager = PolicyManager(context)
 
         return installedApps
             .mapNotNull { app ->
@@ -191,7 +199,6 @@ class AppController(private val context: Context) {
                         else -> "Sistema"
                     }
 
-                    val policyManager = PolicyManager(context)
                     AppInfoData(
                         packageName = app.packageName,
                         label = label,
@@ -211,7 +218,7 @@ class AppController(private val context: Context) {
             .sortedBy { it.label }
     }
 
-    private fun getLauncherPackages(): Set<String> {
+    private fun queryLauncherPackages(): Set<String> {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         val list = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
         return list.map { it.activityInfo.packageName }.toSet()

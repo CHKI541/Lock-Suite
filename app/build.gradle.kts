@@ -14,8 +14,8 @@ android {
         applicationId = "com.ejemplo.locksuite"
         minSdk = 24
         targetSdk = 34
-        versionCode = 51
-        versionName = "0.4.8"
+        versionCode = 52
+        versionName = "0.4.9"
 
         ndk {
             abiFilters.addAll(setOf("arm64-v8a"))
@@ -137,4 +137,5 @@ dependencies {
     // MediaPipe Tasks-Vision (AI Image Blocker)
     implementation(libs.mediapipe.tasks.vision)
 }
+
 

@@ -239,7 +239,7 @@ async function openDeviceSidebar(e, t) {
 }
 
 function closeDeviceSidebar() {
-    selectedDeviceId = null, sidebar.classList.add("hidden")
+    selectedDeviceId = null, sidebar.classList.add("hidden"), sidebar.classList.remove("expanded")
 }
 
 function updateSidebarUI(e, t) {
@@ -280,8 +280,43 @@ function updateSidebarUI(e, t) {
 sidebarCloseBtn.addEventListener("click", closeDeviceSidebar), sidebarTabButtons.forEach(e => {
     e.addEventListener("click", () => {
         sidebarTabButtons.forEach(e => e.classList.remove("active")), sidebarTabPanels.forEach(e => e.classList.remove("active")), e.classList.add("active"), activeTabId = e.getAttribute("data-tab"), document.getElementById(activeTabId).classList.add("active")
-    })
-});
+    });
+const sidebarExpandBtn = document.getElementById("sidebar-expand-btn");
+if (sidebarExpandBtn) {
+    sidebarExpandBtn.addEventListener("click", () => {
+        sidebar.classList.toggle("expanded");
+    });
+}
+function getAppIconUrl(packageName) {
+    const presetIcons = {
+        "com.whatsapp": "https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg",
+        "com.android.chrome": "https://upload.wikimedia.org/wikipedia/commons/e/e1/Google_Chrome_icon_%28February_2022%29.svg",
+        "com.google.android.youtube": "https://upload.wikimedia.org/wikipedia/commons/0/09/YouTube_full-color_icon_%282017%29.svg",
+        "com.google.android.apps.maps": "https://upload.wikimedia.org/wikipedia/commons/a/a9/Google_Maps_icon_2020.svg",
+        "com.google.android.gm": "https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg",
+        "com.google.android.googlequicksearchbox": "https://upload.wikimedia.org/wikipedia/commons/c/c1/Google_%22G%22_logo.svg",
+        "com.google.android.apps.photos": "https://upload.wikimedia.org/wikipedia/commons/4/4e/Google_Photos_Logo_2020.svg",
+        "com.android.settings": "https://upload.wikimedia.org/wikipedia/commons/5/58/Android_Settings_Icon.svg",
+        "com.android.vending": "https://upload.wikimedia.org/wikipedia/commons/d/d0/Google_Play_Arrow_logo.svg",
+        "com.google.android.contacts": "https://upload.wikimedia.org/wikipedia/commons/a/a2/Google_Contacts_icon_%282022%29.svg",
+        "com.google.android.calendar": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg",
+        "com.google.android.apps.messaging": "https://upload.wikimedia.org/wikipedia/commons/5/51/Google_Messages_logo.svg",
+        "com.google.android.dialer": "https://upload.wikimedia.org/wikipedia/commons/c/cd/Google_Phone_icon_%282020%29.svg",
+        "com.android.dialer": "https://upload.wikimedia.org/wikipedia/commons/c/cd/Google_Phone_icon_%282020%29.svg",
+        "com.mercadopago": "https://upload.wikimedia.org/wikipedia/commons/c/c5/Logo_Mercado_Pago.svg",
+        "com.mercadolibre": "https://upload.wikimedia.org/wikipedia/commons/2/29/MercadoLibre_logo.svg",
+        "org.telegram.messenger": "https://upload.wikimedia.org/wikipedia/commons/8/82/Telegram_logo.svg",
+        "com.facebook.katana": "https://upload.wikimedia.org/wikipedia/commons/5/51/Facebook_f_logo_%282019%29.svg",
+        "com.instagram.android": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Instagram_logo_2016.svg",
+        "com.microsoft.teams": "https://upload.wikimedia.org/wikipedia/commons/c/c9/Microsoft_Office_Teams_%282018%E2%80%93present%29.svg"
+    };
+
+    if (presetIcons[packageName]) {
+        return presetIcons[packageName];
+    }
+    return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a0aec0'><path d='M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z'/></svg>";
+}
+
 let currentSearchQuery = "", currentAppFilter = "all";
 
 function renderAppsList(e) {
@@ -324,12 +359,35 @@ function renderAppsList(e) {
         mainRow.style.gap = "10px";
         t.appendChild(mainRow);
 
+        const appHeaderLeft = document.createElement("div");
+        appHeaderLeft.className = "app-header-left";
+        appHeaderLeft.style.display = "flex";
+        appHeaderLeft.style.alignItems = "center";
+        appHeaderLeft.style.gap = "10px";
+        appHeaderLeft.style.flex = "1";
+        appHeaderLeft.style.minWidth = "0";
+        mainRow.appendChild(appHeaderLeft);
+
+        const img = document.createElement("img");
+        img.src = getAppIconUrl(e.packageName);
+        img.style.width = "32px";
+        img.style.height = "32px";
+        img.style.borderRadius = "6px";
+        img.style.objectFit = "contain";
+        img.style.backgroundColor = "rgba(255, 255, 255, 0.05)";
+        img.style.padding = "2px";
+        appHeaderLeft.appendChild(img);
+
         const n = document.createElement("div");
         n.className = "app-meta";
         const a = document.createElement("p");
         a.className = "app-title", a.textContent = e.label;
+        a.title = e.label;
         const i = document.createElement("p");
-        i.className = "app-pkg", i.textContent = e.packageName, n.appendChild(a), n.appendChild(i), mainRow.appendChild(n);
+        i.className = "app-pkg", i.textContent = e.packageName;
+        i.title = e.packageName;
+        n.appendChild(a), n.appendChild(i);
+        appHeaderLeft.appendChild(n);
         
         const d = document.createElement("div");
         d.className = "app-toggles";
@@ -1471,11 +1529,19 @@ function closeGroupSidebar() {
     selectedGroupId = null;
     if (groupSidebar) {
         groupSidebar.classList.add("hidden");
+        groupSidebar.classList.remove("expanded");
     }
 }
 
 if (groupSidebarCloseBtn) {
     groupSidebarCloseBtn.addEventListener("click", closeGroupSidebar);
+}
+
+const groupSidebarExpandBtn = document.getElementById("group-sidebar-expand-btn");
+if (groupSidebarExpandBtn && groupSidebar) {
+    groupSidebarExpandBtn.addEventListener("click", () => {
+        groupSidebar.classList.toggle("expanded");
+    });
 }
 
 // 5. Alternancia de Pestañas internas del Sidebar del Grupo

@@ -237,8 +237,16 @@ header {
   display: flex;
   flex-direction: column;
   z-index: 90;
-  transition: transform 0.3s ease;
+  transition: transform 0.3s ease, width 0.3s ease;
   transform: translateX(0);
+}
+
+.sidebar.expanded {
+  width: 750px;
+}
+
+.expand-btn:hover {
+  color: var(--accent-orange) !important;
 }
 
 .sidebar.hidden {

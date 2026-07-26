@@ -14,7 +14,15 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 - **Causa:** Las librerías nativas de MediaPipe/TensorFlow Lite estaban configuradas para compilarse únicamente para la arquitectura `arm64-v8a` (64 bits).
 - **Solución:** Se agregó la arquitectura `armeabi-v7a` a los filtros ABI (`abiFilters`) en `app/build.gradle.kts` para incluir las librerías nativas de 32 bits. Esto asegura la plena compatibilidad e instalación en dispositivos tanto de 32 bits como de 64 bits.
 
-### 2. Optimización del Consumo de Batería del Watchdog (v0.4.9.1)
+
+### 2. Mejoras Visuales en el Panel Web: Expansión de Sidebar, Iconos y Tooltips
+- **Problema:** Los nombres de paquete largos se truncaban (`com.android.t...`), lo que dificultaba identificar qué aplicaciones eran exactamente. Tampoco se visualizaban los iconos de las aplicaciones.
+- **Solución:**
+  - **Expansión (Botón `↔`):** Se agregó un botón de expansión en el encabezado de los paneles laterales de administración de dispositivos y grupos. Al presionarlo, el panel se ensancha dinámicamente de `460px` a `750px` en pantalla, revelando la información completa.
+  - **Iconos de Apps:** Se implementó la visualización de los iconos de las aplicaciones. Para las aplicaciones más comunes (como WhatsApp, Chrome, Gmail, YouTube, Google Maps, etc.), el sistema carga sus logotipos oficiales en SVG; para las demás aplicaciones, utiliza un icono placeholder con diseño premium.
+  - **Tooltips:** Se agregaron tooltips interactivos de navegador. Al pasar el cursor sobre cualquier nombre de aplicación o paquete, se muestra la ruta completa sin cortes.
+
+### 3. Optimización del Consumo de Batería del Watchdog (v0.4.9.1)
 - **Problema:** El servicio en primer plano `WatchdogForegroundService.kt` realizaba comprobaciones de estado de accesibilidad y VPN de forma continua cada 3 segundos, lo que causaba despertares constantes de CPU y un gasto excesivo de batería en el celular.
 - **Solución:** Se incremento el intervalo de sondeo del bucle de comprobaciones del Watchdog a 20 segundos (`20000L`). Esto reduce sustancialmente el número de ciclos de CPU activos y disminuye drásticamente el consumo de batería del celular, manteniendo una latencia de respuesta de seguridad óptima.
 - **Actualización OTA:** Se incrementó el `versionCode` a `53` y `versionName` a `"0.4.9.1"` tanto en la configuración de la app de Android como en el archivo `version.json` del servidor OTA para asegurar que los dispositivos detecten la nueva versión y se actualicen automáticamente.

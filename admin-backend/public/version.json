@@ -1,7 +1,7 @@
 {
-    "versionCode":  52,
-    "versionName":  "0.4.9",
+    "versionCode":  53,
+    "versionName":  "0.4.9.1",
     "url":  "https://raw.githubusercontent.com/CHKI541/Lock-Suite/main/admin-backend/public/locksuite-latest.apk",
-    "updatedAt":  "2026-07-25T23:47:39Z",
+    "updatedAt":  "2026-07-26T03:41:00Z",
     "installerBat":  "https://raw.githubusercontent.com/CHKI541/Lock-Suite/main/admin-backend/public/instalar_locksuite.bat"
 }

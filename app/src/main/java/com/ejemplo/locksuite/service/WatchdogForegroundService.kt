@@ -47,7 +47,7 @@ class WatchdogForegroundService : Service() {
                 }
             }
             
-            handler.postDelayed(this, 3000)
+            handler.postDelayed(this, 20000L)
         }
     }
 

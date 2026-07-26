@@ -280,7 +280,8 @@ function updateSidebarUI(e, t) {
 sidebarCloseBtn.addEventListener("click", closeDeviceSidebar), sidebarTabButtons.forEach(e => {
     e.addEventListener("click", () => {
         sidebarTabButtons.forEach(e => e.classList.remove("active")), sidebarTabPanels.forEach(e => e.classList.remove("active")), e.classList.add("active"), activeTabId = e.getAttribute("data-tab"), document.getElementById(activeTabId).classList.add("active")
-    });
+    })
+});
 const sidebarExpandBtn = document.getElementById("sidebar-expand-btn");
 if (sidebarExpandBtn) {
     sidebarExpandBtn.addEventListener("click", () => {

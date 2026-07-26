@@ -1,4 +1,4 @@
-# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.4.6)
+# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.4.9.1)
 
 ---
 
@@ -7,9 +7,14 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 ---
 
-## 🚀 Historial Reciente de Mejoras y Correcciones (Hasta v0.4.6)
+## 🚀 Historial Reciente de Mejoras y Correcciones (v0.4.9.1)
 
-### 1. Corrección del Bloqueo de Cuentas Google en FRP (v0.4.6)
+### 1. Optimización del Consumo de Batería del Watchdog (v0.4.9.1)
+- **Problema:** El servicio en primer plano `WatchdogForegroundService.kt` realizaba comprobaciones de estado de accesibilidad y VPN de forma continua cada 3 segundos, lo que causaba despertares constantes de CPU y un gasto excesivo de batería en el celular.
+- **Solución:** Se incrementó el intervalo de sondeo del bucle de comprobaciones del Watchdog a 20 segundos (`20000L`). Esto reduce sustancialmente el número de ciclos de CPU activos y disminuye drásticamente el consumo de batería del celular, manteniendo una latencia de respuesta de seguridad óptima.
+- **Actualización OTA:** Se incrementó el `versionCode` a `53` y `versionName` a `"0.4.9.1"` tanto en la configuración de la app de Android como en el archivo `version.json` del servidor OTA para asegurar que los dispositivos detecten la nueva versión y se actualicen automáticamente.
+
+### 2. Corrección del Bloqueo de Cuentas Google en FRP (v0.4.6)
 - **Problema:** Al activar el bloqueo de Factory Reset Protection (FRP), se bloqueaba automáticamente la posibilidad de agregar o modificar cualquier cuenta de Google en el celular.
 - **Causa:** En la función `setLegacyFrpHardening` en `PolicyManager.kt`, se aplicaba automáticamente la restricción `UserManager.DISALLOW_MODIFY_ACCOUNTS` del sistema Android.
 - **Solución:** Se eliminó esta restricción del flujo automático de FRP. Ahora el usuario puede agregar y administrar cuentas en el celular con normalidad mientras que el FRP sigue activo y restringido únicamente a las cuentas propietarias especificadas por LockSuite. Si se desea bloquear las cuentas de manera explícita, se puede seguir activando la restricción a demanda desde el panel de control general ("Bloquear modificación de cuentas").
@@ -36,7 +41,7 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 - **Panel Web & Cloud Functions (Desplegados en Firebase)**:
   - `admin-backend/public/index.html` & `app.js`: Interfaz de administración en tiempo real.
-  - `admin-backend/public/version.json`: Registro de versión live para Auto-Update OTA (actualizado a v0.4.6 / VC 36).
+  - `admin-backend/public/version.json`: Registro de versión live para Auto-Update OTA (actualizado a v0.4.9.1 / VC 53).
   - `admin-backend/functions/index.js`: Envíos FCM de comandos a los dispositivos.
 
 

@@ -56,11 +56,7 @@ object NetworkForwarder {
             // apuntando cualquier dominio permitido a la IP que quisiera. Con estos
             // celulares conectándose a redes que no controlamos, es una defensa barata
             // que conviene tener.
-            try {
-                socket.connect(upstream, UPSTREAM_DNS_PORT)
-            } catch (e: Exception) {
-                android.util.Log.w("KosherVPN", "No se pudo fijar el resolutor upstream: ${e.message}")
-            }
+
             socket.send(DatagramPacket(packet.payload, packet.payload.size, upstream, UPSTREAM_DNS_PORT))
 
             val responseBuffer = ByteArray(4096)

@@ -204,9 +204,20 @@ class KosherVpnService : VpnService() {
                     continue
                 }
 
+                val firstByte = buffer[0].toInt() and 0xFF
+                val version = firstByte shr 4
+                android.util.Log.i("KosherVPN", "TUN_READ: len=$length version=$version")
+
                 // Solo decodificar paquetes UDP dirigidos al puerto 53 (DNS)
-                val packet = IpPacketParser.parse(buffer, length) ?: continue
-                if (packet.protocol != IpPacketParser.PROTO_UDP || packet.destPort != 53) continue
+                val packet = IpPacketParser.parse(buffer, length)
+                if (packet == null) {
+                    android.util.Log.i("KosherVPN", "TUN_READ: IpPacketParser.parse devolvio null")
+                    continue
+                }
+                if (packet.protocol != IpPacketParser.PROTO_UDP || packet.destPort != 53) {
+                    android.util.Log.i("KosherVPN", "TUN_READ: No es UDP port 53 (proto=${packet.protocol} port=${packet.destPort})")
+                    continue
+                }
 
                 val executor = dnsExecutor
                 if (executor != null && !executor.isShutdown) {

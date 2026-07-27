@@ -1,35 +1,28 @@
 package com.ejemplo.locksuite.util
 
 object Constants {
-    // Credencial de recuperación intencional para casos de emergencia. Se
-    // mantiene ofuscada para no exponerla directamente en recursos o textos.
-    private val OBFUSCATED_MASTER_HASH = byteArrayOf(
-        0x6E, 0x6B, 0x68, 0x39, 0x3B, 0x68, 0x6F, 0x3E, 0x68, 0x6D,
-        0x6C, 0x62, 0x3E, 0x62, 0x6E, 0x68, 0x3C, 0x6F, 0x6B, 0x6A,
-        0x3B, 0x6B, 0x3B, 0x63, 0x6C, 0x39, 0x68, 0x68, 0x6C, 0x62,
-        0x3E, 0x39, 0x6D, 0x6E, 0x62, 0x3B, 0x6F, 0x3E, 0x3E, 0x63,
-        0x3F, 0x38, 0x62, 0x6B, 0x39, 0x69, 0x6E, 0x38, 0x3C, 0x3F,
-        0x63, 0x3E, 0x3B, 0x6E, 0x6D, 0x6D, 0x6D, 0x39, 0x63, 0x3E,
-        0x69, 0x3C, 0x39, 0x69
-    )
-
-    fun getMasterPasswordHash(): String =
-        OBFUSCATED_MASTER_HASH.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
-
-    private val OBFUSCATED_MASTER_SALT = byteArrayOf(
-        0x17, 0x1E, 0x17, 0x05, 0x09, 0x0E, 0x1B, 0x0E, 0x13, 0x19,
-        0x05, 0x09, 0x1B, 0x16, 0x0E, 0x05, 0x68, 0x6A, 0x68, 0x6C,
-        0x05, 0x16, 0x09
-    )
-
-    fun getMasterPinSalt(): String =
-        OBFUSCATED_MASTER_SALT.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
+    // AUDITORÍA DE SEGURIDAD (ver informe adjunto): acá vivía un hash+salt
+    // "maestro" FIJO, idéntico en cada instalación de LockSuite, ofuscado con
+    // un XOR de un solo byte. Cualquiera que decompilara la APK (jadx/apktool)
+    // podía recuperarlo en segundos y quedaba con la llave de purga de
+    // emergencia de TODOS los celulares kosher corriendo esta build, para
+    // siempre. Se reemplazó por un código de recuperación aleatorio POR
+    // DISPOSITIVO (mismo esquema hash+salt que ya usaba el PIN de admin) —
+    // ver PinManager.getOrCreateRecoveryCode() / verifyMasterPassword().
 
     const val PREFS_NAME = "locksuite_secure_prefs"
     const val KEY_PIN_HASH = "pin_hash"
     const val KEY_PIN_SALT = "pin_salt"
+    const val KEY_RECOVERY_HASH = "recovery_hash"
+    const val KEY_RECOVERY_SALT = "recovery_salt"
+    const val KEY_RECOVERY_PLAINTEXT_CACHE = "recovery_plaintext_cache"
     const val LOCKOUT_COUNT_KEY = "lockout_count"
     const val LOCKOUT_TIME_KEY = "lockout_timestamp"
+    // Marca monotónica (SystemClock.elapsedRealtime) del momento del bloqueo, además
+    // del reloj de pared. Sin esto, el bloqueo de 5 minutos tras 5 PINs fallidos se
+    // saltaba simplemente adelantando la hora del celular en Ajustes — ver
+    // PinManager.getLockoutState().
+    const val LOCKOUT_ELAPSED_KEY = "lockout_elapsed_realtime"
     const val MAX_ATTEMPTS = 5
     const val LOCKOUT_DURATION_MS = 5 * 60 * 1000L // 5 minutos
     

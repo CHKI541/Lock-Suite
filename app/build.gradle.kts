@@ -14,10 +14,19 @@ android {
         applicationId = "com.ejemplo.locksuite"
         minSdk = 24
         targetSdk = 34
-        versionCode = 55
-        versionName = "0.4.9.3"
+        versionCode = 56
+        versionName = "0.5.0"
 
         ndk {
+            // Antes solo arm64-v8a: la app no se podía instalar en NINGÚN equipo de 32
+            // bits (armeabi-v7a), que sigue siendo común en celulares Android más
+            // viejos/económicos — justo el perfil que muchas veces se reutiliza como
+            // "celular kosher". Restaurado armeabi-v7a.
+            // 🛑 Requiere una compilación de prueba: si la versión de MediaPipe
+            // Tasks-Vision usada no publica binarios de 32 bits, el build puede fallar
+            // o la Capa 2 (IA) puede fallar solo en esos equipos — en ese caso, la
+            // alternativa es mantener solo arm64-v8a pero documentarlo como requisito
+            // mínimo del producto en vez de que sea una limitación accidental.
             abiFilters.addAll(setOf("arm64-v8a", "armeabi-v7a"))
         }
     }
@@ -40,8 +49,17 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // 🛑 Antes false: sin R8, decompilar el .apk devuelve nombres de clases,
+            // métodos y campos EXACTAMENTE como en el código fuente (así se encontró
+            // en segundos el problema de la contraseña maestra, ver informe de
+            // auditoría §1.1/§1.6). Activado junto con reglas conservadoras en
+            // proguard-rules.pro. IMPORTANTE: no se pudo compilar/probar un build de
+            // Android en el entorno donde se hizo este cambio — antes de publicar,
+            // generá un build de release real y probá TODAS las funciones a mano
+            // (VPN, accesibilidad, FCM, actualización OTA, exportar/importar
+            // presets), no solo que compile.
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

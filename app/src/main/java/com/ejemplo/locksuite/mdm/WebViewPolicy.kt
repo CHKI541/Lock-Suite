@@ -127,8 +127,22 @@ object WebViewPolicy {
 
         if (tokens.isEmpty()) return true // Si no hay tokens válidos, dejamos pasar por seguridad
 
-        // 3. Si el dominio consultado contiene al menos una palabra clave de la app, permitir
-        val isAppSpecific = tokens.any { token -> queriedDomain.contains(token) }
+        // 3. Si el dominio consultado contiene al menos una palabra clave de la app, permitir.
+        // ANTES: queriedDomain.contains(token) hacía un "contains" sobre el string
+        // completo del dominio. Esto permitía que un dominio que no tiene relación
+        // real con la app (por casualidad, o armado a propósito para evadir el
+        // filtro, ej. "evilmercadopagoscam.ru") quedara autorizado en el filtro
+        // DNS real solo por contener el token en cualquier parte del nombre —
+        // justo el tipo de hueco que rompe "imposible de evadir". Ahora se exige
+        // que el token sea una etiqueta completa del dominio (mercadopago.com,
+        // api.mercadopago.com) o un segmento delimitado por guiones dentro de una
+        // etiqueta (mercadopago-cdn.example.com, api-mercadopago.example.com),
+        // que son los patrones reales de nombres de backend/CDN, sin permitir que
+        // el token quede "escondido" dentro de una palabra más larga.
+        val domainLabels = queriedDomain.lowercase().split(".")
+        val isAppSpecific = tokens.any { token ->
+            domainLabels.any { label -> label == token || label.split("-").contains(token) }
+        }
         if (isAppSpecific) return true
 
         // 4. Si no es infraestructura ni contiene el nombre de la app, bloqueamos (Zendesk, búsquedas libres, etc.)

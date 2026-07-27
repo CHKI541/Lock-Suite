@@ -44,32 +44,42 @@ object ApkInstaller {
 
             val sessionId = packageInstaller.createSession(params)
             val session = packageInstaller.openSession(sessionId)
+            // session.close() se mueve a un finally: antes, si algo fallaba a mitad
+            // de la copia (out.write/fis.read), el control saltaba directo al catch
+            // de más abajo sin cerrar nunca "fis", "out" ni la sesión de
+            // PackageInstaller — quedaban colgados hasta que el sistema los
+            // recolectara, y con instalaciones fallidas repetidas se puede llegar
+            // al límite de sesiones activas y bloquear instalaciones futuras sin
+            // ningún aviso claro. "out"/"fis" ahora usan use{} (que cierra incluso
+            // ante excepción).
+            try {
+                session.openWrite("COSU", 0, -1).use { out ->
+                    FileInputStream(tempFile).use { fis ->
+                        val buffer = ByteArray(65536)
+                        var bytesRead: Int
+                        while (fis.read(buffer).also { bytesRead = it } != -1) {
+                            out.write(buffer, 0, bytesRead)
+                        }
+                        session.fsync(out)
+                    }
+                }
 
-            val out = session.openWrite("COSU", 0, -1)
-            val fis = FileInputStream(tempFile)
-            val buffer = ByteArray(65536)
-            var bytesRead: Int
-            while (fis.read(buffer).also { bytesRead = it } != -1) {
-                out.write(buffer, 0, bytesRead)
+                val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
+                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                } else {
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                }
+                val pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    sessionId,
+                    intent,
+                    flags
+                )
+                session.commit(pendingIntent.intentSender)
+            } finally {
+                session.close()
             }
-            session.fsync(out)
-            fis.close()
-            out.close()
-
-            val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                sessionId,
-                intent,
-                flags
-            )
-            session.commit(pendingIntent.intentSender)
-            session.close()
             return null // Iniciado con éxito
         } catch (e: Exception) {
             Log.e("ApkInstaller", "Error al iniciar la instalación", e)

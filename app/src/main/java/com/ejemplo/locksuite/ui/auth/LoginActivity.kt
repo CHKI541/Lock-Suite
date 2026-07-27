@@ -204,6 +204,29 @@ fun LoginScreen(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Llamada de emergencia: esta pantalla bloquea el botón Atrás
+                    // (ver onBackPressedDispatcher en onCreate), así que necesita una
+                    // salida real para poder llamar a emergencias si hace falta.
+                    IconButton(
+                        onClick = {
+                            try {
+                                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(dialIntent)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(navyMedium.copy(alpha = 0.5f), shape = CircleShape)
+                    ) {
+                        Text("📞", fontSize = 18.sp)
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
                     // Selector de idioma (Mundo)
                     Box {
                         IconButton(
@@ -468,7 +491,8 @@ fun LoginScreen(
                 // Barra superior con botón de regreso
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Start
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
                         onClick = { showPinInput = false },
@@ -481,6 +505,26 @@ fun LoginScreen(
                             contentDescription = LocaleManager.t("back"),
                             tint = Color.White
                         )
+                    }
+
+                    // Llamada de emergencia: la pantalla de PIN bloquea el botón Atrás
+                    // del sistema, así que necesita su propia salida a emergencias.
+                    IconButton(
+                        onClick = {
+                            try {
+                                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(dialIntent)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(navyMedium.copy(alpha = 0.5f), shape = CircleShape)
+                    ) {
+                        Text("📞", fontSize = 18.sp)
                     }
                 }
 

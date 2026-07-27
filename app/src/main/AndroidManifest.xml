@@ -208,6 +208,21 @@
             android:exported="false" />
 
         <!-- PACKAGE CHANGES RECEIVER (Sincronización en tiempo real al instalar/desinstalar apps) -->
+        <!--
+            El filtro para la acción interna "UPDATE_TIMEOUT" (usada solo para una
+            alarma propia de LockSuiteFirebaseService) se quitó a propósito: esa
+            alarma se programa con un Intent explícito (Intent(context,
+            PackageReceiver::class.java)), que Android entrega directo al
+            componente sin necesidad de intent-filter — lo mismo que ya hacía
+            "INSTALL_SAFETY_TIMEOUT" (SelfUpdater/PackageInstallStatusReceiver), que
+            nunca tuvo intent-filter propio y funciona igual. Con el filtro
+            declarado, como el receptor ya es exported=true (obligatorio para
+            recibir PACKAGE_ADDED/REMOVED/REPLACED del sistema), cualquier otra app
+            del dispositivo podía enviar un broadcast implícito con la acción
+            genérica "UPDATE_TIMEOUT" y forzar una re-aplicación anticipada de
+            restricciones de instalación — sin beneficio funcional real, ya que la
+            alarma legítima nunca dependió de ese filtro para entregarse.
+        -->
         <receiver
             android:name=".receiver.PackageReceiver"
             android:exported="true">
@@ -216,9 +231,6 @@
                 <action android:name="android.intent.action.PACKAGE_REMOVED" />
                 <action android:name="android.intent.action.PACKAGE_REPLACED" />
                 <data android:scheme="package" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="UPDATE_TIMEOUT" />
             </intent-filter>
         </receiver>
 

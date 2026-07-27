@@ -41,6 +41,12 @@ class AIPersonDetector private constructor(private val detector: ObjectDetector)
                    else bitmap.copy(Bitmap.Config.ARGB_8888, false)
         val mpImage = BitmapImageBuilder(argb).build()
         val result = detector.detect(mpImage)
+        // Misma corrección que en AIFaceDetector: reciclar la copia ARGB_8888
+        // propia (si hubo que crearla) una vez terminada la detección, sin tocar
+        // el bitmap original del llamador.
+        if (argb !== bitmap) {
+            argb.recycle()
+        }
         return result.detections()
             .filter { d -> d.categories().any { it.categoryName() == PERSON_LABEL } }
             .map { DetectedRegion(it.boundingBox().toIntRect(), DetectionSource.BODY) }

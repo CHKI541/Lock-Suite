@@ -48,11 +48,35 @@ object NetworkForwarder {
             socket.soTimeout = TIMEOUT_MS
 
             val upstream = getUpstreamDnsAddress(vpnService)
+            // connect() hace que el kernel descarte cualquier datagrama que no venga
+            // exactamente del resolutor al que le preguntamos. Antes el socket quedaba
+            // sin conectar y receive() aceptaba el PRIMER datagrama que llegara, viniera
+            // de donde viniera: alguien en la misma red Wi-Fi (un locutorio, un café, una
+            // red abierta) podía adelantarse al resolutor real y responder por él,
+            // apuntando cualquier dominio permitido a la IP que quisiera. Con estos
+            // celulares conectándose a redes que no controlamos, es una defensa barata
+            // que conviene tener.
+            try {
+                socket.connect(upstream, UPSTREAM_DNS_PORT)
+            } catch (e: Exception) {
+                android.util.Log.w("KosherVPN", "No se pudo fijar el resolutor upstream: ${e.message}")
+            }
             socket.send(DatagramPacket(packet.payload, packet.payload.size, upstream, UPSTREAM_DNS_PORT))
 
             val responseBuffer = ByteArray(4096)
             val responsePacket = DatagramPacket(responseBuffer, responseBuffer.size)
             socket.receive(responsePacket)
+
+            // Segunda verificación, independiente de la anterior: el ID de transacción
+            // de la respuesta tiene que coincidir con el de la consulta. Cubre el caso
+            // de un atacante en la misma red que además falsifique la IP de origen.
+            if (responsePacket.length < 12 || packet.payload.size < 2 ||
+                responseBuffer[0] != packet.payload[0] ||
+                responseBuffer[1] != packet.payload[1]
+            ) {
+                android.util.Log.w("KosherVPN", "Respuesta DNS descartada: no coincide el ID de transacción.")
+                return
+            }
 
             val responseBytes = responseBuffer.copyOfRange(0, responsePacket.length)
             val ipResponse = if (packet.isIpv6) {
@@ -76,7 +100,52 @@ object NetworkForwarder {
     }
 
     /**
-     * Responde inmediatamente con una dirección IP 0.0.0.0 para bloquear la consulta DNS en 0ms a nivel de red VPN.
+     * Calcula dónde termina la PRIMERA pregunta del payload DNS (QNAME + QTYPE +
+     * QCLASS), empezando en el byte 12. Devuelve -1 si la estructura no es válida.
+     *
+     * Hace falta para no copiar de más al armar la respuesta de bloqueo: ver el
+     * comentario largo en sendBlockedDnsResponse().
+     */
+    private fun findQuestionEnd(payload: ByteArray): Int {
+        var pos = 12
+        while (pos < payload.size) {
+            val len = payload[pos].toInt() and 0xFF
+            if (len == 0) {
+                pos += 1
+                return if (pos + 4 <= payload.size) pos + 4 else -1
+            }
+            if ((len and 0xC0) == 0xC0) {
+                // Puntero de compresión: ocupa 2 bytes y da por terminado el nombre.
+                pos += 2
+                return if (pos + 4 <= payload.size) pos + 4 else -1
+            }
+            pos += 1 + len
+        }
+        return -1
+    }
+
+    /**
+     * Responde inmediatamente con una dirección "nula" para bloquear la consulta DNS
+     * en 0ms a nivel de red VPN.
+     *
+     * Se corrigieron dos defectos que hacían que la respuesta de bloqueo fuera
+     * malformada en buena parte de los casos reales:
+     *
+     *  1) Se copiaba desde el byte 12 hasta el FINAL del paquete y se declaraba todo
+     *     eso como "la pregunta", con ARCOUNT=0. Pero el resolutor de Android manda
+     *     EDNS(0) en casi todas las consultas, o sea un registro OPT extra al final:
+     *     ese OPT terminaba metido en la respuesta donde el cliente esperaba el
+     *     registro A. Resultado: el cliente no encontraba la dirección, daba la
+     *     respuesta por inválida y reintentaba hasta agotar el timeout, en vez de
+     *     descartar el dominio al instante. Es exactamente el síntoma de "se traba /
+     *     tarda un montón" al abrir algo bloqueado. Ahora se copia SOLO la pregunta.
+     *
+     *  2) Se devolvía siempre un registro A (IPv4) aunque la consulta fuera AAAA
+     *     (IPv6), que es lo que preguntan primero muchas apps y navegadores modernos.
+     *     Un tipo de registro distinto al preguntado también se interpreta como
+     *     respuesta inválida. Ahora se responde con el mismo tipo que se preguntó
+     *     (A -> 0.0.0.0, AAAA -> ::) y, para cualquier otro tipo, con una respuesta
+     *     vacía correcta (NOERROR sin registros).
      */
     fun sendBlockedDnsResponse(
         packet: IpPacketParser.ParsedPacket,
@@ -89,27 +158,52 @@ object NetworkForwarder {
             val id0 = originalPayload[0]
             val id1 = originalPayload[1]
 
-            val questionPayload = originalPayload.copyOfRange(12, originalPayload.size)
+            val questionEnd = findQuestionEnd(originalPayload)
+            // Si no podemos leer la pregunta, no inventamos una respuesta: no responder
+            // hace que la consulta falle, que es el lado seguro para un filtro.
+            if (questionEnd < 0) return
 
-            val answerRecord = byteArrayOf(
-                0xc0.toByte(), 0x0c.toByte(),
-                0x00.toByte(), 0x01.toByte(),
-                0x00.toByte(), 0x01.toByte(),
-                0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x3c.toByte(),
-                0x00.toByte(), 0x04.toByte(),
-                0x00.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte()
-            )
+            val questionPayload = originalPayload.copyOfRange(12, questionEnd)
+            val qtype = ((originalPayload[questionEnd - 4].toInt() and 0xFF) shl 8) or
+                        (originalPayload[questionEnd - 3].toInt() and 0xFF)
 
-            val dnsResponse = ByteBuffer.allocate(12 + questionPayload.size + answerRecord.size)
+            val answerRecord: ByteArray? = when (qtype) {
+                1 -> byteArrayOf( // A -> 0.0.0.0
+                    0xC0.toByte(), 0x0C,
+                    0x00, 0x01,
+                    0x00, 0x01,
+                    0x00, 0x00, 0x00, 0x3C,
+                    0x00, 0x04,
+                    0x00, 0x00, 0x00, 0x00
+                )
+                28 -> byteArrayOf( // AAAA -> ::
+                    0xC0.toByte(), 0x0C,
+                    0x00, 0x1C,
+                    0x00, 0x01,
+                    0x00, 0x00, 0x00, 0x3C,
+                    0x00, 0x10,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                )
+                else -> null // NOERROR sin registros (NODATA): correcto para el resto de tipos
+            }
+
+            // Conservar el bit RD (recursión pedida) tal como venía en la consulta.
+            val originalFlags = ((originalPayload[2].toInt() and 0xFF) shl 8) or
+                                (originalPayload[3].toInt() and 0xFF)
+            val responseFlags = 0x8000 or (originalFlags and 0x0100) or 0x0080
+
+            val answerSize = answerRecord?.size ?: 0
+            val dnsResponse = ByteBuffer.allocate(12 + questionPayload.size + answerSize)
             dnsResponse.put(id0)
             dnsResponse.put(id1)
-            dnsResponse.putShort(0x8180.toShort()) // Response, No Error
+            dnsResponse.putShort(responseFlags.toShort()) // Response, No Error
             dnsResponse.putShort(1.toShort()) // QDCOUNT = 1
-            dnsResponse.putShort(1.toShort()) // ANCOUNT = 1
+            dnsResponse.putShort((if (answerRecord != null) 1 else 0).toShort()) // ANCOUNT
             dnsResponse.putShort(0.toShort()) // NSCOUNT = 0
             dnsResponse.putShort(0.toShort()) // ARCOUNT = 0
             dnsResponse.put(questionPayload)
-            dnsResponse.put(answerRecord)
+            if (answerRecord != null) dnsResponse.put(answerRecord)
 
             val ipResponse = if (packet.isIpv6) {
                 buildResponseIpPacketV6(packet, dnsResponse.array())

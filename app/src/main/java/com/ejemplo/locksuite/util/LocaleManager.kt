@@ -102,9 +102,18 @@ object LocaleManager {
         "block_acc_desc" to mapOf("es" to "LockSuite MDM necesita que el Servicio de Accesibilidad esté habilitado para poder aplicar las políticas de seguridad y protección empresarial.\n\nPor favor, actívelo en Ajustes.", "en" to "LockSuite MDM needs the Accessibility Service to be enabled to apply enterprise security and protection policies.\n\nPlease enable it in Settings.", "he" to "LockSuite MDM צריך ששירות הנגישות יהיה פעיל כדי להחיל מדיניות אבטחה והגנה ארגונית.\n\nאנא הפעל אותו בהגדרות."),
         "block_acc_btn" to mapOf("es" to "Ir a Ajustes", "en" to "Go to Settings", "he" to "עבור להגדרות"),
         "emerg_title" to mapOf("es" to "MENÚ DE EMERGENCIA MDM", "en" to "MDM EMERGENCY MENU", "he" to "תפריט חירום MDM"),
-        "emerg_warning" to mapOf("es" to "¡ATENCIÓN! ESTA OPERACIÓN ELIMINARÁ TODAS LAS RESTRICCIONES Y RESTABLECERÁ EL TELÉFONO DE FÁBRICA.", "en" to "WARNING! THIS OPERATION WILL REMOVE ALL RESTRICTIONS AND FACTORY RESET THE PHONE.", "he" to "אזהרה! פעולה זו תסיר את כל ההגבלות ותבצע איפוס יצרן לטלפון."),
+        // Corregido: executeFullPurge() nunca borra datos ni apps del usuario, solo
+        // quita Device Owner y las restricciones de LockSuite. El texto anterior
+        // decía "restablecerá el teléfono de fábrica", que no coincide con lo que
+        // el código realmente hace.
+        "emerg_warning" to mapOf("es" to "¡ATENCIÓN! ESTA OPERACIÓN ELIMINARÁ TODAS LAS RESTRICCIONES DE LOCKSUITE Y QUITARÁ LOS PERMISOS DE ADMINISTRADOR DEL DISPOSITIVO. NO BORRA TUS DATOS NI APLICACIONES, PERO ES IRREVERSIBLE Y EL CELULAR DEJARÁ DE ESTAR PROTEGIDO.", "en" to "WARNING! THIS OPERATION WILL REMOVE ALL LOCKSUITE RESTRICTIONS AND REVOKE DEVICE ADMIN PERMISSIONS. IT DOES NOT ERASE YOUR DATA OR APPS, BUT IT IS IRREVERSIBLE AND THE PHONE WILL NO LONGER BE PROTECTED.", "he" to "אזהרה! פעולה זו תסיר את כל הגבלות LockSuite ותבטל את הרשאות מנהל המכשיר. היא אינה מוחקת נתונים או אפליקציות, אך היא בלתי הפיכה והמכשיר לא יהיה מוגן יותר."),
         "emerg_pin" to mapOf("es" to "Ingrese PIN de Recuperación", "en" to "Enter Recovery PIN", "he" to "הזן קוד שחזור"),
-        "emerg_wipe" to mapOf("es" to "RESTABLECER AHORA", "en" to "RESET NOW", "he" to "אפס עכשיו")
+        "emerg_wipe" to mapOf("es" to "RESTABLECER AHORA", "en" to "RESET NOW", "he" to "אפס עכשיו"),
+
+        // Botón de llamada de emergencia (agregado en pantallas que bloquean el
+        // botón Atrás: BlockAccessibilityActivity y LoginActivity; también en
+        // EmergencyActivity por consistencia)
+        "emergency_call" to mapOf("es" to "Llamada de Emergencia", "en" to "Emergency Call", "he" to "שיחת חירום")
     )
 
     fun t(key: String): String {

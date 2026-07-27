@@ -28,13 +28,31 @@ class WatchdogForegroundService : Service() {
 
     private var lastBlockLaunchTime = 0L
     private var lastSyncTime = 0L
+    private var lastPrivateDnsEnforceTime = 0L
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val checkRunnable = object : Runnable {
         override fun run() {
             checkAccessibilityStatus()
-            
+
             // Garantizar que la VPN Kosher siga ejecutándose si alguna política la requiere
             com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(applicationContext)
+
+            // Re-imponer "DNS Privado = Desactivado" cada 60s mientras la VPN deba
+            // seguir activa. disablePrivateDns() solo se aplicaba una vez al arrancar
+            // el servicio VPN: si el usuario lo reactivaba después a mano desde
+            // Ajustes, quedaba encendido indefinidamente (hasta el próximo reinicio
+            // del servicio VPN) y el filtro dejaba de ver el tráfico DNS por completo.
+            val nowElapsed = android.os.SystemClock.elapsedRealtime()
+            if (nowElapsed - lastPrivateDnsEnforceTime > 60000) {
+                lastPrivateDnsEnforceTime = nowElapsed
+                if (com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(applicationContext)) {
+                    try {
+                        com.ejemplo.locksuite.mdm.PolicyManager(applicationContext).disablePrivateDns()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
 
             // Sincronizar periódicamente cada 90 segundos para mantener el estado "En línea" en la web sin abrir la app
             val now = android.os.SystemClock.elapsedRealtime()
@@ -46,7 +64,7 @@ class WatchdogForegroundService : Service() {
                     e.printStackTrace()
                 }
             }
-            
+
             handler.postDelayed(this, 20000L)
         }
     }

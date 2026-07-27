@@ -17,6 +17,13 @@ class AIFaceDetector private constructor(private val detector: FaceDetector) {
                     else bitmap.copy(Bitmap.Config.ARGB_8888, false)
         val mpImage = BitmapImageBuilder(argb).build()
         val result = detector.detect(mpImage)
+        // Si hubo que crear una copia ARGB_8888 (el bitmap de entrada venía en otro
+        // formato), reciclarla ya terminada la detección: antes se perdía sin
+        // liberar su memoria nativa. Solo se recicla la copia propia — nunca el
+        // bitmap original del llamador, que puede seguir usándolo después.
+        if (argb !== bitmap) {
+            argb.recycle()
+        }
         return result.detections().map {
             DetectedRegion(it.boundingBox().toIntRect(), DetectionSource.FACE)
         }

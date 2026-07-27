@@ -112,10 +112,15 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
                         }
                         Key.Enter -> {
                             if (!isConfirming) {
-                                if (pin1.length in 4..16) {
-                                    isConfirming = true
-                                } else {
+                                if (pin1.length !in 4..16) {
                                     errorMessage = "El PIN debe tener entre 4 y 16 dígitos"
+                                } else if (PinManager.isTrivialPin(pin1)) {
+                                    // Antes esta ruta (teclado físico / Enter) no aplicaba
+                                    // el chequeo de PIN débil que sí aplicaba el botón
+                                    // táctil "OK" — se podía evitar la validación.
+                                    errorMessage = "PIN muy débil (no use secuencias o dígitos idénticos)"
+                                } else {
+                                    isConfirming = true
                                 }
                             } else {
                                 if (pin1 == pin2) {
@@ -251,7 +256,7 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
                                     "OK" -> {
                                         if (!isConfirming) {
                                             if (pin1.length in 4..16) {
-                                                if (isTrivialPin(pin1)) {
+                                                if (PinManager.isTrivialPin(pin1)) {
                                                     errorMessage = "PIN muy débil (no use secuencias o dígitos idénticos)"
                                                 } else {
                                                     isConfirming = true
@@ -302,26 +307,6 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
     }
 }
 
-private fun isTrivialPin(pin: String): Boolean {
-    if (pin.all { it == pin[0] }) return true
-    
-    var ascending = true
-    for (i in 0 until pin.length - 1) {
-        if (pin[i + 1].code - pin[i].code != 1) {
-            ascending = false
-            break
-        }
-    }
-    if (ascending) return true
-
-    var descending = true
-    for (i in 0 until pin.length - 1) {
-        if (pin[i].code - pin[i + 1].code != 1) {
-            descending = false
-            break
-        }
-    }
-    if (descending) return true
-
-    return false
-}
+// isTrivialPin se movió a PinManager (security/PinManager.kt) para poder
+// reutilizarla también desde el diálogo "Cambiar PIN de Administrador" del
+// Dashboard y desde el manejador de teclado físico de esta misma pantalla.

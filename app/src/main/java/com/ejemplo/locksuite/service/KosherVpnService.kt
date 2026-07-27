@@ -1,6 +1,7 @@
 package com.ejemplo.locksuite.service
 
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.VpnService
 import android.content.Intent
 import android.os.ParcelFileDescriptor
@@ -19,17 +20,44 @@ import java.net.InetSocketAddress
 
 class KosherVpnService : VpnService() {
 
+    companion object {
+        // Resolutores DNS públicos más comunes. El filtro original solo
+        // capturaba consultas dirigidas al DNS virtual del sistema (10.0.0.1 /
+        // fd00::1); cualquier app que ignorase eso y apuntara directo a uno de
+        // estos servidores hardcodeados salía del túnel sin pasar por el
+        // filtro en absoluto. Agregarlos como rutas adicionales hace que sus
+        // consultas también entren al túnel. Esto NO cubre DNS-over-HTTPS/TLS
+        // ni QUIC (ver informe de auditoría §3.1: cerrar eso del todo requiere
+        // un túnel completo NAT, un cambio de arquitectura mayor).
+        private val KNOWN_PUBLIC_DNS_V4 = listOf(
+            "8.8.8.8", "8.8.4.4",               // Google
+            "1.1.1.1", "1.0.0.1",               // Cloudflare
+            "9.9.9.9", "149.112.112.112",       // Quad9
+            "208.67.222.222", "208.67.220.220"  // OpenDNS
+        )
+        private val KNOWN_PUBLIC_DNS_V6 = listOf(
+            "2001:4860:4860::8888", "2001:4860:4860::8844", // Google
+            "2606:4700:4700::1111", "2606:4700:4700::1001", // Cloudflare
+            "2620:fe::fe", "2620:fe::9"                      // Quad9
+        )
+    }
+
     private var vpnInterface: ParcelFileDescriptor? = null
     @Volatile private var running = false
     private val lifecycleLock = Any()
     private lateinit var connectivityManager: ConnectivityManager
     private var dnsExecutor: java.util.concurrent.ExecutorService? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var lastNetworkRestartAtMs: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         // Cargar la lista de bloqueo de anuncios de forma asíncrona al iniciar
         AdBlocker.loadAsync(applicationContext)
+        // Detectar cambios de red (Wi-Fi <-> datos moviles) para reestablecer
+        // el tunel proactivamente; ver registerNetworkWatcher() mas abajo.
+        registerNetworkWatcher()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,6 +120,23 @@ class KosherVpnService : VpnService() {
                 .addRoute("fd00::1", 128) // Captura todas las consultas dirigidas al DNS virtual IPv6
                 .setBlocking(true)
                 .setMtu(1500)
+
+            // Capturar también consultas dirigidas directo a resolutores públicos conocidos
+            // (ver comentario en la declaración de KNOWN_PUBLIC_DNS_V4/V6 más arriba).
+            KNOWN_PUBLIC_DNS_V4.forEach { dns ->
+                try {
+                    builder.addRoute(dns, 32)
+                } catch (e: Exception) {
+                    android.util.Log.w("KosherVPN", "No se pudo agregar ruta DNS pública $dns: ${e.message}")
+                }
+            }
+            KNOWN_PUBLIC_DNS_V6.forEach { dns ->
+                try {
+                    builder.addRoute(dns, 128)
+                } catch (e: Exception) {
+                    android.util.Log.w("KosherVPN", "No se pudo agregar ruta DNS pública $dns: ${e.message}")
+                }
+            }
 
             // Excluir la propia app LockSuite para que sus peticiones upstream/FCM no pasen por el túnel
             try {
@@ -250,9 +295,18 @@ class KosherVpnService : VpnService() {
         // 2. Bloqueo global de GIFs/Tenor si la opción está activa por el administrador
         val isGifsBlocked = PrefsHelper.getMdmPrefs(this).getBoolean("block_gifs", false)
         if (isGifsBlocked) {
-            val isTenorOrGiphy = queriedDomain.contains("tenor") || 
-                                 queriedDomain.contains("giphy") ||
-                                 queriedDomain.contains("gboard-stickers")
+            // Antes: queriedDomain.contains("tenor") sobre el string completo. Eso
+            // marcaba como GIF cualquier dominio que tuviera esas letras adentro de
+            // una palabra más larga (por ejemplo "tenor" aparece dentro de palabras
+            // normales en español), bloqueando sitios que no tienen nada que ver y
+            // degradando la experiencia sin motivo. Ahora se exige que sea una
+            // etiqueta completa del dominio o un segmento separado por guiones,
+            // igual que en WebViewPolicy.
+            val gifTokens = setOf("tenor", "giphy", "gboard-stickers")
+            val labels = queriedDomain.lowercase().split(".")
+            val isTenorOrGiphy = gifTokens.any { token ->
+                labels.any { label -> label == token || label.split("-").contains(token) }
+            } || labels.any { it == "gboard-stickers" }
             if (isTenorOrGiphy) {
                 android.util.Log.i("KosherVPN", "🚫 BLOQUEADO GIFS/STICKERS/TENOR: $queriedDomain")
                 com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
@@ -388,7 +442,77 @@ class KosherVpnService : VpnService() {
         android.util.Log.i("KosherVPN", "Servicio VPN detenido.")
     }
 
+    /**
+     * Registra un monitor de la red fisica por defecto para reestablecer el
+     * tunel VPN ante cambios de conectividad (Wi-Fi <-> datos moviles,
+     * reconexion tras un corte, etc.). Se apoya en que esta misma app ya se
+     * excluye de su propio tunel (ver addDisallowedApplication mas arriba en
+     * startVpn()), asi que su "red por defecto" refleja la red fisica real y
+     * no la VPN propia.
+     *
+     * Motivo: un cambio de red puede dejar la interfaz TUN "viva" pero
+     * efectivamente muerta (deja de enrutar trafico) sin lanzar ninguna
+     * excepcion dentro de runFilterLoop(), asi que el Watchdog externo (que
+     * solo verifica si el servicio sigue en pie) no lo detecta. Reestablecer
+     * la VPN proactivamente en cada cambio de red cierra ese hueco.
+     */
+    private fun registerNetworkWatcher() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        try {
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    android.util.Log.i("KosherVPN", "Cambio la red fisica por defecto; reestableciendo tunel VPN por las dudas.")
+                    restartVpn()
+                }
+            }
+            connectivityManager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (e: Exception) {
+            android.util.Log.w("KosherVPN", "No se pudo registrar el monitor de red: ${e.message}")
+        }
+    }
+
+    private fun unregisterNetworkWatcher() {
+        try {
+            networkCallback?.let { connectivityManager.unregisterNetworkCallback(it) }
+        } catch (e: Exception) {
+            // Ignorar: puede fallar si nunca llego a registrarse correctamente.
+        }
+        networkCallback = null
+    }
+
+    /**
+     * Reestablece el tunel sin depender de que el Watchdog externo lo note.
+     * Tiene un debounce corto porque un mismo evento de red fisica puede
+     * disparar varios callbacks casi simultaneos.
+     */
+    private fun restartVpn() {
+        val isCurrentlyRunning = synchronized(lifecycleLock) { running }
+        if (!isCurrentlyRunning) return // La VPN no esta activa; no reiniciar por cuenta propia.
+
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastNetworkRestartAtMs < 3000) return
+        lastNetworkRestartAtMs = now
+
+        android.util.Log.i("KosherVPN", "Reestableciendo tunel VPN tras cambio de conectividad.")
+        stopVpn()
+        startVpn()
+    }
+
+    /**
+     * Android invoca esto cuando revoca el permiso de VPN de la app (otra VPN
+     * toma el control, o el sistema fuerza la desconexion). La implementacion
+     * por defecto solo detiene el servicio; aca se reintenta reestablecer de
+     * inmediato en vez de esperar al proximo ciclo del Watchdog (hasta 20s).
+     */
+    override fun onRevoke() {
+        android.util.Log.w("KosherVPN", "onRevoke(): la VPN fue revocada externamente. Reintentando de inmediato.")
+        stopVpn()
+        startVpn()
+    }
+
     override fun onDestroy() {
+        unregisterNetworkWatcher()
         stopVpn()
         super.onDestroy()
     }

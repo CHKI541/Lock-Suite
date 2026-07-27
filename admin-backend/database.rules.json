@@ -10,7 +10,10 @@
     "deviceSecrets": {
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
-        ".write": "auth != null"
+        "pinHash": { ".write": "auth != null" },
+        "pinSalt": { ".write": "auth != null" },
+        "recoveryCode": { ".write": "auth != null" },
+        "commandSecret": { ".write": "auth != null && (!data.exists() || newData.val() === data.val())" }
       }
     },
     "authorizedAdmins": {

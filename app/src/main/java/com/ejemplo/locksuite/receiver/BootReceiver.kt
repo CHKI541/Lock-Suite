@@ -52,8 +52,15 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        fun ensureVpnRunning(context: Context) {
-            try {
+        /**
+         * Determina si alguna política activa requiere que la VPN Kosher esté
+         * corriendo. Extraído a una función compartida (antes esta condición
+         * vivía duplicada/implícita) para que este chequeo y el que hace el
+         * Watchdog para re-imponer DNS Privado periódicamente usen exactamente
+         * el mismo criterio y no se desincronicen con el tiempo.
+         */
+        fun shouldVpnBeRunning(context: Context): Boolean {
+            return try {
                 val prefs = try {
                     PrefsHelper.getMdmPrefs(context)
                 } catch (e: Exception) {
@@ -82,16 +89,24 @@ class BootReceiver : BroadcastReceiver() {
                     false
                 }
 
-                if (isVpnConfigBlocked || hasAdBlocking || hasGifsBlocked || hasWebViewBlocked ||
+                isVpnConfigBlocked || hasAdBlocking || hasGifsBlocked || hasWebViewBlocked ||
                     hasPerAppInternetBlocked || hasMercadoPagoVpnBlock
-                ) {
+            } catch (e: Exception) {
+                android.util.Log.e("BootReceiver", "Fallo evaluando shouldVpnBeRunning: ${e.message}")
+                false
+            }
+        }
+
+        fun ensureVpnRunning(context: Context) {
+            try {
+                if (shouldVpnBeRunning(context)) {
                     val vpnIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         context.startForegroundService(vpnIntent)
                     } else {
                         context.startService(vpnIntent)
                     }
-                    android.util.Log.i("BootReceiver", "Re-arrancando KosherVpnService (VpnBlocked=$isVpnConfigBlocked, WebView=$hasWebViewBlocked, PerApp=$hasPerAppInternetBlocked, MercadoPago=$hasMercadoPagoVpnBlock, AdBlock=$hasAdBlocking, Gifs=$hasGifsBlocked).")
+                    android.util.Log.i("BootReceiver", "Verificando KosherVpnService (shouldVpnBeRunning=true).")
                 }
             } catch (e: Exception) {
                 android.util.Log.e("BootReceiver", "Fallo al intentar iniciar KosherVpnService: ${e.message}")

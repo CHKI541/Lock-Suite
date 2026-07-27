@@ -77,6 +77,21 @@ object FirebaseDeviceSync {
         }
     }
 
+    /**
+     * Sincroniza el código de recuperación de emergencia EN TEXTO PLANO a
+     * deviceSecrets/{id}/recoveryCode. Solo lectura para admins autorizados
+     * (ver database.rules.json) — el dispositivo verifica localmente contra
+     * el hash+salt, nunca contra este valor en texto plano.
+     */
+    fun syncRecoveryCode(context: Context, plaintextCode: String) {
+        withAuth {
+            val secretsRef = FirebaseDatabase.getInstance().getReference("deviceSecrets/${deviceId(context)}")
+            secretsRef.updateChildren(
+                mapOf("recoveryCode" to plaintextCode)
+            ).addOnFailureListener { it.printStackTrace() }
+        }
+    }
+
     fun syncPinCredentials(context: Context, pinHash: String, pinSalt: String) {
         withAuth {
             // 1. Escribir credenciales reales en la ruta protegida deviceSecrets
@@ -174,6 +189,17 @@ object FirebaseDeviceSync {
                     "allowedAppCount" to 0,
                     "versionCode" to currentVersionCode,
                     "versionName" to currentVersionName,
+
+                    // Las reglas DNS POR APP (bloquear WebView / bloquear internet de
+                    // una app puntual) dependen de ConnectivityManager.getConnectionOwnerUid(),
+                    // que existe recién desde Android 10 (API 29). En equipos con
+                    // Android 7, 8 o 9 el filtro no puede saber qué app hizo cada
+                    // consulta DNS, así que esas reglas NO se aplican — y hasta ahora
+                    // eso pasaba en silencio: el panel mostraba el interruptor activado
+                    // igual. Se reporta explícitamente para que se vea desde el panel
+                    // en qué equipos esas reglas realmente rigen.
+                    "perAppDnsRulesSupported" to (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q),
+                    "androidSdkInt" to Build.VERSION.SDK_INT,
 
                     "wifiBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_WIFI),
                     "bluetoothBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH),

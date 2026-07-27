@@ -559,12 +559,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
+        // La última palabra en yiddish tenía una "n" latina suelta al final
+        // ("אומאינסטאלירn") en vez de la nun final hebrea ("ן"): como
+        // searchNodeByText hace coincidencia por substring sobre texto real de
+        // pantalla, esa entrada nunca podía matchear nada y quedaba muerta.
         val dangerousActions = listOf(
             "desactivar", "turn off", "disable",
             "forzar detención", "force stop", "deshabilitar",
             "quitar administrador", "quitar admin", "desinstalar", "uninstall",
             "הסר", "אלץ עצירה", "עצירה כפויה", "השבת", "ביטול", "הסרת התקנה",
-            "אפשטעלן", "דעאקטיקירן", "אומאינסטאלירn"
+            "אפשטעלן", "דעאקטיקירן", "אומאינסטאלירן"
         )
 
         val hasDangerousAction = searchNodeByText(root, dangerousActions)

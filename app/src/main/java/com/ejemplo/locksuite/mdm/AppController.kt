@@ -137,15 +137,24 @@ class AppController(private val context: Context) {
         } catch (e: Exception) {
             false
         }
-        val isHidden = try {
-            dpm.isApplicationHidden(adminComponent, packageName)
-        } catch (e: Exception) {
-            false
-        }
-        return prefsSuspended || osSuspended || (isHidden && prefsSuspended)
+        // Antes había un tercer término "|| (isHidden && prefsSuspended)": como
+        // prefsSuspended ya aparece antes en el OR, ese término era código muerto
+        // (nunca podía cambiar el resultado) y solo costaba una llamada Binder extra
+        // a isApplicationHidden en cada consulta. Eliminado.
+        return prefsSuspended || osSuspended
     }
 
     fun uninstallApp(packageName: String): Boolean {
+        if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
+            // A diferencia de hideApp/suspendApp, esta función no tenía este resguardo:
+            // cualquier llamador (código futuro, o el auto-desinstalador de
+            // PackageReceiver) podía pedir desinstalar com.android.systemui,
+            // com.android.phone, el teclado, o incluso LockSuite mismo. Device Owner
+            // suele bloquear la auto-desinstalación, pero no hay protección
+            // equivalente de la plataforma para el resto de systemEssential/Gboard.
+            android.util.Log.w("AppController", "Se rechazó desinstalar app crítica/protegida: $packageName")
+            return false
+        }
         return try {
             val packageInstaller = pm.packageInstaller
             val intent = Intent(context, com.ejemplo.locksuite.receiver.UninstallReceiver::class.java)
@@ -190,12 +199,21 @@ class AppController(private val context: Context) {
                     val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
                     val isUpdatedSystem = (app.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
                     val hasLauncher = pm.getLaunchIntentForPackage(app.packageName) != null
+                    val isHiddenNow = isAppHidden(app.packageName)
 
-                    // Clasificación de la aplicación
+                    // Clasificación de la aplicación.
+                    // "isHiddenNow" se agrega como tercer criterio para "Preinstalada":
+                    // dpm.setApplicationHidden(true) deshabilita el paquete, y con el
+                    // paquete deshabilitado pm.getLaunchIntentForPackage(...) devuelve
+                    // null aunque la app normalmente tenga ícono. Sin este criterio, una
+                    // app preinstalada con ícono (p.ej. Cámara) que el admin oculta
+                    // cambiaba de categoría a "Sistema" en la grilla mientras estuviera
+                    // oculta, y volvía a "Preinstalada" sola al des-ocultarla.
                     val appType = when {
                         !isSystem -> "Usuario"
                         isUpdatedSystem -> "Preinstalada"
                         hasLauncher -> "Preinstalada"
+                        isHiddenNow -> "Preinstalada"
                         else -> "Sistema"
                     }
 
@@ -203,7 +221,7 @@ class AppController(private val context: Context) {
                         packageName = app.packageName,
                         label = label,
                         icon = bitmap,
-                        isHidden = isAppHidden(app.packageName),
+                        isHidden = isHiddenNow,
                         isSuspended = isAppSuspended(app.packageName),
                         appType = appType,
                         isWebViewBlocked = WebViewBlockManager.isBlocked(context, app.packageName),

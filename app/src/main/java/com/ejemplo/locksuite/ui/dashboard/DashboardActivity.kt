@@ -1218,9 +1218,11 @@ fun AppRowItem(
 
             // Botón de desinstalar y Configuración Avanzada - Solo si no es crítica
             if (!app.isCritical) {
-                IconButton(onClick = { 
+                IconButton(onClick = {
+                    // Se quitó un Toast de depuración ("Engranaje presionado: $expanded")
+                    // que quedó de pruebas: le mostraba al admin un mensaje interno cada
+                    // vez que tocaba el engranaje de cada app en la lista.
                     expanded = !expanded
-                    Toast.makeText(context, "Engranaje presionado: $expanded", Toast.LENGTH_SHORT).show()
                 }) {
                     Icon(
                         imageVector = Icons.Default.Settings,
@@ -1555,6 +1557,11 @@ fun PresetsTabContent(context: Context) {
                                         val success = policyManager.importPolicyPresetJson(jsonStr)
                                         if (success) {
                                             Toast.makeText(context, "Perfil '$name' aplicado con éxito.", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            // Antes, si success era false (p.ej. JSON guardado corrupto)
+                                            // no se mostraba ningún mensaje: el admin tocaba "Aplicar"
+                                            // y no pasaba nada, sin ninguna pista de por qué.
+                                            Toast.makeText(context, "❌ Error al aplicar el perfil '$name'.", Toast.LENGTH_LONG).show()
                                         }
                                     } catch (e: SecurityException) {
                                         Toast.makeText(context, "🚨 ALERTA: ${e.message}", Toast.LENGTH_LONG).show()
@@ -1608,6 +1615,23 @@ fun ServicesTabContent(
 
     var stealthModeState by remember { mutableStateOf(isStealthActive) }
 
+    // Antes el estado del Watchdog se mostraba como "ACTIVO" en un string fijo,
+    // sin verificar nada real: si el servicio moría (p.ej. un OEM agresivo con la
+    // batería lo mata) el panel seguía mostrando "ACTIVO" igual, dando una falsa
+    // sensación de seguridad justo sobre el mecanismo que reaplica las
+    // restricciones. Ahora se consulta el estado real del servicio (sin remember,
+    // igual que las comprobaciones de Accesibilidad y VPN de más abajo: se
+    // reevalúa en cada recomposición para reflejar el estado actual).
+    val isWatchdogRunning = try {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        @Suppress("DEPRECATION")
+        am.getRunningServices(Int.MAX_VALUE).any {
+            it.service.className == com.ejemplo.locksuite.service.WatchdogForegroundService::class.java.name
+        }
+    } catch (e: Exception) {
+        false
+    }
+
     val navyMedium = Color(0xFF1E3E62)
     val accentOrange = Color(0xFFF1C40F)
 
@@ -1636,7 +1660,10 @@ fun ServicesTabContent(
                     )
                     
                     StatusLabelRow(label = "Licencia de Propietario (Device Owner)", value = if (isDeviceOwner) "ACTIVO (Seguridad de Sistema)" else "INACTIVO")
-                    StatusLabelRow(label = "Servicio Watchdog (Persistencia)", value = "ACTIVO (Servicio de Primer Plano)")
+                    StatusLabelRow(
+                        label = "Servicio Watchdog (Persistencia)",
+                        value = if (isWatchdogRunning) "ACTIVO (Servicio de Primer Plano)" else "⚠️ INACTIVO — reabra la app para reiniciarlo"
+                    )
                     StatusLabelRow(label = "Canal FCM de Control Remoto", value = "LISTO (Firebase Cloud Messaging)")
                     StatusLabelRow(label = "Modo Stealth (Launcher Oculto)", value = if (stealthModeState) "ACTIVADO" else "DESACTIVADO")
                 }
@@ -1722,6 +1749,12 @@ fun ServicesTabContent(
                                     onClick = {
                                         if (newPin.length < 4 || newPin.length > 16) {
                                             errorMsg = "El PIN debe tener entre 4 y 16 dígitos."
+                                        } else if (com.ejemplo.locksuite.security.PinManager.isTrivialPin(newPin)) {
+                                            // Antes este diálogo no validaba PINs triviales: un
+                                            // admin podía crear un PIN fuerte en el setup inicial
+                                            // y luego cambiarlo acá a algo como "1234" sin ningún
+                                            // aviso, debilitando la protección real del equipo.
+                                            errorMsg = "PIN muy débil (no use secuencias o dígitos idénticos)."
                                         } else if (newPin != confirmPin) {
                                             errorMsg = "Los PINs no coinciden."
                                         } else {

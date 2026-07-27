@@ -139,12 +139,18 @@ class PolicyManager(private val context: Context) {
     fun setHideSuspendedApps(block: Boolean) {
         val prefs = PrefsHelper.getMdmPrefs(context)
         prefs.edit().putBoolean("hide_suspended_apps", block).apply()
-        // Re-enforce on current suspended apps
+        // BUG: este bucle llamaba a appController.suspendApp(app.packageName, true)
+        // — es decir, para toda app YA suspendida, la volvía a suspender (sin
+        // depender de "block"), sin tocar nunca el ícono. "hide_suspended_apps" no
+        // se lee en ningún otro lugar del código, así que el switch "Ocultar ícono
+        // al suspender aplicaciones" no ocultaba ningún ícono: un botón fantasma.
+        // Corregido para que realmente oculte/muestre el ícono de las apps
+        // actualmente suspendidas según el nuevo valor del switch.
         val appController = AppController(context)
         val installedApps = appController.getUserApps()
         for (app in installedApps) {
             if (app.isSuspended) {
-                appController.suspendApp(app.packageName, true)
+                appController.hideApp(app.packageName, block)
             }
         }
     }
@@ -279,13 +285,38 @@ class PolicyManager(private val context: Context) {
     fun setVpnConfigBlocked(block: Boolean): Boolean {
         return try {
             if (block) {
-                // Forzar a LockSuite como la VPN permanente (Always-on) con modo lockdown estricto.
-                // Esto impide que el usuario desactive la VPN o navegue sin el filtro activo.
+                // Forzar a LockSuite como la VPN permanente (Always-on) con modo lockdown
+                // estricto: si la VPN se cae, Android corta TODO el internet en vez de dejarlo
+                // pasar sin filtro. Decision deliberada (a pedido explicito, 2026-07-27): se
+                // prioriza "sin internet un instante" por sobre "con internet sin filtro".
+                //
+                // Esto YA causo una regresion real (ver walkthrough.md v0.4.3 e informe de
+                // auditoria SS3.2): con lockdown=true y sin mas resguardos, una caida de la VPN
+                // dejaba el equipo sin internet hasta un reinicio manual. La respuesta correcta
+                // no es volver a lockdown=false (evadible: alcanza con matar el proceso de la
+                // VPN), sino que la VPN se autorepare lo mas rapido posible: ver
+                // KosherVpnService.onRevoke() y su monitor de cambios de red, mas el Watchdog
+                // que ya reintenta levantarla cada 20s (WatchdogForegroundService /
+                // BootReceiver.ensureVpnRunning). En Android 10+ ademas se agrega la propia app
+                // a la lista blanca de lockdown para que, aunque la VPN caiga un instante,
+                // LockSuite conserve acceso a Firebase y pueda seguir reportando estado,
+                // recibiendo comandos remotos y reintentando el arranque de la VPN.
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        dpm.setAlwaysOnVpnPackage(
+                            adminComponent,
+                            context.packageName,
+                            true,
+                            setOf(context.packageName)
+                        )
                         disablePrivateDns()
-                        android.util.Log.i("PolicyManager", "Always-on VPN activa (lockdown=false) sobre ${context.packageName}")
+                        android.util.Log.i("PolicyManager", "Always-on VPN activa (lockdown=true, allowlist propia) sobre ${context.packageName}")
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        // Sin API de lockdown allowlist antes de Android 10 (API 29): si la VPN
+                        // cae, LockSuite tambien pierde red hasta que el Watchdog la reinicie.
+                        dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
+                        disablePrivateDns()
+                        android.util.Log.i("PolicyManager", "Always-on VPN activa (lockdown=true) sobre ${context.packageName}")
                     }
                 } catch (e: Exception) {
                     android.util.Log.w("PolicyManager", "No se pudo configurar Always-on VPN: ${e.message}")
@@ -663,6 +694,18 @@ class PolicyManager(private val context: Context) {
         prefs.edit().putString("local_presets_map", obj.toString()).apply()
     }
 
+    // NOTA DE SEGURIDAD (ver informe de auditoría §2.4/§3.4): esta clave HMAC es un
+    // string fijo igual en todas las instalaciones — sirve para detectar corrupción o
+    // edición manual accidental del archivo .locksuite, NO para impedir que alguien
+    // con conocimientos técnicos genere una firma válida para un preset propio (podría
+    // extraer esta clave de la APK). La barrera de seguridad REAL que impide llamar a
+    // importPolicyPresetJson() es otra, según la vía: (a) desde DashboardActivity, exige
+    // sesión de admin ya autenticada con PIN; (b) desde el comando remoto
+    // APPLY_PRESET_PROFILE, exige la firma HMAC por dispositivo de LockSuiteFirebaseService
+    // (secreto aleatorio, distinto de este). Si en el futuro se agrega una vía nueva hacia
+    // esta función sin pasar por (a) o (b), este HMAC por sí solo NO alcanza para protegerla.
+    // La solución de fondo (clave asimétrica: privada solo en el servidor, pública en la
+    // app) requiere cambios en el backend que están fuera del alcance de esta pasada.
     private fun computeHmacSha256(data: String): String {
         return try {
             val secretKey = "LockSuiteMDM_Preset_HMAC_SecretKey_2026"
@@ -739,6 +782,20 @@ class PolicyManager(private val context: Context) {
         }
         if (isScreenCaptureBlocked()) {
             setScreenCaptureBlocked(true)
+        }
+
+        // Reforzar Always-on VPN + lockdown si la restriccion de VPN esta activa. La
+        // restriccion DISALLOW_CONFIG_VPN ya se reaplica arriba en el forEach generico,
+        // pero eso no reconfigura el Always-on/lockdown de DevicePolicyManager en si (es
+        // un ajuste de sistema aparte que Android no reasigna solo). Sin esto, si por
+        // cualquier motivo el sistema perdiera esa configuracion (reset de OEM, etc.)
+        // mientras la preferencia sigue guardada como activa, el dispositivo quedaria
+        // con el filtro nominalmente "activo" pero sin el lockdown real detras. Al
+        // llamarse tambien desde WatchdogWorker cada 15 min, esto ademas hace que un
+        // dispositivo ya aprovisionado adopte solo un cambio futuro de lockdown (como
+        // el de este mismo commit) sin necesitar re-tocar el switch a mano.
+        if (isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)) {
+            setVpnConfigBlocked(true)
         }
 
         // Aplicar proxy de bloqueo de internet si está activado

@@ -59,12 +59,23 @@ class PackageReceiver : BroadcastReceiver() {
             val isInstallBlocked = prefs.getBoolean("install_apps_blocked_admin", false) || prefs.getBoolean("install_blocked_programmatic", false)
             if (isInstallBlocked) {
                 val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
-                // Evitar desinstalar nuestra propia app o las apps permitidas
-                val isAllowed = allowed.contains(packageName) || packageName == context.packageName
+                val appController = AppController(context)
+                // Evitar desinstalar nuestra propia app, las apps permitidas, o
+                // cualquier paquete crítico del sistema (systemUI, telefonía, GMS,
+                // teclado, etc). ANTES solo se excluían "allowed_packages" (pensado
+                // para apps de usuario de la tienda kosher) y la propia app: una
+                // actualización silenciosa de un componente del sistema — p.ej.
+                // Google Play Services actualizándose en segundo plano vía Play
+                // Store — también dispara ACTION_PACKAGE_ADDED, y si ese paquete no
+                // estaba en "allowed_packages" este receptor intentaba desinstalarlo
+                // automáticamente. Desinstalar GMS rompería FCM (el canal de control
+                // remoto) y gran parte del teléfono: exactamente lo que el requisito
+                // de "nunca debe trabarse ni perder el control remoto" prohíbe.
+                val isAllowed = allowed.contains(packageName) || packageName == context.packageName ||
+                    appController.isCritical(packageName) || appController.isPartialBlockOnly(packageName)
                 if (!isAllowed) {
                     Log.w("PackageReceiver", "🚫 Intento de instalación no autorizado: $packageName. Desinstalando...")
                     try {
-                        val appController = AppController(context)
                         appController.uninstallApp(packageName)
                     } catch (e: Exception) {
                         e.printStackTrace()

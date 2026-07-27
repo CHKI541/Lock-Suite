@@ -141,5 +141,31 @@ fun BlockAccessibilityScreen() {
                 fontWeight = FontWeight.Bold
             )
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Botón de llamada de emergencia: esta pantalla bloquea el botón Atrás y se
+        // relanza sola cada 15s mientras la Accesibilidad esté apagada, así que
+        // necesita una salida real para poder llamar a emergencias si hace falta.
+        TextButton(
+            onClick = {
+                try {
+                    val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(dialIntent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    Toast.makeText(context, "Error al abrir el marcador", Toast.LENGTH_SHORT).show()
+                }
+            }
+        ) {
+            Text(
+                text = "📞 " + LocaleManager.t("emergency_call"),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+        }
     }
 }

@@ -19,8 +19,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 object SelfUpdater {
-    private const val VERSION_URL = "https://raw.githubusercontent.com/CHKI541/Lock-Suite/main/admin-backend/public/version.json"
-    private const val FALLBACK_VERSION_URL = "https://locksuite-nueva.web.app/version.json"
+    private const val VERSION_URL = "https://locksuite-nueva.web.app/version.json"
+    private const val FALLBACK_VERSION_URL = "https://locksuite-nueva.firebaseapp.com/version.json"
 
     suspend fun checkAndPerformUpdate(context: Context, showToasts: Boolean = false, onProgress: ((Int) -> Unit)? = null): String? {
         return withContext(Dispatchers.IO) {
@@ -114,34 +114,40 @@ object SelfUpdater {
 
                 val sessionId = packageInstaller.createSession(params)
                 val session = packageInstaller.openSession(sessionId)
+                // session.close() en finally: antes, si la copia fallaba a mitad de
+                // camino, "fis"/"out"/la sesión de PackageInstaller quedaban sin
+                // cerrar (saltaba directo al catch de abajo), acumulando sesiones
+                // colgadas ante fallos repetidos de auto-actualización.
+                try {
+                    session.openWrite("COSU", 0, -1).use { out ->
+                        FileInputStream(tempFile).use { fis ->
+                            val buffer = ByteArray(65536)
+                            var bytesRead: Int
+                            while (fis.read(buffer).also { bytesRead = it } != -1) {
+                                out.write(buffer, 0, bytesRead)
+                            }
+                            session.fsync(out)
+                        }
+                    }
 
-                val out = session.openWrite("COSU", 0, -1)
-                val fis = FileInputStream(tempFile)
-                val buffer = ByteArray(65536)
-                var bytesRead: Int
-                while (fis.read(buffer).also { bytesRead = it } != -1) {
-                    out.write(buffer, 0, bytesRead)
+                    val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
+                    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                    } else {
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                    }
+                    val pendingIntent = PendingIntent.getBroadcast(
+                        context,
+                        sessionId,
+                        intent,
+                        flags
+                    )
+
+                    session.commit(pendingIntent.intentSender)
+                    installCommitSubmitted = true
+                } finally {
+                    session.close()
                 }
-                session.fsync(out)
-                fis.close()
-                out.close()
-
-                val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
-                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-                } else {
-                    PendingIntent.FLAG_UPDATE_CURRENT
-                }
-                val pendingIntent = PendingIntent.getBroadcast(
-                    context,
-                    sessionId,
-                    intent,
-                    flags
-                )
-
-                session.commit(pendingIntent.intentSender)
-                installCommitSubmitted = true
-                session.close()
 
                 tempFile.delete()
                 return@withContext null
@@ -215,34 +221,39 @@ object SelfUpdater {
 
                 val sessionId = packageInstaller.createSession(params)
                 val session = packageInstaller.openSession(sessionId)
+                // Mismo problema que en checkAndPerformUpdate: session.close() se
+                // mueve a un finally para que "fis"/"out"/la sesión siempre se
+                // cierren, incluso si la copia falla a mitad de camino.
+                try {
+                    session.openWrite("COSU", 0, -1).use { out ->
+                        FileInputStream(tempFile).use { fis ->
+                            val buffer = ByteArray(65536)
+                            var bytesRead: Int
+                            while (fis.read(buffer).also { bytesRead = it } != -1) {
+                                out.write(buffer, 0, bytesRead)
+                            }
+                            session.fsync(out)
+                        }
+                    }
 
-                val out = session.openWrite("COSU", 0, -1)
-                val fis = FileInputStream(tempFile)
-                val buffer = ByteArray(65536)
-                var bytesRead: Int
-                while (fis.read(buffer).also { bytesRead = it } != -1) {
-                    out.write(buffer, 0, bytesRead)
+                    val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
+                    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                    } else {
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                    }
+                    val pendingIntent = PendingIntent.getBroadcast(
+                        context,
+                        sessionId,
+                        intent,
+                        flags
+                    )
+
+                    session.commit(pendingIntent.intentSender)
+                    installCommitSubmitted = true
+                } finally {
+                    session.close()
                 }
-                session.fsync(out)
-                fis.close()
-                out.close()
-
-                val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
-                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-                } else {
-                    PendingIntent.FLAG_UPDATE_CURRENT
-                }
-                val pendingIntent = PendingIntent.getBroadcast(
-                    context,
-                    sessionId,
-                    intent,
-                    flags
-                )
-
-                session.commit(pendingIntent.intentSender)
-                installCommitSubmitted = true
-                session.close()
 
                 tempFile.delete()
                 return@withContext null

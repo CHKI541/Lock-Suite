@@ -40,8 +40,20 @@ class LockSuiteApplication : Application() {
         // Inicializar LocaleManager
         com.ejemplo.locksuite.util.LocaleManager.init(this)
 
-        // 2. Re-aplicar restricciones MDM locales
-        PolicyManager(this).reapplyAllRestrictions()
+        // 2. Re-aplicar restricciones MDM locales.
+        // Envuelto en try/catch: Application.onCreate() es el punto de entrada de
+        // todo el proceso — antes, si esta llamada fallaba (p.ej. un fallo
+        // transitorio de Binder con DevicePolicyManager al arrancar muy temprano
+        // durante el boot), una excepción sin capturar acá aborta el resto de
+        // onCreate() y además puede tirar abajo el proceso entero (crash), de
+        // modo que ni el Watchdog ni la VPN ni la sincronización con Firebase
+        // llegan a iniciarse en ese ciclo. Exactamente lo que "no debe trabarse
+        // ni crashear" prohíbe.
+        try {
+            PolicyManager(this).reapplyAllRestrictions()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         // 3. Iniciar el servicio Watchdog persistentemente
         val serviceIntent = Intent(this, WatchdogForegroundService::class.java)
@@ -56,7 +68,11 @@ class LockSuiteApplication : Application() {
         }
 
         // 3b. Garantizar que la VPN se inicie inmediatamente si la requiere la configuración
-        com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(this)
+        try {
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(this)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         // 4. Marcar el dispositivo como "En línea" de forma casi instantánea al iniciar la app
         //    (solo escribe el timestamp lastSeen, sin esperar la sincronización completa)

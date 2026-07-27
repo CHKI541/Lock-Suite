@@ -265,7 +265,7 @@ fun EmergencyScreen(onPurgeSuccess: () -> Unit) {
             Button(
                 onClick = {
                     if (inputPassword.isNotEmpty() && lockoutTimeRemaining <= 0) {
-                        if (PinManager.verifyMasterPassword(inputPassword)) {
+                        if (PinManager.verifyMasterPassword(context, inputPassword)) {
                             PinManager.resetAttempts(context)
                             onPurgeSuccess()
                         } else {
@@ -298,6 +298,29 @@ fun EmergencyScreen(onPurgeSuccess: () -> Unit) {
                     text = LocaleManager.t("emerg_wipe"),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            TextButton(
+                onClick = {
+                    try {
+                        val dialIntent = android.content.Intent(android.content.Intent.ACTION_DIAL).apply {
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(dialIntent)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        Toast.makeText(context, "Error al abrir el marcador", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            ) {
+                Text(
+                    text = "📞 " + LocaleManager.t("emergency_call"),
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
                 )
             }
         }

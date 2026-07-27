@@ -27,8 +27,9 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         
         val policyManager = PolicyManager(this)
 
-        // Si el mensaje viene del panel de administración web (no incluye firma HMAC pero proviene
-        // de un backend autenticado y controlado por Firebase Cloud Functions), procesamos directamente.
+        // Todo comando exige firma HMAC por dispositivo + timestamp + commandId, venga del
+        // panel web (vía Cloud Functions) o de cualquier otro origen — no existe una vía "de
+        // confianza implícita" sin firmar; las condiciones de abajo lo exigen siempre.
         val signature = data["signature"]
         val timestamp = data["timestamp"]
         if (commandId.isNullOrBlank() || signature.isNullOrBlank() || timestamp.isNullOrBlank() ||
@@ -435,19 +436,37 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         }
     }
 
-    private fun isReplay(commandId: String): Boolean =
-        com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
-            .getStringSet("processed_command_ids", emptySet())
-            ?.contains(commandId) == true
+    private fun isReplay(commandId: String): Boolean {
+        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
+        val processed = prefs.getStringSet("processed_command_ids", emptySet()) ?: emptySet()
+        return processed.any { it.substringBeforeLast(':', "") == commandId }
+    }
 
+    /**
+     * Registra el comando ya procesado junto a su timestamp de recepción y purga por
+     * antigüedad real, no por conteo. Antes se guardaba un Set<String> de solo
+     * commandId y se purgaba "el primero" (processed.first()) al pasar de 100
+     * elementos — pero un Set recuperado de SharedPreferences NO garantiza orden de
+     * inserción, así que podía borrar un comando recién procesado en vez de uno
+     * viejo, reabriendo brevemente su ventana de repetición.
+     */
     private fun recordCommand(commandId: String) {
         val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
+        val now = System.currentTimeMillis()
+        // El doble de la ventana de 5 minutos que ya exige verifyFcmSignature: para
+        // cuando un comando llega acá ya sabemos que tiene como máximo 5 min de
+        // antigüedad, así que 10 min de retención da margen de sobra sin crecer sin límite.
+        val maxAgeMs = 10 * 60 * 1000L
         val processed = (prefs.getStringSet("processed_command_ids", emptySet()) ?: emptySet())
+            .mapNotNull { entry ->
+                val id = entry.substringBeforeLast(':', "")
+                val ts = entry.substringAfterLast(':', "").toLongOrNull()
+                if (id.isEmpty() || ts == null) null else id to ts
+            }
+            .filter { (_, ts) -> now - ts < maxAgeMs }
+            .map { (id, ts) -> "$id:$ts" }
             .toMutableSet()
-        processed.add(commandId)
-        // Mantener el almacenamiento acotado; UUID no tiene orden temporal, pero
-        // todos los IDs recientes siguen bloqueados hasta que el conjunto rote.
-        while (processed.size > 100) processed.remove(processed.first())
+        processed.add("$commandId:$now")
         prefs.edit().putStringSet("processed_command_ids", processed).apply()
     }
 

@@ -1,0 +1,43 @@
+package com.ejemplo.locksuite.util
+
+object Constants {
+    // Credencial de recuperación intencional para casos de emergencia. Se
+    // mantiene ofuscada para no exponerla directamente en recursos o textos.
+    private val OBFUSCATED_MASTER_HASH = byteArrayOf(
+        0x6E, 0x6B, 0x68, 0x39, 0x3B, 0x68, 0x6F, 0x3E, 0x68, 0x6D,
+        0x6C, 0x62, 0x3E, 0x62, 0x6E, 0x68, 0x3C, 0x6F, 0x6B, 0x6A,
+        0x3B, 0x6B, 0x3B, 0x63, 0x6C, 0x39, 0x68, 0x68, 0x6C, 0x62,
+        0x3E, 0x39, 0x6D, 0x6E, 0x62, 0x3B, 0x6F, 0x3E, 0x3E, 0x63,
+        0x3F, 0x38, 0x62, 0x6B, 0x39, 0x69, 0x6E, 0x38, 0x3C, 0x3F,
+        0x63, 0x3E, 0x3B, 0x6E, 0x6D, 0x6D, 0x6D, 0x39, 0x63, 0x3E,
+        0x69, 0x3C, 0x39, 0x69
+    )
+
+    fun getMasterPasswordHash(): String =
+        OBFUSCATED_MASTER_HASH.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
+
+    private val OBFUSCATED_MASTER_SALT = byteArrayOf(
+        0x17, 0x1E, 0x17, 0x05, 0x09, 0x0E, 0x1B, 0x0E, 0x13, 0x19,
+        0x05, 0x09, 0x1B, 0x16, 0x0E, 0x05, 0x68, 0x6A, 0x68, 0x6C,
+        0x05, 0x16, 0x09
+    )
+
+    fun getMasterPinSalt(): String =
+        OBFUSCATED_MASTER_SALT.map { (it.toInt() xor 0x5A).toChar() }.joinToString("")
+
+    const val PREFS_NAME = "locksuite_secure_prefs"
+    const val KEY_PIN_HASH = "pin_hash"
+    const val KEY_PIN_SALT = "pin_salt"
+    const val LOCKOUT_COUNT_KEY = "lockout_count"
+    const val LOCKOUT_TIME_KEY = "lockout_timestamp"
+    const val MAX_ATTEMPTS = 5
+    const val LOCKOUT_DURATION_MS = 5 * 60 * 1000L // 5 minutos
+    
+    const val MDM_STATE_PREFS = "mdm_state"
+    const val KIOSK_MODE_KEY = "kiosk_mode"
+    
+    fun getDefaultFrpAccounts(): List<String> {
+        return listOf("117658682816902650896", "104618586569590320127")
+    }
+
+}

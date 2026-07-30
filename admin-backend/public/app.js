@@ -744,6 +744,7 @@ saveNameBtn.addEventListener("click", async () => {
         a = t.checked,
         i = {
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
+            flashingBlocked: ["BLOCK_FLASHING", "UNBLOCK_FLASHING"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
             uninstallAppsBlocked: ["BLOCK_UNINSTALL_APPS", "UNBLOCK_UNINSTALL_APPS"],
             adbBlocked: ["BLOCK_ADB", "UNBLOCK_ADB"],
@@ -1748,6 +1749,7 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
 
         const mapping = {
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
+            flashingBlocked: ["BLOCK_FLASHING", "UNBLOCK_FLASHING"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
             uninstallAppsBlocked: ["BLOCK_UNINSTALL_APPS", "UNBLOCK_UNINSTALL_APPS"],
             adbBlocked: ["BLOCK_ADB", "UNBLOCK_ADB"],
@@ -1804,6 +1806,7 @@ if (groupSidebar) {
         
         const mapping = {
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
+            flashingBlocked: ["BLOCK_FLASHING", "UNBLOCK_FLASHING"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
             uninstallAppsBlocked: ["BLOCK_UNINSTALL_APPS", "UNBLOCK_UNINSTALL_APPS"],
             adbBlocked: ["BLOCK_ADB", "UNBLOCK_ADB"],

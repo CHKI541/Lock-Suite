@@ -48,6 +48,7 @@ const ALLOWED_COMMANDS = new Set([
   "BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY",
   "BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN",
   "BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS",
+  "BLOCK_FLASHING", "UNBLOCK_FLASHING",
 ]);
 
 function canonicalCommandPayload(payload) {
@@ -271,3 +272,117 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     res.status(status).json({ error: e.message || "Error interno del servidor." });
   }
 });
+
+// API de Colectivos CABA (Cuando SUBO Proxy)
+exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: "public" }, async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return;
+  }
+
+  try {
+    const action = req.query.action || req.body.action;
+    if (!action) {
+      res.status(400).json({ error: "Falta el parámetro action (buscarLinea, obtenerParadas, obtenerArribos)." });
+      return;
+    }
+
+    if (action === "buscarLinea") {
+      const query = req.query.query || req.body.query;
+      if (!query) {
+        res.status(400).json({ error: "Falta el parámetro query." });
+        return;
+      }
+      const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/routes.action?query=${encodeURIComponent(query)}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Error consultando el servidor de lineas.");
+      const html = await response.text();
+      
+      const routes = [];
+      const liRegex = /<li><a href="[^"]*stops-for-route\.action[^"]*id=([^"&;\s]+)[^"]*"><span[^>]*>([^<]+)<\/span><span[^>]*>([^<]+)<\/span><\/a><\/li>/gi;
+      let match;
+      while ((match = liRegex.exec(html)) !== null) {
+        routes.push({
+          id: match[1],
+          shortName: match[2].replace("-", "").trim(),
+          longName: match[3].trim()
+        });
+      }
+      res.status(200).json({ routes });
+
+    } else if (action === "obtenerParadas") {
+      const routeId = req.query.routeId || req.body.routeId;
+      if (!routeId) {
+        res.status(400).json({ error: "Falta el parámetro routeId." });
+        return;
+      }
+      const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/stops-for-route.action?id=${routeId}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Error consultando el servidor de paradas.");
+      const html = await response.text();
+      
+      const stops = [];
+      const liRegex = /<li><a href="[^"]*stop\.action[^"]*id=([^"&;\s]+)[^"]*">([^<]+)<\/a><\/li>/gi;
+      let match;
+      while ((match = liRegex.exec(html)) !== null) {
+        const name = match[2].trim();
+        if (name.includes("Search by line") || name.includes("Nearby stops")) continue;
+        stops.push({
+          id: match[1],
+          name: name
+        });
+      }
+      res.status(200).json({ stops });
+
+    } else if (action === "obtenerArribos") {
+      const stopId = req.query.stopId || req.body.stopId;
+      if (!stopId) {
+        res.status(400).json({ error: "Falta el parámetro stopId." });
+        return;
+      }
+      const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/stop.action?id=${stopId}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Error consultando el servidor de arribos.");
+      const html = await response.text();
+      
+      const arrivals = [];
+      const rowRegex = /<tr class="arrivalsRow">([\s\S]*?)<\/tr>/g;
+      let match;
+      while ((match = rowRegex.exec(html)) !== null) {
+        const rowContent = match[1];
+        
+        const routeMatch = rowContent.match(/class="arrivalsRouteEntry"[^>]*><a[^>]*>([^<]+)<\/a>/i);
+        const route = routeMatch ? routeMatch[1].trim() : "";
+        
+        const destMatch = rowContent.match(/class="arrivalsDestinationEntry"[^>]*><a[^>]*>([^<]+)<\/a>/i);
+        const destination = destMatch ? destMatch[1].trim() : "";
+        
+        const timeEntryMatch = rowContent.match(/class="arrivalsTimeEntry"[^>]*>([^<]+)<\/span>/i);
+        const arrivalTime = timeEntryMatch ? timeEntryMatch[1].trim() : "";
+        
+        const minutesMatch = rowContent.match(/class="arrivalsStatusEntry[\s\S]*?">([\s\S]*?)<\/td>/i);
+        const minutes = minutesMatch ? minutesMatch[1].trim() : "";
+        
+        const isLive = !rowContent.includes("arrivalStatusNoInfo");
+        
+        arrivals.push({
+          route,
+          destination,
+          arrivalTime,
+          minutes: parseInt(minutes, 10) || 0,
+          isLive
+        });
+      }
+      res.status(200).json({ stopId, arrivals });
+    } else {
+      res.status(400).json({ error: "Acción no reconocida." });
+    }
+  } catch (err) {
+    console.error("colectivosApi error:", err);
+    res.status(500).json({ error: err.message || "Error interno." });
+  }
+});
+

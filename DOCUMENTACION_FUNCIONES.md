@@ -405,7 +405,7 @@ Estas restricciones son aplicadas directamente por la API `DevicePolicyManager` 
 
 | # | Función en PolicyManager | Restricción Nativa Android | Efecto en el Dispositivo |
 |---|---|---|---|
-| 1 | `setFactoryResetBlocked(true)` | `DISALLOW_FACTORY_RESET` | Desaparece la opción "Restablecer datos de fábrica" en Ajustes. El menú Recovery también queda bloqueado. |
+| 1 | `setFactoryResetBlocked(true)` | `DISALLOW_FACTORY_RESET` + Knox SDK (`allowFactoryReset`, ver §17) | Desaparece la opción "Restablecer datos de fábrica" en Ajustes en cualquier marca. El bloqueo del menú Recovery **solo está garantizado en equipos Samsung con el Knox SDK integrado y licenciado** (ver `KnoxHardening.kt`); en el resto de las marcas, `DISALLOW_FACTORY_RESET` bloquea únicamente la vía de Ajustes — el recovery puede seguir permitiendo el wipe. Validar en la matriz de equipos físicos antes de prometer el bloqueo de recovery fuera de Samsung. |
 | 2 | `setInstallAppsBlocked(true)` | `DISALLOW_INSTALL_APPS` (nativo) o control programático | Bloquea el instalador de paquetes. Cualquier intento de instalar un APK muestra "No permitido por el administrador". Si hay apps en la lista de permitidas, se activa en modo programático para filtrar por código sin bloquear a nivel de OS. |
 | 3 | `setUninstallAppsBlocked(true)` | `DISALLOW_UNINSTALL_APPS` | El botón "Desinstalar" aparece en gris e inactivo en todas las apps del sistema. |
 | 4 | `setDebuggingFeaturesBlocked(true)` | `DISALLOW_DEBUGGING_FEATURES` | Deshabilita las Opciones de Desarrollador y ADB. Los comandos ADB son rechazados aunque el cable esté conectado. |
@@ -421,6 +421,9 @@ Estas restricciones son aplicadas directamente por la API `DevicePolicyManager` 
 | 14 | `setAdjustVolumeBlocked(true)` | `DISALLOW_ADJUST_VOLUME` | Los botones físicos de volumen no tienen efecto. El nivel de volumen queda fijo. |
 | 15 | `setAppsControlBlocked(true)` | `DISALLOW_APPS_CONTROL` | El usuario no puede ir a Ajustes > Apps y modificar permisos, borrar datos ni forzar el cierre de apps. |
 | 16 | `setVpnConfigBlocked(true)` | `DISALLOW_CONFIG_VPN` | Prohíbe al usuario instalar, modificar o deshabilitar perfiles de VPN externos. Combina esto con Always-On para que solo la VPN de LockSuite pueda correr. |
+| 17 | `setFlashingBlocked(true)` | Knox SDK (`allowFirmwareRecovery`) — sin equivalente en `DevicePolicyManager` estándar | Bloquea el flasheo de firmware por Odin/Download mode. **Solo en equipos Samsung con Knox SDK integrado y licenciado**; no existe una forma pública de lograr esto en otras marcas. |
+
+**Nota sobre las filas 1 y 17 (Knox SDK):** ambas dependen de que se complete la integración manual descripta en `KnoxHardening.kt` (descargar `knoxsdk.jar` desde developer.samsungknox.com, licenciarlo gratis vía el Knox Partner Program y colocarlo en `app/libs/`). Hasta que eso se haga, las dos siguen comportándose como hasta ahora: la fila 1 solo bloquea Ajustes (como cualquier `DISALLOW_FACTORY_RESET` genérico) y la fila 17 quedó sin efecto (loguea una advertencia y no bloquea nada). Ver el informe "bloqueo de reset/flasheo" entregado por chat para el detalle completo de por qué esto es así y qué tan lejos se puede llegar en marcas no-Samsung.
 
 ---
 

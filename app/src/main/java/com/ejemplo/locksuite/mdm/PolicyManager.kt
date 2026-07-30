@@ -53,8 +53,34 @@ class PolicyManager(private val context: Context) {
     // POLÍTICAS DE SISTEMA
     // ─────────────────────────────────────────────
 
-    fun setFactoryResetBlocked(block: Boolean) =
-        setRestriction(UserManager.DISALLOW_FACTORY_RESET, block)
+    fun setFactoryResetBlocked(block: Boolean): Boolean {
+        val ok = setRestriction(UserManager.DISALLOW_FACTORY_RESET, block)
+        // DISALLOW_FACTORY_RESET por si solo saca la opcion de Ajustes: no hay garantia
+        // publica de que tambien bloquee el menu de recovery fuera de Samsung (ver informe
+        // de investigacion "bloqueo de reset/flasheo"). En Samsung con Knox SDK integrado
+        // y licenciado, KnoxHardening ademas intenta el bloqueo real de recovery; si el
+        // SDK no esta integrado o el equipo no es Samsung, esta llamada no hace nada (no
+        // falla ni afecta el resto de la funcion).
+        KnoxHardening.setFactoryResetBlocked(context, block)
+        return ok
+    }
+
+    fun setFlashingBlocked(block: Boolean): Boolean {
+        return try {
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean("flashing_blocked", block).apply()
+            // Bloqueo de flasheo por Odin/Download mode: solo existe via Knox SDK en
+            // Samsung — no hay equivalente en DevicePolicyManager estandar de Android.
+            KnoxHardening.setFlashingBlocked(context, block)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    fun isFlashingBlocked(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("flashing_blocked", false)
+    }
 
     fun setInstallAppsBlocked(block: Boolean): Boolean {
         val prefs = PrefsHelper.getMdmPrefs(context)
@@ -820,6 +846,17 @@ class PolicyManager(private val context: Context) {
             setFrpPolicy(getFrpAccounts(), useDefaultFrp(), true)
         }
 
+        // Reforzar el endurecimiento Knox (Samsung) de reset y flasheo tras reinicio.
+        // El DISALLOW_FACTORY_RESET generico ya se reaplico arriba en el forEach; esto
+        // solo repite la parte especifica de Knox, que no vive en ese listOf() porque
+        // no es una UserManager restriction.
+        if (isRestrictionEnabled(UserManager.DISALLOW_FACTORY_RESET)) {
+            KnoxHardening.setFactoryResetBlocked(context, true)
+        }
+        if (isFlashingBlocked()) {
+            KnoxHardening.setFlashingBlocked(context, true)
+        }
+
         // Suspender todos los navegadores independientes instalados si la política está activa
         if (areBrowsersSuspended()) {
             setBrowsersSuspended(true)
@@ -892,6 +929,11 @@ class PolicyManager(private val context: Context) {
         setInternetBlocked(false)
 
         clearFrpPolicy()
+
+        // Limpiar endurecimiento Knox (Samsung)
+        KnoxHardening.setFactoryResetBlocked(context, false)
+        KnoxHardening.setFlashingBlocked(context, false)
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("flashing_blocked", false).apply()
 
         // Habilitar Google Play Store
         try {

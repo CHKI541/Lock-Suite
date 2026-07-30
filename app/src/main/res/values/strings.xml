@@ -2,4 +2,9 @@
     <string name="app_name">LockSuite</string>
     <string name="device_admin_description">Proporciona políticas MDM empresariales y autoprotección para LockSuite.</string>
     <string name="accessibility_description">Permite a LockSuite MDM proteger sus políticas de seguridad y prevenir la evasión o desinstalación no autorizada del sistema.</string>
+
+    <!-- Licencia Knox Platform for Enterprise (nivel Standard, gratis). Generarla en
+         el dashboard del Knox Partner Program y reemplazar el placeholder de abajo.
+         Ver KnoxHardening.kt para el resto de los pasos de integracion. -->
+    <string name="knox_license_key" translatable="false">TU_LICENCIA_KPE_STANDARD_ACA</string>
 </resources>

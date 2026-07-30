@@ -14,8 +14,8 @@ android {
         applicationId = "com.ejemplo.locksuite"
         minSdk = 24
         targetSdk = 34
-        versionCode = 59
-        versionName = "0.5.3"
+        versionCode = 60
+        versionName = "0.5.4"
 
         ndk {
             // Antes solo arm64-v8a: la app no se podía instalar en NINGÚN equipo de 32
@@ -155,5 +155,6 @@ dependencies {
     // MediaPipe Tasks-Vision (AI Image Blocker)
     implementation(libs.mediapipe.tasks.vision)
 }
+
 
 

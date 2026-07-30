@@ -604,9 +604,14 @@ fun PoliciesTabContent(context: Context) {
         item {
             PolicyGroupCard(title = "Políticas de Sistema (Device Owner)") {
                 PolicySwitchRow(
-                    label = "Bloquear Restauración de Fábrica",
+                    label = "Bloquear Restauración de Fábrica (Ajustes + recovery en Samsung/Knox)",
                     isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_FACTORY_RESET) },
                     onCheckedChange = { policyManager.setFactoryResetBlocked(it).also { refreshKey++ } }
+                )
+                PolicySwitchRow(
+                    label = "Bloquear Flasheo (Odin / Download mode — solo Samsung/Knox)",
+                    isChecked = remember(refreshKey) { policyManager.isFlashingBlocked() },
+                    onCheckedChange = { policyManager.setFlashingBlocked(it).also { refreshKey++ } }
                 )
                 PolicySwitchRow(
                     label = "Bloquear Instalación de Apps",

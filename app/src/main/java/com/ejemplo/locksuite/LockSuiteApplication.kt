@@ -55,6 +55,14 @@ class LockSuiteApplication : Application() {
             e.printStackTrace()
         }
 
+        // 2b. Activar la licencia Knox (Samsung) — no hace nada en otras marcas ni
+        // mientras el SDK de Knox no este integrado (ver KnoxHardening.kt).
+        try {
+            com.ejemplo.locksuite.mdm.KnoxHardening.activateLicense(this)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // 3. Iniciar el servicio Watchdog persistentemente
         val serviceIntent = Intent(this, WatchdogForegroundService::class.java)
         try {

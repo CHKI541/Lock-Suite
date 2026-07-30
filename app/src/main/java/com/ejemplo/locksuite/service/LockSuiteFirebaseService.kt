@@ -90,6 +90,8 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "UNBLOCK_UNINSTALL_APPS" -> policyManager.setUninstallAppsBlocked(false)
                 "BLOCK_FACTORY_RESET" -> policyManager.setFactoryResetBlocked(true)
                 "UNBLOCK_FACTORY_RESET" -> policyManager.setFactoryResetBlocked(false)
+                "BLOCK_FLASHING" -> policyManager.setFlashingBlocked(true)
+                "UNBLOCK_FLASHING" -> policyManager.setFlashingBlocked(false)
                 "BLOCK_ADB" -> policyManager.setDebuggingFeaturesBlocked(true)
                 "UNBLOCK_ADB" -> policyManager.setDebuggingFeaturesBlocked(false)
                 "BLOCK_USER_SWITCH" -> policyManager.setUserSwitchBlocked(true)

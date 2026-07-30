@@ -1,4 +1,4 @@
-# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.4.9.3)
+# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.5.4)
 
 ---
 
@@ -7,9 +7,19 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 ---
 
-## 🚀 Historial Reciente de Mejoras y Correcciones (v0.4.9.3)
+## 🚀 Historial Reciente de Mejoras y Correcciones (v0.5.4)
 
-### 1. Soporte para Dispositivos de 32 bits (v0.4.9.3)
+### 1. Endurecimiento de Seguridad vía Samsung Knox SDK (v0.5.4)
+- **Mejora:** Integración del módulo `KnoxHardening.kt` para dispositivos Samsung. 
+- **Bloqueos adicionales:**
+  - **Flasheo de Firmware:** Bloqueo de Odin y Download Mode (`allowFirmwareRecovery(false)`). Evita que se reinstale la ROM de fábrica para evadir las políticas.
+  - **Menú Recovery:** Bloqueo real del restablecimiento de fábrica desde el menú de recuperación del hardware (`allowFactoryReset(false)`), impidiendo el "hard reset" físico.
+- **Funcionamiento:** Las llamadas se activan si el dispositivo es Samsung y se ha configurado una licencia KPE Standard gratuita en `strings.xml`. En otros dispositivos o sin la clave, el código se ejecuta de forma segura sin interrumpir las políticas estándar de Device Policy Manager.
+
+### 2. Proxy para Cuando SUBO - Colectivos CABA (v0.5.4)
+- **Mejora:** Agregada la Cloud Function `colectivosApi` que actúa como puente CORS seguro para consultar líneas, paradas y arribos en tiempo real desde la API móvil de "Cuando SUBO" de la tarjeta SUBE.
+
+### 3. Soporte para Dispositivos de 32 bits (v0.4.9.3)
 - **Problema:** Fallo al instalar `INSTALL_FAILED_NO_MATCHING_ABIS` en dispositivos Android con ROMs/sistemas operativos de 32 bits (como el Qin F21 Pro y otros teléfonos con teclado físico).
 - **Causa:** Las librerías nativas de MediaPipe/TensorFlow Lite estaban configuradas para compilarse únicamente para la arquitectura `arm64-v8a` (64 bits).
 - **Solución:** Se agregó la arquitectura `armeabi-v7a` a los filtros ABI (`abiFilters`) en `app/build.gradle.kts` para incluir las librerías nativas de 32 bits. Esto asegura la plena compatibilidad e instalación en dispositivos tanto de 32 bits como de 64 bits.
@@ -54,7 +64,7 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 - **Panel Web & Cloud Functions (Desplegados en Firebase)**:
   - `admin-backend/public/index.html` & `app.js`: Interfaz de administración en tiempo real.
-  - `admin-backend/public/version.json`: Registro de versión live para Auto-Update OTA (actualizado a v0.4.9.3 / VC 55).
+  - `admin-backend/public/version.json`: Registro de versión live para Auto-Update OTA (actualizado a v0.5.4 / VC 60).
   - `admin-backend/functions/index.js`: Envíos FCM de comandos a los dispositivos.
 
 

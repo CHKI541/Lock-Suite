@@ -1,4 +1,4 @@
-# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.5.4)
+# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.5.5)
 
 ---
 
@@ -7,9 +7,15 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 ---
 
-## 🚀 Historial Reciente de Mejoras y Correcciones (v0.5.4)
+## 🚀 Historial Reciente de Mejoras y Correcciones (v0.5.5)
 
-### 1. Endurecimiento de Seguridad vía Samsung Knox SDK (v0.5.4)
+### 1. Resolución de Caché en Auto-Actualizaciones (v0.5.5)
+- **Problema:** Los celulares mostraban que la app ya estaba al día en la versión anterior porque Firebase Hosting y las capas de red locales cacheaban la respuesta estática del archivo `version.json`.
+- **Solución:**
+  - Se definieron cabeceras de control de caché (`Cache-Control: no-cache, no-store, must-revalidate`) específicas para `/version.json` en `firebase.json`.
+  - Se modificó `SelfUpdater.kt` para inyectar una marca de tiempo dinámica (`?t=timestamp`) en la solicitud de red, evitando el almacenamiento en caché local del cliente.
+
+### 2. Endurecimiento de Seguridad vía Samsung Knox SDK (v0.5.5)
 - **Mejora:** Integración del módulo `KnoxHardening.kt` para dispositivos Samsung. 
 - **Bloqueos adicionales:**
   - **Flasheo de Firmware:** Bloqueo de Odin y Download Mode (`allowFirmwareRecovery(false)`). Evita que se reinstale la ROM de fábrica para evadir las políticas.
@@ -64,7 +70,7 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 - **Panel Web & Cloud Functions (Desplegados en Firebase)**:
   - `admin-backend/public/index.html` & `app.js`: Interfaz de administración en tiempo real.
-  - `admin-backend/public/version.json`: Registro de versión live para Auto-Update OTA (actualizado a v0.5.4 / VC 60).
+  - `admin-backend/public/version.json`: Registro de versión live para Auto-Update OTA (actualizado a v0.5.5 / VC 61).
   - `admin-backend/functions/index.js`: Envíos FCM de comandos a los dispositivos.
 
 

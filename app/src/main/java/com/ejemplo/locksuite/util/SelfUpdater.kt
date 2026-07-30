@@ -329,7 +329,8 @@ object SelfUpdater {
         var lastFailure: Exception? = null
         for (manifestUrl in listOf(VERSION_URL, FALLBACK_VERSION_URL)) {
             try {
-                val connection = URL(manifestUrl).openConnection() as HttpURLConnection
+                val urlWithCacheBuster = "$manifestUrl?t=${System.currentTimeMillis()}"
+                val connection = URL(urlWithCacheBuster).openConnection() as HttpURLConnection
                 connection.connectTimeout = 10_000
                 connection.readTimeout = 10_000
                 connection.instanceFollowRedirects = false

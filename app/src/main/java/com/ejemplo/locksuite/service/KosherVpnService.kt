@@ -66,6 +66,13 @@ class KosherVpnService : VpnService() {
             stopVpn()
             stopSelf()
             return START_NOT_STICKY
+        } else if (action == "RESTART_VPN") {
+            val isCurrentlyRunning = synchronized(lifecycleLock) { running }
+            if (isCurrentlyRunning) {
+                android.util.Log.i("KosherVPN", "Forzando reinicio de VPN por cambio de reglas DNS.")
+                stopVpn()
+            }
+            startVpn()
         } else {
             startVpn()
         }
@@ -101,6 +108,13 @@ class KosherVpnService : VpnService() {
         }
         try {
             startForeground(9002, buildNotification())
+
+            // Recargar reglas DNS desde SharedPrefs al (re)iniciar la VPN
+            try {
+                com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
+            } catch (e: Exception) {
+                android.util.Log.w("KosherVPN", "No se pudieron recargar reglas DNS: ${e.message}")
+            }
 
             // Desactivar DNS privado para evitar que Android envíe consultas cifradas por TCP 853 saltándose la VPN
             try {

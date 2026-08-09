@@ -54,12 +54,7 @@ class DomainRuleManager(
         }
         editor.apply()
         loadRules() // Recarga atomica del Trie
-
-        try {
-            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        refreshVpnState()
     }
 
     fun clearRule(domain: String) {
@@ -72,6 +67,33 @@ class DomainRuleManager(
         }
         editor.apply()
         loadRules()
+        refreshVpnState()
+    }
+
+    private fun refreshVpnState() {
+        try {
+            if (com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(context)) {
+                val vpnIntent = android.content.Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
+                    action = "RESTART_VPN"
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    context.startForegroundService(vpnIntent)
+                } else {
+                    context.startService(vpnIntent)
+                }
+            } else {
+                val stopServiceIntent = android.content.Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
+                    action = "STOP_VPN"
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    context.startForegroundService(stopServiceIntent)
+                } else {
+                    context.startService(stopServiceIntent)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     fun getAllRules(): Map<String, RuleType> {

@@ -35,6 +35,7 @@ import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.ui.draw.scale
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1419,8 +1420,8 @@ fun PresetsTabContent(context: Context) {
     var refreshKey by remember { mutableIntStateOf(0) }
     val presetsMap = remember(refreshKey) { policyManager.getLocalPresets() }
 
-    var pendingExportJson by remember { mutableStateOf<String?>(null) }
-    var pendingExportName by remember { mutableStateOf("") }
+    var pendingExportJson by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingExportName by rememberSaveable { mutableStateOf("") }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")

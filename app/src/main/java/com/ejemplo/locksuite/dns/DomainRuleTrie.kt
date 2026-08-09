@@ -7,7 +7,15 @@ fun normalizeDomain(domain: String): String =
 fun domainLabelsReversed(domain: String): List<String> =
     normalizeDomain(domain).split(".").filter { it.isNotEmpty() }.asReversed()
 
-enum class RuleType { BLOCK, ALLOW }
+enum class RuleType { BLOCK, ALLOW, FORCE_BLOCK, FORCE_ALLOW }
+
+// FORCE_BLOCK/FORCE_ALLOW le ganan a cualquier otra configuracion (bloqueo de
+// WebView, AdBlocker, GIFs, Mercado Pago, etc.) - ver KosherVpnService. Las
+// reglas BLOCK/ALLOW "normales" solo se aplican si ninguna otra politica ya
+// tomo una decision para ese dominio; no sobreescriben nada.
+val RuleType.isForce: Boolean get() = this == RuleType.FORCE_BLOCK || this == RuleType.FORCE_ALLOW
+val RuleType.isBlockRule: Boolean get() = this == RuleType.BLOCK || this == RuleType.FORCE_BLOCK
+val RuleType.isAllowRule: Boolean get() = this == RuleType.ALLOW || this == RuleType.FORCE_ALLOW
 
 private class TrieNode {
     val children = HashMap<String, TrieNode>()

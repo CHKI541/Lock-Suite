@@ -136,9 +136,18 @@ function renderDevicesList(e) {
         }
         n.querySelector(".last-seen").textContent = s ? "Última conexión: " + new Date(s).toLocaleString("es-AR") : "Sin conexión registrada";
         const r = () => openDeviceSidebar(e, t);
-        a.addEventListener("click", r), n.querySelector(".view-details-btn").addEventListener("click", e => {
-            e.stopPropagation(), r()
-        }), devicesContainer.appendChild(n)
+        a.addEventListener("click", r);
+        n.querySelector(".view-details-btn").addEventListener("click", ev => {
+            ev.stopPropagation();
+            r();
+        });
+        n.querySelector(".quick-update-btn").addEventListener("click", ev => {
+            ev.stopPropagation();
+            if (confirm(`¿Enviar comando de actualización de LockSuite al celular "${i}"?`)) {
+                runCommandOnDevice(e, "UPDATE_LOCKSUITE", null, ev.currentTarget);
+            }
+        });
+        devicesContainer.appendChild(n);
     })) : devicesContainer.innerHTML = '<p class="loading-text">Todavía no hay dispositivos registrados.</p>'
 }
 
@@ -568,8 +577,16 @@ function renderAppsList(e) {
         sidebarAppsList.appendChild(t);
     }) : sidebarAppsList.innerHTML = '<p class="loading-text">Ninguna aplicación coincide con la búsqueda.</p>';
 }
+function setCommandStatus(text) {
+    if (sidebarStatusMsg) sidebarStatusMsg.textContent = text;
+    const modalStatus = document.getElementById("apps-update-status-msg");
+    if (modalStatus) {
+        modalStatus.textContent = text;
+    }
+}
+
 async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParams = null) {
-    a && (a.disabled = !0), sidebarStatusMsg.textContent = "Enviando comando al celular...";
+    a && (a.disabled = !0), setCommandStatus("Enviando comando al celular...");
     let d = verifiedDevicePins[e] || null,
         s = !1,
         o = "";
@@ -608,11 +625,11 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
         if (commandId) {
             const isUpdateCmd = (t === "UPDATE_LOCKSUITE");
             const timeoutMs = isUpdateCmd ? 120000 : 10000;
-            sidebarStatusMsg.textContent = isUpdateCmd ? "Esperando descarga y actualización del celular..." : "Comando enviado. Esperando respuesta del celular...";
+            setCommandStatus(isUpdateCmd ? "Esperando descarga y actualización del celular..." : "Comando enviado. Esperando respuesta del celular...");
             const ackRef = database.ref(`devices/${e}/commandAcks/${commandId}`);
             const timeoutId = setTimeout(() => {
                 ackRef.off();
-                sidebarStatusMsg.textContent = isUpdateCmd ? "✓ Comando enviado. El celular se está actualizando en segundo plano." : "✓ Comando enviado (sin confirmación del celular)";
+                setCommandStatus(isUpdateCmd ? "✓ Comando enviado. El celular se está actualizando en segundo plano." : "✓ Comando enviado (sin confirmación del celular)");
                 if (a) a.disabled = false;
                 if (i) i();
             }, timeoutMs);
@@ -623,13 +640,13 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                     if (status === "applied") {
                         clearTimeout(timeoutId);
                         ackRef.off();
-                        sidebarStatusMsg.textContent = "✓ Comando aplicado con éxito en el celular";
+                        setCommandStatus("✓ Comando aplicado con éxito en el celular");
                         if (a) a.disabled = false;
                     } else if (status === "failed") {
                         clearTimeout(timeoutId);
                         ackRef.off();
                         const reason = snap.val().reason ? ` (${snap.val().reason})` : "";
-                        sidebarStatusMsg.textContent = "✗ El comando falló en el celular" + reason;
+                        setCommandStatus("✗ El comando falló en el celular" + reason);
                         if (a) a.disabled = false;
                         if (i) i();
                     }
@@ -637,9 +654,9 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             });
             return true;
         } else {
-            sidebarStatusMsg.textContent = "✓ Comando enviado";
+            setCommandStatus("✓ Comando enviado");
             setTimeout(() => {
-                "✓ Comando enviado" === sidebarStatusMsg.textContent && (sidebarStatusMsg.textContent = "");
+                "✓ Comando enviado" === sidebarStatusMsg.textContent && setCommandStatus("");
                 if (a) a.disabled = false;
                 if (i) i();
             }, 4000);
@@ -653,7 +670,7 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             o = "PIN_INCORRECT" === e.message ? "PIN incorrecto. Intentá de nuevo." : "";
             const t = await showPinModal(r, o);
             if (!t) {
-                sidebarStatusMsg.textContent = "Cancelado — PIN requerido.";
+                setCommandStatus("Cancelado — PIN requerido.");
                 if (a) a.disabled = false;
                 if (i) i();
                 return false;
@@ -666,11 +683,148 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             }
             continue;
         }
-        sidebarStatusMsg.textContent = "✗ Error: " + (e.message || "desconocido");
+        setCommandStatus("✗ Error: " + (e.message || "desconocido"));
         if (a) a.disabled = false;
         if (i) i();
         return false;
     }
+}
+
+let activeUpdateModalDeviceId = null;
+let activeUpdateModalSearchQuery = "";
+
+function openAppsUpdateModal(deviceId, deviceData) {
+    activeUpdateModalDeviceId = deviceId;
+    activeUpdateModalSearchQuery = "";
+    
+    const modal = document.getElementById("apps-update-modal");
+    const title = document.getElementById("apps-update-device-name");
+    const searchInput = document.getElementById("apps-update-search");
+    const closeBtn = document.getElementById("apps-update-close");
+    const statusMsg = document.getElementById("apps-update-status-msg");
+    
+    const deviceName = deviceData.deviceName || (deviceData.info && deviceData.info.deviceName) || deviceData.model || (deviceData.info && deviceData.info.model) || "Celular";
+    title.textContent = `Dispositivo: ${deviceName} (${deviceId})`;
+    
+    searchInput.value = "";
+    if (statusMsg) statusMsg.textContent = "";
+    modal.classList.remove("hidden");
+    
+    closeBtn.onclick = () => {
+        modal.classList.add("hidden");
+        activeUpdateModalDeviceId = null;
+    };
+    
+    searchInput.oninput = (ev) => {
+        activeUpdateModalSearchQuery = ev.target.value.toLowerCase();
+        renderAppsUpdateModalList(deviceData.apps || {});
+    };
+    
+    renderAppsUpdateModalList(deviceData.apps || {});
+}
+
+function renderAppsUpdateModalList(apps) {
+    const listContainer = document.getElementById("apps-update-list");
+    if (!listContainer) return;
+    listContainer.innerHTML = "";
+    
+    // 1. Entrada especial para LockSuite
+    const lockSuiteItem = document.createElement("div");
+    lockSuiteItem.style.display = "flex";
+    lockSuiteItem.style.alignItems = "center";
+    lockSuiteItem.style.justifyContent = "space-between";
+    lockSuiteItem.style.padding = "10px";
+    lockSuiteItem.style.backgroundColor = "rgba(41, 128, 185, 0.15)";
+    lockSuiteItem.style.borderRadius = "8px";
+    lockSuiteItem.style.border = "1px solid rgba(41, 128, 185, 0.3)";
+    
+    lockSuiteItem.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+            <div style="width: 32px; height: 32px; border-radius: 6px; background-color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 16px;">🛡️</div>
+            <div style="min-width: 0; flex: 1;">
+                <p style="margin: 0; font-weight: bold; color: var(--text-light); font-size: 13px;">LockSuite (MDM Principal)</p>
+                <p style="margin: 0; color: var(--text-gray); font-size: 10px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">com.ejemplo.locksuite</p>
+            </div>
+        </div>
+    `;
+    
+    const lockSuiteBtn = document.createElement("button");
+    lockSuiteBtn.style.backgroundColor = "#2980b9";
+    lockSuiteBtn.style.color = "white";
+    lockSuiteBtn.style.border = "none";
+    lockSuiteBtn.style.padding = "6px 12px";
+    lockSuiteBtn.style.borderRadius = "6px";
+    lockSuiteBtn.style.fontWeight = "bold";
+    lockSuiteBtn.style.fontSize = "11px";
+    lockSuiteBtn.style.cursor = "pointer";
+    lockSuiteBtn.textContent = "Actualizar MDM";
+    lockSuiteBtn.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        if (confirm("¿Enviar comando de actualización de LockSuite al celular?")) {
+            runCommandOnDevice(activeUpdateModalDeviceId, "UPDATE_LOCKSUITE", null, lockSuiteBtn);
+        }
+    });
+    lockSuiteItem.appendChild(lockSuiteBtn);
+    
+    if (!activeUpdateModalSearchQuery || "locksuite".includes(activeUpdateModalSearchQuery) || "com.ejemplo.locksuite".includes(activeUpdateModalSearchQuery)) {
+        listContainer.appendChild(lockSuiteItem);
+    }
+    
+    // 2. Lista de otras aplicaciones instaladas
+    const t = Object.values(apps).filter(e => "com.android.vending" !== e.packageName);
+    t.sort((a, b) => (a.label || "").localeCompare(b.label || ""));
+    
+    const filtered = t.filter(e => (e.label || "").toLowerCase().includes(activeUpdateModalSearchQuery) || (e.packageName || "").toLowerCase().includes(activeUpdateModalSearchQuery));
+    
+    if (filtered.length === 0 && listContainer.children.length === 0) {
+        listContainer.innerHTML = '<p class="loading-text" style="text-align: center; color: var(--text-gray); margin-top: 20px;">Ninguna aplicación coincide con la búsqueda.</p>';
+        return;
+    }
+    
+    filtered.forEach(app => {
+        const item = document.createElement("div");
+        item.style.display = "flex";
+        item.style.alignItems = "center";
+        item.style.justifyContent = "space-between";
+        item.style.padding = "8px 10px";
+        item.style.backgroundColor = "var(--navy-light)";
+        item.style.borderRadius = "8px";
+        item.style.border = "1px solid rgba(255,255,255,0.03)";
+        
+        const label = app.label || "Sin nombre";
+        const pkg = app.packageName;
+        const iconUrl = getAppIconUrl(pkg);
+        
+        item.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                <img src="${iconUrl}" style="width: 32px; height: 32px; border-radius: 6px; object-fit: contain; background-color: rgba(255, 255, 255, 0.05); padding: 2px;" />
+                <div style="min-width: 0; flex: 1;">
+                    <p style="margin: 0; font-weight: bold; color: var(--text-light); font-size: 13px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="${label}">${label}</p>
+                    <p style="margin: 0; color: var(--text-gray); font-size: 10px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="${pkg}">${pkg}</p>
+                </div>
+            </div>
+        `;
+        
+        const updateBtn = document.createElement("button");
+        updateBtn.style.backgroundColor = "#16a085";
+        updateBtn.style.color = "white";
+        updateBtn.style.border = "none";
+        updateBtn.style.padding = "6px 12px";
+        updateBtn.style.borderRadius = "6px";
+        updateBtn.style.fontWeight = "bold";
+        updateBtn.style.fontSize = "11px";
+        updateBtn.style.cursor = "pointer";
+        updateBtn.textContent = "Actualizar";
+        updateBtn.addEventListener("click", (evt) => {
+            evt.stopPropagation();
+            if (confirm(`¿Enviar comando para actualizar "${label}"? El celular abrirá temporalmente la Play Store y se cerrará automáticamente al finalizar la instalación.`)) {
+                runCommandOnDevice(activeUpdateModalDeviceId, "UPDATE_APP", [pkg], updateBtn);
+            }
+        });
+        
+        item.appendChild(updateBtn);
+        listContainer.appendChild(item);
+    });
 }
 
 function showPinModal(e, t) {
@@ -1178,6 +1332,20 @@ async function computeHmacSha256(dataStr) {
     }
 }
 
+function canonicalizeJson(obj) {
+    if (obj === null || typeof obj !== 'object') {
+        return JSON.stringify(obj);
+    }
+    if (Array.isArray(obj)) {
+        return '[' + obj.map(canonicalizeJson).join(',') + ']';
+    }
+    const sortedKeys = Object.keys(obj).sort();
+    const parts = sortedKeys.map(key => {
+        return JSON.stringify(key) + ':' + canonicalizeJson(obj[key]);
+    });
+    return '{' + parts.join(',') + '}';
+}
+
 function loadPresetsList() {
     const presetsList = document.getElementById("presets-list");
     if (!presetsList) return;
@@ -1341,7 +1509,7 @@ if (savePresetBtn) {
             perAppInternetBlocked: Object.values(dev.apps || {}).filter(a => a.isInternetBlocked).map(a => a.packageName)
         };
 
-        const dataStr = JSON.stringify(dataObj);
+        const dataStr = canonicalizeJson(dataObj);
         const signature = await computeHmacSha256(dataStr);
 
         const presetPayload = {
@@ -1389,11 +1557,16 @@ if (importFileInput) {
                     return;
                 }
 
-                // Verificar Firma HMAC
-                const computed = await computeHmacSha256(JSON.stringify(preset.data));
+                // Verificar Firma HMAC con fallback retrocompatible
+                const canonicalData = canonicalizeJson(preset.data);
+                const computed = await computeHmacSha256(canonicalData);
                 if (computed.toLowerCase() !== preset.signature.toLowerCase()) {
-                    alert("🚨 FIRMA INVÁLIDA: El archivo de respaldo ha sido modificado o alterado de forma no autorizada.");
-                    return;
+                    // Fallback: verificar con el formato heredado (stringify)
+                    const legacyComputed = await computeHmacSha256(JSON.stringify(preset.data));
+                    if (legacyComputed.toLowerCase() !== preset.signature.toLowerCase()) {
+                        alert("🚨 FIRMA INVÁLIDA: El archivo de respaldo ha sido modificado o alterado de forma no autorizada.");
+                        return;
+                    }
                 }
 
                 await database.ref("presets").push(preset);

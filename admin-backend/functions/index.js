@@ -159,7 +159,12 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       return;
     }
 
-    if (command !== "UPDATE_LOCKSUITE") {
+    // UPDATE_APP y UPDATE_LOCKSUITE quedan afuera de la exigencia de PIN por
+    // dispositivo: son acciones de mantenimiento (actualizar una app puntual,
+    // o LockSuite mismo) sin el mismo nivel de riesgo que bloquear el equipo,
+    // cambiar el PIN o aplicar restricciones - pedir el PIN ahi era friccion
+    // pura para un caso de uso muy frecuente.
+    if (command !== "UPDATE_LOCKSUITE" && command !== "UPDATE_APP") {
       await verifyDevicePin(deviceId, deviceRef, deviceData, adminUid, devicePin, rememberDevice);
     }
 

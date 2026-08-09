@@ -10,54 +10,75 @@ class DomainRuleManager(
     companion object {
         private const val KEY_BLOCKED = "dns_custom_blocked_domains"
         private const val KEY_ALLOWED = "dns_custom_allowed_domains"
+        private const val KEY_FORCE_BLOCKED = "dns_custom_force_blocked_domains"
+        private const val KEY_FORCE_ALLOWED = "dns_custom_force_allowed_domains"
+
+        private val KEY_BY_TYPE = mapOf(
+            RuleType.BLOCK to KEY_BLOCKED,
+            RuleType.ALLOW to KEY_ALLOWED,
+            RuleType.FORCE_BLOCK to KEY_FORCE_BLOCKED,
+            RuleType.FORCE_ALLOW to KEY_FORCE_ALLOWED
+        )
     }
 
     private fun prefs() = PrefsHelper.getMdmPrefs(context)
 
+    private fun readSet(key: String): MutableSet<String> =
+        (prefs().getStringSet(key, emptySet()) ?: emptySet()).toMutableSet()
+
     /** Carga las reglas desde SharedPreferences y actualiza el engine. */
     fun loadRules() {
-        val blocked = prefs().getStringSet(KEY_BLOCKED, emptySet()) ?: emptySet()
-        val allowed = prefs().getStringSet(KEY_ALLOWED, emptySet()) ?: emptySet()
         val map = mutableMapOf<String, RuleType>()
-        for (d in blocked) map[normalizeDomain(d)] = RuleType.BLOCK
-        for (d in allowed) map[normalizeDomain(d)] = RuleType.ALLOW
+        for ((type, key) in KEY_BY_TYPE) {
+            for (d in readSet(key)) map[normalizeDomain(d)] = type
+        }
         engine.updateRules(map)
     }
 
+    /**
+     * Fija una regla para el dominio. Un dominio solo puede tener UNA regla
+     * activa a la vez: al fijarla se lo saca de los otros 3 conjuntos (normal
+     * bloqueado/permitido, forzado bloqueado/permitido) para que no queden
+     * estados contradictorios guardados en simultaneo. Tambien se asegura de
+     * que la VPN este corriendo: antes, si esta era la UNICA politica activa
+     * (sin webview bloqueado, sin adblock, sin gifs), la regla quedaba
+     * guardada pero nunca se aplicaba hasta el proximo reinicio del equipo.
+     */
     fun setRule(domain: String, rule: RuleType) {
         val normalized = normalizeDomain(domain)
         val editor = prefs().edit()
-        val blocked = (prefs().getStringSet(KEY_BLOCKED, emptySet()) ?: emptySet()).toMutableSet()
-        val allowed = (prefs().getStringSet(KEY_ALLOWED, emptySet()) ?: emptySet()).toMutableSet()
-        when (rule) {
-            RuleType.BLOCK -> { blocked.add(normalized); allowed.remove(normalized) }
-            RuleType.ALLOW -> { allowed.add(normalized); blocked.remove(normalized) }
+        for ((type, key) in KEY_BY_TYPE) {
+            val set = readSet(key)
+            if (type == rule) set.add(normalized) else set.remove(normalized)
+            editor.putStringSet(key, set)
         }
-        editor.putStringSet(KEY_BLOCKED, blocked)
-        editor.putStringSet(KEY_ALLOWED, allowed)
         editor.apply()
-        loadRules() // Recarga atómica del Trie
+        loadRules() // Recarga atomica del Trie
+
+        try {
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     fun clearRule(domain: String) {
         val normalized = normalizeDomain(domain)
         val editor = prefs().edit()
-        val blocked = (prefs().getStringSet(KEY_BLOCKED, emptySet()) ?: emptySet()).toMutableSet()
-        val allowed = (prefs().getStringSet(KEY_ALLOWED, emptySet()) ?: emptySet()).toMutableSet()
-        blocked.remove(normalized)
-        allowed.remove(normalized)
-        editor.putStringSet(KEY_BLOCKED, blocked)
-        editor.putStringSet(KEY_ALLOWED, allowed)
+        for (key in KEY_BY_TYPE.values) {
+            val set = readSet(key)
+            set.remove(normalized)
+            editor.putStringSet(key, set)
+        }
         editor.apply()
         loadRules()
     }
 
     fun getAllRules(): Map<String, RuleType> {
-        val blocked = prefs().getStringSet(KEY_BLOCKED, emptySet()) ?: emptySet()
-        val allowed = prefs().getStringSet(KEY_ALLOWED, emptySet()) ?: emptySet()
         val map = mutableMapOf<String, RuleType>()
-        for (d in blocked) map[normalizeDomain(d)] = RuleType.BLOCK
-        for (d in allowed) map[normalizeDomain(d)] = RuleType.ALLOW
+        for ((type, key) in KEY_BY_TYPE) {
+            for (d in readSet(key)) map[normalizeDomain(d)] = type
+        }
         return map
     }
 }

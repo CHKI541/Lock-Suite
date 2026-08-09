@@ -463,8 +463,9 @@
         <span class="badge status-badge"></span>
       </div>
       <p class="last-seen"></p>
-      <div class="card-action-bar">
-        <button class="action-btn view-details-btn">⚙️ Administrar Celular</button>
+      <div class="card-action-bar" style="display: flex; gap: 8px;">
+        <button class="action-btn view-details-btn" style="flex: 1;">⚙️ Administrar Celular</button>
+        <button class="action-btn quick-update-btn" style="background-color: #2980b9; color: white; border: none; padding: 8px 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 4px;">🔄 Actualizar</button>
       </div>
     </div>
   </template>
@@ -483,6 +484,26 @@
       <div class="modal-actions">
         <button id="pin-modal-cancel" class="secondary">Cancelar</button>
         <button id="pin-modal-confirm">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Actualización Rápida de Aplicaciones (sin requerir PIN) -->
+  <div id="apps-update-modal" class="modal-overlay hidden">
+    <div class="card modal-card" style="max-width: 550px; width: 95%; max-height: 85vh; display: flex; flex-direction: column; padding: 24px;">
+      <h2 style="margin-top: 0; margin-bottom: 4px;">Actualizar Aplicaciones</h2>
+      <p id="apps-update-device-name" class="subtitle" style="margin-bottom: 12px; color: var(--text-gray); font-size: 14px; margin-top: 0;"></p>
+      
+      <input type="text" id="apps-update-search" placeholder="Buscar aplicación..." style="width: 100%; margin-bottom: 12px; box-sizing: border-box; background: var(--navy-dark); border: 1px solid var(--navy-light); color: var(--text-light); padding: 10px; border-radius: 8px;" />
+      
+      <div id="apps-update-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; padding-right: 4px; min-height: 200px;">
+        <!-- Elementos generados dinámicamente -->
+      </div>
+      
+      <p id="apps-update-status-msg" style="font-size: 12px; min-height: 18px; color: var(--accent); margin-top: 8px; margin-bottom: 8px; text-align: center; font-weight: bold;"></p>
+      
+      <div class="modal-actions" style="margin-top: auto; display: flex; justify-content: flex-end;">
+        <button id="apps-update-close" class="secondary" style="width: 100%; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer;">Cerrar</button>
       </div>
     </div>
   </div>

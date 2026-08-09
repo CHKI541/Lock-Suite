@@ -280,18 +280,28 @@ class KosherVpnService : VpnService() {
             }
         }
 
-        // ── Reglas personalizadas DNS ──
+        // Reglas DNS personalizadas: FORCE_BLOCK/FORCE_ALLOW le ganan a
+        // cualquier otra politica (webview, adblock, gifs, etc.) y se
+        // resuelven ahora mismo. BLOCK/ALLOW "normales" NO se resuelven aca:
+        // quedan en normalCustomRule y solo se aplican mas abajo, como
+        // ultimo recurso, si ninguna otra politica ya decidio algo para este
+        // dominio (ver "otherPolicyDecided" mas abajo).
         val customRule = com.ejemplo.locksuite.LockSuiteApplication.domainRuleEngine.effectiveRule(queriedDomain)
-        if (customRule == com.ejemplo.locksuite.dns.RuleType.BLOCK) {
-            android.util.Log.i("KosherVPN", "🚫 BLOQUEADO DNS CUSTOM 0.0.0.0 dominio=$queriedDomain de la app=$logPackage")
-            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
-            NetworkForwarder.sendBlockedDnsResponse(packet, output)
-            return
-        } else if (customRule == com.ejemplo.locksuite.dns.RuleType.ALLOW) {
-            android.util.Log.i("KosherVPN", "✅ PERMITIDO DNS CUSTOM dominio=$queriedDomain de la app=$logPackage")
-            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.ALLOWED)
-            NetworkForwarder.forwardDnsQuery(packet, output, this)
-            return
+        var normalCustomRule: com.ejemplo.locksuite.dns.RuleType? = null
+        when (customRule) {
+            com.ejemplo.locksuite.dns.RuleType.FORCE_BLOCK -> {
+                android.util.Log.i("KosherVPN", "🚫 BLOQUEADO DNS CUSTOM FORZADO 0.0.0.0 dominio=$queriedDomain de la app=$logPackage")
+                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
+                NetworkForwarder.sendBlockedDnsResponse(packet, output)
+                return
+            }
+            com.ejemplo.locksuite.dns.RuleType.FORCE_ALLOW -> {
+                android.util.Log.i("KosherVPN", "✅ PERMITIDO DNS CUSTOM FORZADO dominio=$queriedDomain de la app=$logPackage")
+                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.ALLOWED)
+                NetworkForwarder.forwardDnsQuery(packet, output, this)
+                return
+            }
+            else -> normalCustomRule = customRule
         }
 
         // 1. Bloqueo global de anuncios (AdBlocker) si la opción está activa por el administrador
@@ -327,13 +337,24 @@ class KosherVpnService : VpnService() {
         }
 
         var isBlocked = false
+        // Marca si alguna politica especifica (no las reglas DNS "normales")
+        // ya tomo una decision real para este dominio. Una regla BLOCK/ALLOW
+        // normal (no forzada) solo se aplica mas abajo cuando esto sigue en
+        // false - es el modo "no sobreescribe otra cosa" pedido, a diferencia
+        // de FORCE_BLOCK/FORCE_ALLOW que ya se resolvieron mas arriba.
+        var otherPolicyDecided = false
 
         if (logPackage != "desconocido") {
             val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
             if (policyManager.isPerAppInternetBlocked(logPackage)) {
                 isBlocked = true
+                otherPolicyDecided = true
                 android.util.Log.i("KosherVPN", "🚫 BLOQUEADO INTERNET TOTAL POR APP ($logPackage): $queriedDomain")
             } else if (WebViewBlockManager.isBlocked(this, logPackage)) {
+                // El bloqueo de WebView, una vez activo para esta app, gobierna
+                // TODOS sus dominios (permitidos o no) - cuenta como decision
+                // propia aunque el resultado puntual sea "permitir".
+                otherPolicyDecided = true
                 val coreDomains = WebViewPolicy.getCoreDomainsFor(logPackage)
                 if (coreDomains != null) {
                     // Whitelist estricta para apps conocidas (ej. Waze/DiDi)
@@ -348,6 +369,7 @@ class KosherVpnService : VpnService() {
                 if (policyManager.isMercadoPagoBlockOffersVpnEnabled()) {
                     if (WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
                         isBlocked = true
+                        otherPolicyDecided = true
                     }
                 }
             }
@@ -356,11 +378,20 @@ class KosherVpnService : VpnService() {
             val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(this)
             if (policyManager.isMercadoPagoBlockOffersVpnEnabled() && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
                 isBlocked = true
+                otherPolicyDecided = true
             } else {
                 val globalBlacklist = WebViewPolicy.getGlobalBlacklist()
                 isBlocked = globalBlacklist.any { queriedDomain == it || queriedDomain.endsWith(".$it") }
+                if (isBlocked) otherPolicyDecided = true
             }
             logPackage = "fallback-global"
+        }
+
+        // Reglas DNS "normales" (no forzadas): solo entran en juego si ninguna
+        // otra politica de arriba ya decidio algo para este dominio.
+        if (!otherPolicyDecided && normalCustomRule != null) {
+            isBlocked = (normalCustomRule == com.ejemplo.locksuite.dns.RuleType.BLOCK)
+            android.util.Log.i("KosherVPN", "Regla DNS normal aplicada (sin otra politica activa) dominio=$queriedDomain regla=$normalCustomRule")
         }
 
         // Registrar en el buffer de actividad

@@ -395,7 +395,12 @@ class PolicyManager(private val context: Context) {
                 }
             } else {
                 // Si ya no hay apps bloqueadas en WebView ni gifs bloqueados, apagar la VPN por completo para ahorrar batería
-                if (WebViewBlockManager.getBlockedPackages(context).isEmpty() && !isGifsBlocked()) {
+                val hasCustomDnsRulesA = try {
+                    com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.getAllRules().isNotEmpty()
+                } catch (e: Exception) {
+                    false
+                }
+                if (WebViewBlockManager.getBlockedPackages(context).isEmpty() && !isGifsBlocked() && !hasCustomDnsRulesA) {
                     val stopServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
                         action = "STOP_VPN"
                     }
@@ -445,7 +450,12 @@ class PolicyManager(private val context: Context) {
                 // Si ya no hay apps bloqueadas en WebView, ni ad blocking, ni gifs bloqueados, apagar la VPN
                 val isAdBlockActive = isAdBlockingEnabled()
                 val hasBlockedWebViews = WebViewBlockManager.getBlockedPackages(context).isNotEmpty()
-                if (!isAdBlockActive && !hasBlockedWebViews) {
+                val hasCustomDnsRulesB = try {
+                    com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.getAllRules().isNotEmpty()
+                } catch (e: Exception) {
+                    false
+                }
+                if (!isAdBlockActive && !hasBlockedWebViews && !hasCustomDnsRulesB) {
                     val stopServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
                         action = "STOP_VPN"
                     }
@@ -629,7 +639,7 @@ class PolicyManager(private val context: Context) {
         rootObj.put("version", 1)
         rootObj.put("data", dataObj)
         
-        val dataString = dataObj.toString()
+        val dataString = canonicalizeJson(dataObj)
         val signature = computeHmacSha256(dataString)
         rootObj.put("signature", signature)
 
@@ -642,11 +652,16 @@ class PolicyManager(private val context: Context) {
             val dataObj = rootObj.getJSONObject("data")
             val signature = rootObj.optString("signature", "")
             
-            // Verificación HMAC Anti-Evasión
-            val computedSignature = computeHmacSha256(dataObj.toString())
+            // Verificación HMAC Anti-Evasión con fallback retrocompatible
+            val canonicalData = canonicalizeJson(dataObj)
+            val computedSignature = computeHmacSha256(canonicalData)
             if (!computedSignature.equals(signature, ignoreCase = true)) {
-                android.util.Log.e("PolicyManager", "🚨 FIRMA HMAC INVÁLIDA: El archivo de respaldo ha sido alterado o corrupto.")
-                throw SecurityException("Firma del archivo de respaldo inválida. Archivo alterado no autorizado.")
+                // Fallback: verificar con el formato heredado (toString())
+                val legacyComputed = computeHmacSha256(dataObj.toString())
+                if (!legacyComputed.equals(signature, ignoreCase = true)) {
+                    android.util.Log.e("PolicyManager", "🚨 FIRMA HMAC INVÁLIDA: El archivo de respaldo ha sido alterado o corrupto.")
+                    throw SecurityException("Firma del archivo de respaldo inválida. Archivo alterado no autorizado.")
+                }
             }
 
             // Aplicar restricciones DPM
@@ -721,18 +736,36 @@ class PolicyManager(private val context: Context) {
         prefs.edit().putString("local_presets_map", obj.toString()).apply()
     }
 
-    // NOTA DE SEGURIDAD (ver informe de auditoría §2.4/§3.4): esta clave HMAC es un
-    // string fijo igual en todas las instalaciones — sirve para detectar corrupción o
-    // edición manual accidental del archivo .locksuite, NO para impedir que alguien
-    // con conocimientos técnicos genere una firma válida para un preset propio (podría
-    // extraer esta clave de la APK). La barrera de seguridad REAL que impide llamar a
-    // importPolicyPresetJson() es otra, según la vía: (a) desde DashboardActivity, exige
-    // sesión de admin ya autenticada con PIN; (b) desde el comando remoto
-    // APPLY_PRESET_PROFILE, exige la firma HMAC por dispositivo de LockSuiteFirebaseService
-    // (secreto aleatorio, distinto de este). Si en el futuro se agrega una vía nueva hacia
-    // esta función sin pasar por (a) o (b), este HMAC por sí solo NO alcanza para protegerla.
-    // La solución de fondo (clave asimétrica: privada solo en el servidor, pública en la
-    // app) requiere cambios en el backend que están fuera del alcance de esta pasada.
+    private fun canonicalizeJson(value: Any?): String {
+        return when (value) {
+            null, org.json.JSONObject.NULL -> "null"
+            is org.json.JSONObject -> {
+                val keys = mutableListOf<String>()
+                val iter = value.keys()
+                while (iter.hasNext()) {
+                    keys.add(iter.next())
+                }
+                keys.sort()
+                val parts = keys.map { key ->
+                    val escapedKey = org.json.JSONObject.quote(key)
+                    val canonicalValue = canonicalizeJson(value.get(key))
+                    "$escapedKey:$canonicalValue"
+                }
+                "{" + parts.joinToString(",") + "}"
+            }
+            is org.json.JSONArray -> {
+                val parts = mutableListOf<String>()
+                for (i in 0 until value.length()) {
+                    parts.add(canonicalizeJson(value.get(i)))
+                }
+                "[" + parts.joinToString(",") + "]"
+            }
+            is String -> org.json.JSONObject.quote(value)
+            is Number, is Boolean -> value.toString()
+            else -> org.json.JSONObject.quote(value.toString())
+        }
+    }
+
     private fun computeHmacSha256(data: String): String {
         return try {
             val secretKey = "LockSuiteMDM_Preset_HMAC_SecretKey_2026"

@@ -88,9 +88,19 @@ class BootReceiver : BroadcastReceiver() {
                 } catch (e: Exception) {
                     false
                 }
+                // Reglas DNS personalizadas (seccion DNS del dashboard): si hay
+                // al menos una, la VPN tiene que estar corriendo para poder
+                // aplicarla. Antes no se chequeaba esto y una regla podia
+                // quedar guardada sin efecto real si ninguna otra politica
+                // (webview/adblock/gifs) mantenia la VPN activa.
+                val hasCustomDnsRules = try {
+                    com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.getAllRules().isNotEmpty()
+                } catch (e: Exception) {
+                    false
+                }
 
                 isVpnConfigBlocked || hasAdBlocking || hasGifsBlocked || hasWebViewBlocked ||
-                    hasPerAppInternetBlocked || hasMercadoPagoVpnBlock
+                    hasPerAppInternetBlocked || hasMercadoPagoVpnBlock || hasCustomDnsRules
             } catch (e: Exception) {
                 android.util.Log.e("BootReceiver", "Fallo evaluando shouldVpnBeRunning: ${e.message}")
                 false

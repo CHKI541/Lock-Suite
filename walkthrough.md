@@ -1,4 +1,4 @@
-# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.5.5)
+# 🛠️ Walkthrough Técnico - LockSuite / Kosherlock MDM (v0.6.1)
 
 ---
 
@@ -7,7 +7,23 @@ El **`walkthrough.md`** es el documento técnico oficial generado por Antigravit
 
 ---
 
-## 🚀 Historial Reciente de Mejoras y Correcciones (v0.5.5)
+## 🚀 Historial Reciente de Mejoras y Correcciones (v0.6.1)
+
+### 1. Corrección de Bloqueos DNS de Dominio Específico (v0.6.1)
+- **Problemas:**
+  - Las reglas personalizadas añadidas no se aplicaban inmediatamente ni al reiniciar el dispositivo.
+  - La caché DNS interna de Android seguía resolviendo las IPs reales para dominios que se acababan de bloquear.
+- **Solución:**
+  - **Recarga de Reglas:** Se agregó `domainRuleManager.loadRules()` al inicio de `KosherVpnService.startVpn()` para que el Trie se actualice siempre ante cualquier arranque o restauración de la VPN.
+  - **Forzar reinicio y Limpieza de Caché:** Se implementó la acción `RESTART_VPN` en `KosherVpnService.onStartCommand()`. Al añadir o eliminar una regla en `DomainRuleManager.kt`, se dispara esta acción para re-establecer el túnel VPN al instante. Al recrearse la interfaz TUN, Android invalida su caché de DNS interna, forzando a que las nuevas peticiones consulten de nuevo y caigan en la regla de bloqueo inmediatamente.
+  - **Apagado Dinámico:** Si se eliminan todas las reglas y no hay otra política activa, la VPN ahora se apaga correctamente usando `STOP_VPN`.
+
+### 2. Solución a la Exportación de Presets de 0 Bytes (v0.6.1)
+- **Problema:** Los archivos `.locksuite` exportados desde el menú de Presets se generaban con 0 bytes de tamaño.
+- **Causa:** El JSON a exportar se almacenaba en un estado de Compose con `remember`. Al llamar al selector de archivos nativo, Android suspendía y recreaba la Activity, reinicializando el estado a `null`. Cuando el callback del selector escribía el archivo, leía `null` y lo guardaba vacío.
+- **Solución:** Se reemplazó `remember` por `rememberSaveable` para `pendingExportJson` y `pendingExportName` en `DashboardActivity.kt`. Esto fuerza a Android a persistir el contenido del JSON en el `savedInstanceState` al recrear la Activity, permitiendo que se escriba con éxito al retornar del selector.
+
+### 3. Historial de Versiones Anteriores (v0.5.5)
 
 ### 1. Resolución de Caché en Auto-Actualizaciones (v0.5.5)
 - **Problema:** Los celulares mostraban que la app ya estaba al día en la versión anterior porque Firebase Hosting y las capas de red locales cacheaban la respuesta estática del archivo `version.json`.

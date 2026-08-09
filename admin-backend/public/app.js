@@ -143,9 +143,7 @@ function renderDevicesList(e) {
         });
         n.querySelector(".quick-update-btn").addEventListener("click", ev => {
             ev.stopPropagation();
-            if (confirm(`¿Enviar comando de actualización de LockSuite al celular "${i}"?`)) {
-                runCommandOnDevice(e, "UPDATE_LOCKSUITE", null, ev.currentTarget);
-            }
+            openAppsUpdateModal(e, t);
         });
         devicesContainer.appendChild(n);
     })) : devicesContainer.innerHTML = '<p class="loading-text">Todavía no hay dispositivos registrados.</p>'
@@ -990,11 +988,8 @@ sidebarAllowlistBtn.addEventListener("click", () => {
         }
     }
 }), sidebarUpdateLocksuiteBtn.addEventListener("click", () => {
-    if (selectedDeviceId) {
-        if (confirm("¿Actualizar la aplicación LockSuite (sistema) en este celular?")) {
-            sidebarUpdateLocksuiteBtn.disabled = !0;
-            runCommandOnDevice(selectedDeviceId, "UPDATE_LOCKSUITE", null, sidebarUpdateLocksuiteBtn);
-        }
+    if (selectedDeviceId && currentDevicesData[selectedDeviceId]) {
+        openAppsUpdateModal(selectedDeviceId, currentDevicesData[selectedDeviceId]);
     }
 }), sidebarChangePinBtn.addEventListener("click", () => {
     const pin = sidebarNewPinInput.value.trim();

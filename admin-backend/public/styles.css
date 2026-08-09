@@ -3,6 +3,7 @@
   --navy-medium: #1E3E62;
   --navy-light: #2C5282;
   --accent-orange: #F1C40F;
+  --accent: var(--accent-orange);
   --text-light: #FFFFFF;
   --text-gray: #B0BEC5;
   --alert-red: #C0392B;

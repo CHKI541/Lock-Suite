@@ -142,3 +142,12 @@ Una vez instalada la app en el dispositivo (sin ninguna cuenta de Google configu
 ```bash
 adb shell dpm set-device-owner com.ejemplo.locksuite/com.ejemplo.locksuite.receiver.DeviceAdminReceiver
 ```
+
+---
+
+#### 4. Notas Críticas de Despliegue (Evitar fallas de Auto-Actualización OTA)
+> [!IMPORTANT]
+> **Nunca** despliegues el panel web combinando Hosting y Functions en una sola llamada de Firebase CLI (`firebase deploy`) si hay riesgos de fallas en las Cloud Functions.
+> Si el despliegue de Cloud Functions falla (por ejemplo, por error de cola HTTP 409 de GCP o límites de cuotas), Firebase cancela la confirmación de la versión de Hosting, lo que provoca que el archivo `version.json` y el APK nuevo cargados no se hagan públicos. Esto causa que los celulares sigan viendo el manifiesto viejo y reporten erróneamente que "ya están actualizados".
+>
+> **Solución aplicada:** El script automatizado `deploy_all.ps1` despliega primero `hosting,database` y luego `functions` en un bloque try-catch aislado para que una falla en las funciones no bloquee la distribución de la app.

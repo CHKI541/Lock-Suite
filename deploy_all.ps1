@@ -87,8 +87,21 @@ if (-not (Test-Path $serviceAccountKey)) {
 $env:GOOGLE_APPLICATION_CREDENTIALS = $serviceAccountKey
 Push-Location (Join-Path $projectRoot "admin-backend")
 try {
-    firebase deploy --only functions,hosting,database
-    Write-Host "Firebase desplegado con exito." -ForegroundColor Green
+    # IMPORTANTE: Desplegar Hosting y Database primero. Si las Funciones fallan
+    # (ej: error 409 por bloqueo de cola en Google Cloud), Hosting (version.json y APK)
+    # DEBE quedar publicado de todas formas para no trabar la auto-actualización OTA de los celulares.
+    Write-Host "Desplegando Hosting y Database..." -ForegroundColor Yellow
+    cmd.exe /c firebase deploy --only hosting,database
+    Write-Host "Hosting y Database desplegados con exito." -ForegroundColor Green
+
+    # Luego desplegar funciones de forma independiente
+    try {
+        Write-Host "Desplegando Cloud Functions..." -ForegroundColor Yellow
+        cmd.exe /c firebase deploy --only functions
+        Write-Host "Cloud Functions desplegadas con exito." -ForegroundColor Green
+    } catch {
+        Write-Warning "Fallo el despliegue de Cloud Functions. Las funciones de Firebase no se actualizaron, pero los archivos de Hosting (versiones de la app) ya estan live en la web."
+    }
 } finally {
     Pop-Location
 }

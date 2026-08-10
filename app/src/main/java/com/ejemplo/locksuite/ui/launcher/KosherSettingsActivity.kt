@@ -28,7 +28,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.ComponentName
+import android.content.pm.PackageManager
 import com.ejemplo.locksuite.ui.auth.LoginActivity
+
 
 class KosherSettingsActivity : ComponentActivity() {
 
@@ -77,6 +80,16 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
     var canWriteSystemSettings by remember {
         mutableStateOf(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.System.canWrite(context) else true)
     }
+
+    val isStealth = remember {
+        try {
+            val aliasComponent = ComponentName(context, "com.ejemplo.locksuite.LauncherAlias")
+            context.packageManager.getComponentEnabledSetting(aliasComponent) == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        } catch (e: Exception) {
+            false
+        }
+    }
+
 
     val scrollState = rememberScrollState()
 
@@ -228,18 +241,33 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                     }
                 }
 
-                // ADMINISTRACIÓN
-                SettingsGroup(title = "Administrador") {
-                    SettingsButton(
-                        label = "Panel Admin LockSuite",
-                        icon = Icons.Filled.Lock,
-                        onClick = {
-                            val intent = Intent(context, LoginActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                // ADMINISTRACIÓN / AJUSTES AVANZADOS
+                if (isStealth) {
+                    SettingsGroup(title = "Sistema") {
+                        SettingsButton(
+                            label = "Ajustes avanzados del sistema",
+                            icon = Icons.Filled.Settings,
+                            onClick = {
+                                val intent = Intent(context, LoginActivity::class.java).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
                             }
-                            context.startActivity(intent)
-                        }
-                    )
+                        )
+                    }
+                } else {
+                    SettingsGroup(title = "Administrador") {
+                        SettingsButton(
+                            label = "Panel Admin LockSuite",
+                            icon = Icons.Filled.Lock,
+                            onClick = {
+                                val intent = Intent(context, LoginActivity::class.java).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
+                            }
+                        )
+                    }
                 }
             }
         }

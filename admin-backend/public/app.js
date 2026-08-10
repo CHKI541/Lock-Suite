@@ -906,7 +906,8 @@ saveNameBtn.addEventListener("click", async () => {
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
-            stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"]
+            stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
+            kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"]
         } [n];
     if (!i) return;
     const d = a ? i[0] : i[1];
@@ -1481,6 +1482,7 @@ if (savePresetBtn) {
             whatsappBlockChannels: !!dev.whatsappBlockChannels,
             mercadoPagoBlockOffersAccessibility: !!dev.mercadoPagoBlockOffersAccessibility,
             mercadoPagoBlockOffersVpn: !!dev.mercadoPagoBlockOffersVpn,
+            kosherLauncherEnabled: !!dev.kosherLauncherEnabled,
             perAppInternetBlocked: Object.values(dev.apps || {}).filter(a => a.isInternetBlocked).map(a => a.packageName)
         };
 
@@ -1928,6 +1930,7 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
+            kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
         };
 
@@ -1985,6 +1988,7 @@ if (groupSidebar) {
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
+            kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
         } [policyKey];
         

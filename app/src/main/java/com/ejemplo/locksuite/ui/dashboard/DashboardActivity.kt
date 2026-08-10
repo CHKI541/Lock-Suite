@@ -676,10 +676,35 @@ fun PoliciesTabContent(context: Context) {
                     onCheckedChange = { policyManager.setStatusBarDisabled(it).also { refreshKey++ } }
                 )
                 PolicySwitchRow(
+                    label = "Activar Modo Launcher MP3 Kosher",
+                    isChecked = remember(refreshKey) { policyManager.isKosherLauncherEnabled() },
+                    onCheckedChange = { isChecked ->
+                        if (isChecked && !android.provider.Settings.canDrawOverlays(context)) {
+                            try {
+                                val intent = Intent(
+                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                                Toast.makeText(context, "Por favor, concede el permiso de superposición para la marca de agua", Toast.LENGTH_LONG).show()
+                            } catch (e: Exception) {
+                                try {
+                                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                    context.startActivity(intent)
+                                } catch (ex: Exception) {
+                                    ex.printStackTrace()
+                                }
+                            }
+                        }
+                        policyManager.setKosherLauncherEnabled(isChecked).also { refreshKey++ }
+                    }
+                )
+                PolicySwitchRow(
                     label = "Deshabilitar Pantalla de Bloqueo (Keyguard)",
                     isChecked = remember(refreshKey) { policyManager.isKeyguardDisabled() },
                     onCheckedChange = { policyManager.setKeyguardDisabled(it).also { refreshKey++ } }
                 )
+
                 PolicySwitchRow(
                     label = "Bloquear Ajustes de Volumen",
                     isChecked = remember(refreshKey) { policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_ADJUST_VOLUME) },

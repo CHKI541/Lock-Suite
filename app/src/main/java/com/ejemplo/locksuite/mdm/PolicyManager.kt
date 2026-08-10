@@ -260,6 +260,50 @@ class PolicyManager(private val context: Context) {
         return PrefsHelper.getMdmPrefs(context).getBoolean("statusbar_disabled", false)
     }
 
+    fun setKosherLauncherEnabled(enabled: Boolean): Boolean {
+        return try {
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean("kosher_launcher_enabled", enabled).apply()
+            
+            // Forzar desactivación de barra de estado si el launcher está activo, para que parezca MP3
+            setStatusBarDisabled(enabled)
+            
+            val filter = android.content.IntentFilter(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                addCategory(Intent.CATEGORY_DEFAULT)
+            }
+            val component = ComponentName(context, "com.ejemplo.locksuite.ui.launcher.KosherLauncherActivity")
+            
+            if (enabled) {
+                // Registrar launcher como preferido persistente (Device Owner)
+                dpm.addPersistentPreferredActivity(adminComponent, filter, component)
+                // Iniciar servicio de la marca de agua
+                if (android.provider.Settings.canDrawOverlays(context)) {
+                    val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                }
+            } else {
+                // Limpiar launcher preferido
+                dpm.clearPackagePersistentPreferredActivities(adminComponent, context.packageName)
+                // Detener servicio de la marca de agua
+                val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
+                context.stopService(intent)
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    fun isKosherLauncherEnabled(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("kosher_launcher_enabled", false)
+    }
+
+
     fun setKeyguardDisabled(disabled: Boolean): Boolean {
         return try {
             dpm.setKeyguardDisabled(adminComponent, disabled)
@@ -628,6 +672,8 @@ class PolicyManager(private val context: Context) {
         dataObj.put("whatsappBlockChannels", isWhatsAppBlockChannelsEnabled())
         dataObj.put("mercadoPagoBlockOffersAccessibility", isMercadoPagoBlockOffersAccessibilityEnabled())
         dataObj.put("mercadoPagoBlockOffersVpn", isMercadoPagoBlockOffersVpnEnabled())
+        dataObj.put("kosherLauncherEnabled", isKosherLauncherEnabled())
+
         
         val perAppNetArr = org.json.JSONArray()
         getPerAppInternetBlockedPackages().forEach { perAppNetArr.put(it) }
@@ -688,6 +734,8 @@ class PolicyManager(private val context: Context) {
             setWhatsAppBlockChannels(dataObj.optBoolean("whatsappBlockChannels", false))
             setMercadoPagoBlockOffersAccessibility(dataObj.optBoolean("mercadoPagoBlockOffersAccessibility", false))
             setMercadoPagoBlockOffersVpn(dataObj.optBoolean("mercadoPagoBlockOffersVpn", false))
+            setKosherLauncherEnabled(dataObj.optBoolean("kosherLauncherEnabled", false))
+
 
             val perAppNetArr = dataObj.optJSONArray("perAppInternetBlocked")
             if (perAppNetArr != null) {
@@ -843,6 +891,10 @@ class PolicyManager(private val context: Context) {
         if (isScreenCaptureBlocked()) {
             setScreenCaptureBlocked(true)
         }
+        if (isKosherLauncherEnabled()) {
+            setKosherLauncherEnabled(true)
+        }
+
 
         // Reforzar la designacion de Always-on VPN si la restriccion de VPN esta
         // activa. La restriccion DISALLOW_CONFIG_VPN ya se reaplica arriba en el forEach
@@ -957,6 +1009,8 @@ class PolicyManager(private val context: Context) {
         setKeyguardDisabled(false)
         setStatusBarDisabled(false)
         setScreenCaptureBlocked(false)
+        setKosherLauncherEnabled(false)
+
 
         // Limpiar proxy global
         setInternetBlocked(false)

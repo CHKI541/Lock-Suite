@@ -47,8 +47,24 @@ class BootReceiver : BroadcastReceiver() {
             android.util.Log.e("BootReceiver", "Error iniciando Watchdog: ${e.message}")
         }
 
-        // 3. Garantizar que la VPN se inicie inmediatamente si está activa cualquier política que la requiera
+        // 3. Iniciar el servicio Watermark si el modo Kosher Launcher está activo y tiene permisos de overlay
+        try {
+            val policyManager = PolicyManager(context)
+            if (policyManager.isKosherLauncherEnabled() && android.provider.Settings.canDrawOverlays(context)) {
+                val watermarkIntent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(watermarkIntent)
+                } else {
+                    context.startService(watermarkIntent)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("BootReceiver", "Error iniciando WatermarkService en boot: ${e.message}")
+        }
+
+        // 4. Garantizar que la VPN se inicie inmediatamente si está activa cualquier política que la requiera
         ensureVpnRunning(context)
+
     }
 
     companion object {

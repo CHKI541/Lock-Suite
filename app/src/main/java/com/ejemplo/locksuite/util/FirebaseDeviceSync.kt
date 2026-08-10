@@ -233,7 +233,9 @@ object FirebaseDeviceSync {
                     "mercadoPagoBlockOffers" to policyManager.isMercadoPagoBlockOffersEnabled(),
                     "mercadoPagoBlockOffersAccessibility" to policyManager.isMercadoPagoBlockOffersAccessibilityEnabled(),
                     "mercadoPagoBlockOffersVpn" to policyManager.isMercadoPagoBlockOffersVpnEnabled(),
+                    "kosherLauncherEnabled" to policyManager.isKosherLauncherEnabled(),
                     "stealthModeEnabled" to isStealth
+
                 )
             )
             syncAppsListInternal(context)

@@ -728,12 +728,8 @@ function renderAppsUpdateModalList(apps) {
     
     // 1. Entrada especial para LockSuite
     const lockSuiteItem = document.createElement("div");
-    lockSuiteItem.style.display = "flex";
-    lockSuiteItem.style.alignItems = "center";
-    lockSuiteItem.style.justifyContent = "space-between";
-    lockSuiteItem.style.padding = "10px";
+    lockSuiteItem.className = "apps-update-item";
     lockSuiteItem.style.backgroundColor = "rgba(41, 128, 185, 0.15)";
-    lockSuiteItem.style.borderRadius = "8px";
     lockSuiteItem.style.border = "1px solid rgba(41, 128, 185, 0.3)";
     
     lockSuiteItem.innerHTML = `
@@ -747,14 +743,9 @@ function renderAppsUpdateModalList(apps) {
     `;
     
     const lockSuiteBtn = document.createElement("button");
+    lockSuiteBtn.className = "apps-update-btn";
     lockSuiteBtn.style.backgroundColor = "#2980b9";
     lockSuiteBtn.style.color = "white";
-    lockSuiteBtn.style.border = "none";
-    lockSuiteBtn.style.padding = "6px 12px";
-    lockSuiteBtn.style.borderRadius = "6px";
-    lockSuiteBtn.style.fontWeight = "bold";
-    lockSuiteBtn.style.fontSize = "11px";
-    lockSuiteBtn.style.cursor = "pointer";
     lockSuiteBtn.textContent = "Actualizar MDM";
     lockSuiteBtn.addEventListener("click", (evt) => {
         evt.stopPropagation();
@@ -781,13 +772,7 @@ function renderAppsUpdateModalList(apps) {
     
     filtered.forEach(app => {
         const item = document.createElement("div");
-        item.style.display = "flex";
-        item.style.alignItems = "center";
-        item.style.justifyContent = "space-between";
-        item.style.padding = "8px 10px";
-        item.style.backgroundColor = "var(--navy-light)";
-        item.style.borderRadius = "8px";
-        item.style.border = "1px solid rgba(255,255,255,0.03)";
+        item.className = "apps-update-item";
         
         const label = app.label || "Sin nombre";
         const pkg = app.packageName;
@@ -804,14 +789,9 @@ function renderAppsUpdateModalList(apps) {
         `;
         
         const updateBtn = document.createElement("button");
+        updateBtn.className = "apps-update-btn";
         updateBtn.style.backgroundColor = "#16a085";
         updateBtn.style.color = "white";
-        updateBtn.style.border = "none";
-        updateBtn.style.padding = "6px 12px";
-        updateBtn.style.borderRadius = "6px";
-        updateBtn.style.fontWeight = "bold";
-        updateBtn.style.fontSize = "11px";
-        updateBtn.style.cursor = "pointer";
         updateBtn.textContent = "Actualizar";
         updateBtn.addEventListener("click", (evt) => {
             evt.stopPropagation();

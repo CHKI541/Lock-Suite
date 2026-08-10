@@ -37,6 +37,22 @@ class WatchdogForegroundService : Service() {
             // Garantizar que la VPN Kosher siga ejecutándose si alguna política la requiere
             com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(applicationContext)
 
+            // Garantizar que la marca de agua flotante siga ejecutándose si el launcher está activo
+            try {
+                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+                if (policyManager.isKosherLauncherEnabled() && Settings.canDrawOverlays(applicationContext)) {
+                    val watermarkIntent = Intent(applicationContext, WatermarkService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        applicationContext.startForegroundService(watermarkIntent)
+                    } else {
+                        applicationContext.startService(watermarkIntent)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+
             // Re-imponer "DNS Privado = Desactivado" cada 60s mientras la VPN deba
             // seguir activa. disablePrivateDns() solo se aplicaba una vez al arrancar
             // el servicio VPN: si el usuario lo reactivaba después a mano desde

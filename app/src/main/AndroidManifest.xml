@@ -187,6 +187,38 @@
             android:name=".ui.dashboard.DashboardActivity"
             android:exported="false" />
 
+        <!-- KOSHER LAUNCHER (Home Screen) -->
+        <activity
+            android:name=".ui.launcher.KosherLauncherActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:launchMode="singleInstance"
+            android:stateNotNeeded="true"
+            android:theme="@style/Theme.LockSuite">
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- KOSHER SETTINGS (Custom Settings Panel) -->
+        <activity
+            android:name=".ui.launcher.KosherSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.LockSuite" />
+
+        <!-- WATERMARK SERVICE (System-wide Kosher Watermark) -->
+        <service
+            android:name=".service.WatermarkService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="mdm_watchdog_accessibility_policy_monitor" />
+        </service>
+
+
         <!-- EMERGENCY ACTIVITY (Menú rojo de purga) -->
         <activity
             android:name=".ui.emergency.EmergencyActivity"

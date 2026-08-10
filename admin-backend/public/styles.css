@@ -537,5 +537,31 @@ header {
   font-weight: bold;
 }
 
+/* Modal de Actualización Rápida de Aplicaciones */
+.apps-update-item {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 10px 12px !important;
+  background-color: var(--navy-light) !important;
+  border-radius: 8px !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  gap: 12px !important;
+}
+
+.apps-update-btn {
+  width: auto !important;
+  min-width: 90px !important;
+  flex-shrink: 0 !important;
+  white-space: nowrap !important;
+  padding: 6px 12px !important;
+  font-size: 11px !important;
+  font-weight: bold !important;
+  border-radius: 6px !important;
+  border: none !important;
+  cursor: pointer !important;
+}
+
+
 
 

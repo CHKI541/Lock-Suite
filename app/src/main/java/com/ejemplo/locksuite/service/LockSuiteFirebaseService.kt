@@ -134,6 +134,9 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "UNBLOCK_SCREEN_CAPTURE" -> policyManager.setScreenCaptureBlocked(false)
                 "DISABLE_STATUSBAR" -> policyManager.setStatusBarDisabled(true)
                 "ENABLE_STATUSBAR" -> policyManager.setStatusBarDisabled(false)
+                "ENABLE_KOSHER_LAUNCHER" -> policyManager.setKosherLauncherEnabled(true)
+                "DISABLE_KOSHER_LAUNCHER" -> policyManager.setKosherLauncherEnabled(false)
+
                 "DISABLE_KEYGUARD" -> policyManager.setKeyguardDisabled(true)
                 "ENABLE_KEYGUARD" -> policyManager.setKeyguardDisabled(false)
                 "BLOCK_INTERNET" -> policyManager.setInternetBlocked(true)

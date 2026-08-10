@@ -87,7 +87,14 @@ class KosherLauncherActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Ocultar la barra de estado únicamente en la ventana del launcher (la barra inferior de navegación queda 100% funcional)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
+        insetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+
         // Evitar que se cierre la actividad por el botón back — el launcher debe quedar fijo
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 // No hacer nada
@@ -204,6 +211,13 @@ fun LauncherScreen(
             val label = resolveInfo.loadLabel(pm).toString()
             val kosherIcon = AppIconMapper.getMapping(pkg, label)
             val launchIntent = pm.getLaunchIntentForPackage(pkg) ?: return@mapNotNull null
+
+            // Excluir lectores de PDF del escritorio (solo se abrirán al pulsar un .pdf en Archivos)
+            val pkgLower = pkg.lowercase()
+            val labelLower = label.lowercase()
+            if (kosherIcon.label == "Lector PDF" || pkgLower.contains("pdf") || labelLower.contains("pdf")) {
+                return@mapNotNull null
+            }
 
             AppItem(pkg, kosherIcon.label, launchIntent, kosherIcon, resolveInfo)
         }.toMutableList()

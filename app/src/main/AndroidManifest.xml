@@ -13,6 +13,8 @@
     <uses-permission android:name="android.permission.DELETE_PACKAGES" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+
 
     <!-- Knox SDK (Samsung) — recien concede algo una vez activada la licencia KPE;
          no tiene efecto en equipos sin Knox. Ver KnoxHardening.kt. -->

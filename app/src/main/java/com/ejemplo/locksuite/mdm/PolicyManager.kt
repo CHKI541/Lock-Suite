@@ -260,12 +260,15 @@ class PolicyManager(private val context: Context) {
         return PrefsHelper.getMdmPrefs(context).getBoolean("statusbar_disabled", false)
     }
 
-    fun setKosherLauncherEnabled(enabled: Boolean): Boolean {
+    /**
+     * @param enabled  Activa o desactiva el launcher Kosher.
+     * @param openImmediately  Si true (defecto), al activar abre inmediatamente KosherLauncherActivity
+     *                         y al desactivar regresa al launcher nativo. Pasar false cuando se llama
+     *                         desde applyAllPolicies / Watchdog para no interrumpir al usuario.
+     */
+    fun setKosherLauncherEnabled(enabled: Boolean, openImmediately: Boolean = true): Boolean {
         return try {
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("kosher_launcher_enabled", enabled).apply()
-            
-            // Forzar desactivación de barra de estado si el launcher está activo, para que parezca MP3
-            setStatusBarDisabled(enabled)
             
             val filter = android.content.IntentFilter(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_HOME)
@@ -276,6 +279,10 @@ class PolicyManager(private val context: Context) {
             if (enabled) {
                 // Registrar launcher como preferido persistente (Device Owner)
                 dpm.addPersistentPreferredActivity(adminComponent, filter, component)
+
+                // Aplicar fondo de pantalla y pantalla de bloqueo estilo MP3 oscuro
+                applyKosherMp3Wallpaper()
+
                 // Iniciar servicio de la marca de agua
                 if (android.provider.Settings.canDrawOverlays(context)) {
                     val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
@@ -285,12 +292,30 @@ class PolicyManager(private val context: Context) {
                         context.startService(intent)
                     }
                 }
+
+                // Solo abrir la pantalla inmediatamente cuando viene de FCM/UI, no desde el Watchdog
+                if (openImmediately) {
+                    val launchIntent = Intent(context, com.ejemplo.locksuite.ui.launcher.KosherLauncherActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    }
+                    context.startActivity(launchIntent)
+                }
             } else {
                 // Limpiar launcher preferido
                 dpm.clearPackagePersistentPreferredActivities(adminComponent, context.packageName)
+
                 // Detener servicio de la marca de agua
                 val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
                 context.stopService(intent)
+
+                // Solo redirigir al launcher nativo cuando viene de FCM/UI, no desde el Watchdog
+                if (openImmediately) {
+                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(homeIntent)
+                }
             }
             true
         } catch (e: Exception) {
@@ -298,6 +323,27 @@ class PolicyManager(private val context: Context) {
             false
         }
     }
+
+    private fun applyKosherMp3Wallpaper() {
+        try {
+            val wallpaperManager = android.app.WallpaperManager.getInstance(context)
+            val bitmap = android.graphics.Bitmap.createBitmap(1080, 1920, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.parseColor("#0F0F0F")
+            }
+            canvas.drawRect(0f, 0f, 1080f, 1920f, paint)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                wallpaperManager.setBitmap(bitmap, null, true, android.app.WallpaperManager.FLAG_SYSTEM or android.app.WallpaperManager.FLAG_LOCK)
+            } else {
+                wallpaperManager.setBitmap(bitmap)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Error aplicando fondo de pantalla MP3", e)
+        }
+    }
+
 
     fun isKosherLauncherEnabled(): Boolean {
         return PrefsHelper.getMdmPrefs(context).getBoolean("kosher_launcher_enabled", false)
@@ -892,8 +938,9 @@ class PolicyManager(private val context: Context) {
             setScreenCaptureBlocked(true)
         }
         if (isKosherLauncherEnabled()) {
-            setKosherLauncherEnabled(true)
+            setKosherLauncherEnabled(true, openImmediately = false) // No interrumpir al usuario al re-aplicar políticas
         }
+
 
 
         // Reforzar la designacion de Always-on VPN si la restriccion de VPN esta

@@ -6,23 +6,21 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.os.Build
 import android.os.IBinder
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.widget.TextView
 import androidx.core.app.NotificationCompat
 
 /**
- * Servicio foreground que dibuja la marca de agua "מוגן" de forma persistente
- * en la esquina inferior derecha de la pantalla, por encima de todas las apps.
- *
- * El Watchdog y BootReceiver lo inician con startForegroundService si el modo
- * Kosher Launcher está activo. Si el servicio ya está corriendo, onStartCommand
- * simplemente lo ignora (no duplica la vista).
+ * Servicio foreground que dibuja el sello circular de agua "מוגן" estilo NetFree
+ * en la esquina inferior derecha de la pantalla de forma persistente.
  */
 class WatermarkService : Service() {
 
@@ -41,8 +39,6 @@ class WatermarkService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Si ya existe la vista, no la volvemos a agregar (evita duplicados
-        // cuando el Watchdog re-invoca startForegroundService cada 20s)
         if (watermarkView == null) {
             addWatermarkView()
         }
@@ -53,9 +49,10 @@ class WatermarkService : Service() {
         try {
             windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
+            val sizePx = (56 * resources.displayMetrics.density).toInt()
             val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
+                sizePx,
+                sizePx,
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 } else {
@@ -69,21 +66,14 @@ class WatermarkService : Service() {
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.BOTTOM or Gravity.END
-                x = 24
+                x = 16
                 y = 16
             }
 
-            val textView = TextView(this).apply {
-                text = "מוגן"
-                textSize = 10f
-                setTextColor(Color.argb(60, 255, 255, 255)) // ~23% opacity white
-                setShadowLayer(1.5f, 1f, 1f, Color.argb(40, 0, 0, 0))
-            }
-            watermarkView = textView
-
+            watermarkView = CircularNetFreeWatermarkView(this)
             windowManager?.addView(watermarkView, params)
         } catch (e: Exception) {
-            android.util.Log.e("WatermarkService", "Error agregando vista de marca de agua", e)
+            android.util.Log.e("WatermarkService", "Error agregando marca de agua circular", e)
         }
     }
 
@@ -128,5 +118,67 @@ class WatermarkService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 2002
         private const val CHANNEL_ID = "kosher_watermark_channel"
+    }
+
+    /**
+     * Vista personalizada que dibuja el sello circular "מוגן" transparente (estilo NetFree)
+     */
+    private class CircularNetFreeWatermarkView(context: Context) : View(context) {
+
+        private val outerCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+            color = Color.argb(70, 180, 210, 240) // Translucent light slate/blue
+        }
+
+        private val innerCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.8f
+            color = Color.argb(50, 180, 210, 240)
+        }
+
+        private val bannerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.argb(45, 15, 25, 40)
+        }
+
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(100, 220, 235, 255)
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+            setShadowLayer(2f, 1f, 1f, Color.argb(80, 0, 0, 0))
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+
+            val cx = width / 2f
+            val cy = height / 2f
+            val radius = (width.coerceAtMost(height) / 2f) - 6f
+
+            if (radius <= 0) return
+
+            canvas.save()
+            // Rotar ligeramente (-15 grados) para dar estética de sello estampado
+            canvas.rotate(-15f, cx, cy)
+
+            // Círculo exterior
+            canvas.drawCircle(cx, cy, radius, outerCirclePaint)
+
+            // Círculo interior
+            canvas.drawCircle(cx, cy, radius * 0.82f, innerCirclePaint)
+
+            // Ribbon/Banda horizontal central
+            val bannerHeight = radius * 0.65f
+            val bannerRect = RectF(cx - radius, cy - bannerHeight / 2f, cx + radius, cy + bannerHeight / 2f)
+            canvas.drawRect(bannerRect, bannerPaint)
+
+            // Texto "מוגן"
+            textPaint.textSize = radius * 0.55f
+            val textBaseline = cy - ((textPaint.descent() + textPaint.ascent()) / 2f)
+            canvas.drawText("מוגן", cx, textBaseline, textPaint)
+
+            canvas.restore()
+        }
     }
 }

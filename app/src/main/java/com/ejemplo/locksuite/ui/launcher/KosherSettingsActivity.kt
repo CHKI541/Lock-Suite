@@ -237,9 +237,120 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                                 }
                             }
                         )
-
                     }
                 }
+
+                // CONFIGURACIÓN DE DISPOSITIVO SECCIÓN
+                SettingsGroup(title = "Dispositivo") {
+                    Column(modifier = Modifier.padding(4.dp)) {
+                        SettingsButton(
+                            label = "Configurar fecha y hora",
+                            icon = Icons.Filled.AccessTime,
+                            onClick = {
+                                try {
+                                    val intent = Intent(Settings.ACTION_DATE_SETTINGS).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "No se pudo abrir Fecha y Hora", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        SettingsButton(
+                            label = "Encendido/Apagado Temporizado",
+                            icon = Icons.Filled.PowerSettingsNew,
+                            onClick = {
+                                val intentsToTry = listOf(
+                                    Intent("android.intent.action.SCHEDULE_POWER_ON_OFF"),
+                                    Intent().setComponent(ComponentName("com.android.settings", "com.android.settings.SchedulePowerOnOffSetting")),
+                                    Intent().setComponent(ComponentName("com.mediatek.schpwronoff", "com.mediatek.schpwronoff.SchPwrOnOffActivity")),
+                                    Intent().setComponent(ComponentName("com.android.settings", "com.android.settings.Settings\$SchedulePowerOnOffSettingActivity")),
+                                    Intent().setComponent(ComponentName("com.android.settings", "com.android.settings.SchedulePowerOnOff")),
+                                    Intent().setComponent(ComponentName("com.android.settings", "com.android.settings.Settings\$SchedulePowerOnOffActivity"))
+                                )
+
+                                var success = false
+                                for (intent in intentsToTry) {
+                                    try {
+                                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        context.startActivity(intent)
+                                        success = true
+                                        break
+                                    } catch (e: Exception) {
+                                        // Seguir intentando
+                                    }
+                                }
+
+                                if (!success) {
+                                    Toast.makeText(
+                                        context, 
+                                        "Tu dispositivo no soporta encendido/apagado temporizado por hardware", 
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        SettingsButton(
+                            label = "Configurar idioma y teclado",
+                            icon = Icons.Filled.Language,
+                            onClick = {
+                                try {
+                                    // Abre la pantalla de administración de teclados (Gboard, idiomas de entrada, etc.)
+                                    val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    try {
+                                        // Fallback a la configuración de idioma general del sistema
+                                        val intentLocale = Intent(Settings.ACTION_LOCALE_SETTINGS).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        context.startActivity(intentLocale)
+                                    } catch (ex: Exception) {
+                                        Toast.makeText(context, "No se pudo abrir Ajustes de Idioma", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        SettingsButton(
+                            label = "Bloqueo de pantalla",
+                            icon = Icons.Filled.Lock,
+                            onClick = {
+                                try {
+                                    // Abre directamente la pantalla de configurar PIN/Patrón/Contraseña
+                                    val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_SET_NEW_PASSWORD).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    try {
+                                        // Fallback a los ajustes generales de seguridad del sistema
+                                        val intentSecurity = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        context.startActivity(intentSecurity)
+                                    } catch (ex: Exception) {
+                                        Toast.makeText(context, "No se pudo abrir Ajustes de Bloqueo", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+
+
+
 
                 // ADMINISTRACIÓN / AJUSTES AVANZADOS
                 if (isStealth) {

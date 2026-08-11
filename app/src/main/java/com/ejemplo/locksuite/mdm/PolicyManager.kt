@@ -329,9 +329,16 @@ class PolicyManager(private val context: Context) {
             val wallpaperManager = android.app.WallpaperManager.getInstance(context)
             val bitmap = android.graphics.Bitmap.createBitmap(1080, 1920, android.graphics.Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(bitmap)
-            val paint = android.graphics.Paint().apply {
-                color = android.graphics.Color.parseColor("#0F0F0F")
-            }
+            val paint = android.graphics.Paint()
+            
+            // Degradado elegante: Gris azulado oscuro a Negro pizarra
+            val shader = android.graphics.LinearGradient(
+                0f, 0f, 0f, 1920f,
+                android.graphics.Color.parseColor("#151821"),
+                android.graphics.Color.parseColor("#090A0F"),
+                android.graphics.Shader.TileMode.CLAMP
+            )
+            paint.shader = shader
             canvas.drawRect(0f, 0f, 1080f, 1920f, paint)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {

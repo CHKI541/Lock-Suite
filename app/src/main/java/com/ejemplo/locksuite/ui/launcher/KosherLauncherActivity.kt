@@ -237,9 +237,38 @@ fun LauncherScreen(
             )
         )
 
-        // Ordenar alfabéticamente
-        list.sortBy { it.label }
+        // Ordenar según prioridad solicitada por el usuario:
+        // Grupo 1: Galería, Archivos, Música, Grabadora
+        // Grupo 2: Calendario, Calculadora, Reloj, Notas
+        // Grupo 3: Resto de las aplicaciones
+        // Grupo 4: Ajustes y Bluetooth (al final de todo)
+        fun getAppSortingWeight(item: AppItem): Int {
+            val lbl = item.label
+            val pkg = item.packageName.lowercase()
+            if (pkg == "com.ejemplo.locksuite.settings" || lbl == "Ajustes" || 
+                pkg.contains("bluetooth") || lbl.lowercase().contains("bluetooth")) {
+                return 4
+            }
+            if (lbl == "Galería" || lbl == "Archivos" || lbl == "Música" || lbl == "Grabadora") {
+                return 1
+            }
+            if (lbl == "Calendario" || lbl == "Calculadora" || lbl == "Reloj" || lbl == "Notas") {
+                return 2
+            }
+            return 3
+        }
+
+        list.sortWith(Comparator { a, b ->
+            val wA = getAppSortingWeight(a)
+            val wB = getAppSortingWeight(b)
+            if (wA != wB) {
+                wA.compareTo(wB)
+            } else {
+                a.label.compareTo(b.label, ignoreCase = true)
+            }
+        })
         list
+
     }
 
     val itemsPerPage = 4
@@ -251,14 +280,21 @@ fun LauncherScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F0F0F))
+            .background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF151821), // Slate/Gris azulado oscuro
+                        Color(0xFF090A0F)  // Negro pizarra
+                    )
+                )
+            )
     ) {
         // ─── BARRA DE ESTADO PERSONALIZADA ───
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(36.dp)
-                .background(Color(0xFF161616))
+                .background(Color(0x15FFFFFF)) // Traslucidez elegante
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween

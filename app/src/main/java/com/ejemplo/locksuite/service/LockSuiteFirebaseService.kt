@@ -294,11 +294,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                             val localDpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
                             val localAdminComponent = android.content.ComponentName(this, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
                             
-                            // 1. Des-suspender Play Store (silenciosamente si falla por no estar instalado)
+                            // 1. Des-ocultar y des-suspender Play Store (silenciosamente si falla por no estar instalado)
                             try {
+                                localDpm.setApplicationHidden(localAdminComponent, "com.android.vending", false)
                                 localDpm.setPackagesSuspended(localAdminComponent, arrayOf("com.android.vending"), false)
                             } catch (e: Exception) {
-                                android.util.Log.w("LockSuiteFCM", "No se pudo des-suspender Play Store: ${e.message}")
+                                android.util.Log.w("LockSuiteFCM", "No se pudo des-ocultar/des-suspender Play Store: ${e.message}")
                             }
                             
                             // 2. Levantar restricciones de instalación temporalmente y marcar en progreso

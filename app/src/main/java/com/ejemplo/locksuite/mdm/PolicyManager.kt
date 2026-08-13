@@ -160,6 +160,19 @@ class PolicyManager(private val context: Context) {
         
         // Restaurar restricción de apps (nativa o programática)
         refreshInstallRestriction()
+
+        // Restaurar estado de ocultamiento y suspensión de Play Store según sus preferencias
+        try {
+            val shouldHidePlayStore = prefs.getBoolean("hide_com.android.vending", false)
+            val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
+            
+            dpm.setApplicationHidden(adminComponent, "com.android.vending", shouldHidePlayStore)
+            if (!shouldHidePlayStore) {
+                dpm.setPackagesSuspended(adminComponent, arrayOf("com.android.vending"), shouldSuspendPlayStore)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "No se pudo restaurar ocultamiento/suspension de Play Store: ${e.message}")
+        }
     }
 
     fun setHideSuspendedApps(block: Boolean) {

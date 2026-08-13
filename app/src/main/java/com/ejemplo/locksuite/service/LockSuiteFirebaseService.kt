@@ -71,6 +71,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
             return
         }
 
+        var commandErrorReason: String? = null
         var success = true
         try {
             success = when (command) {
@@ -81,6 +82,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                         true
                     } catch (e: Exception) {
                         e.printStackTrace()
+                        commandErrorReason = e.message ?: e.toString()
                         false
                     }
                 }
@@ -292,8 +294,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                             val localDpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
                             val localAdminComponent = android.content.ComponentName(this, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
                             
-                            // 1. Des-suspender Play Store
-                            localDpm.setPackagesSuspended(localAdminComponent, arrayOf("com.android.vending"), false)
+                            // 1. Des-suspender Play Store (silenciosamente si falla por no estar instalado)
+                            try {
+                                localDpm.setPackagesSuspended(localAdminComponent, arrayOf("com.android.vending"), false)
+                            } catch (e: Exception) {
+                                android.util.Log.w("LockSuiteFCM", "No se pudo des-suspender Play Store: ${e.message}")
+                            }
                             
                             // 2. Levantar restricciones de instalación temporalmente y marcar en progreso
                             val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
@@ -302,38 +308,63 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                                 .putBoolean("mdm_install_in_progress", true)
                                 .apply()
                             
-                            localDpm.clearUserRestriction(localAdminComponent, android.os.UserManager.DISALLOW_INSTALL_APPS)
-                            localDpm.clearUserRestriction(localAdminComponent, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
-                            
-                            // 3. Abrir Play Store con la app correspondiente
-                            val playStoreIntent = android.content.Intent(
-                                android.content.Intent.ACTION_VIEW,
-                                android.net.Uri.parse("market://details?id=$packageName")
-                            ).apply {
-                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                            try {
+                                localDpm.clearUserRestriction(localAdminComponent, android.os.UserManager.DISALLOW_INSTALL_APPS)
+                                localDpm.clearUserRestriction(localAdminComponent, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+                            } catch (e: Exception) {
+                                android.util.Log.w("LockSuiteFCM", "No se pudieron remover restricciones de instalación: ${e.message}")
                             }
-                            startActivity(playStoreIntent)
+                            
+                            // 3. Abrir Play Store con la app correspondiente, fallback al navegador si falla
+                            try {
+                                val playStoreIntent = android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse("market://details?id=$packageName")
+                                ).apply {
+                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                                }
+                                startActivity(playStoreIntent)
+                            } catch (e: android.content.ActivityNotFoundException) {
+                                try {
+                                    val webIntent = android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse("https://play.google.com/store/apps/details?id=$packageName")
+                                    ).apply {
+                                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                                    }
+                                    startActivity(webIntent)
+                                } catch (ex: Exception) {
+                                    throw Exception("No se encontró Play Store ni navegador para actualizar: ${ex.message}")
+                                }
+                            } catch (e: Exception) {
+                                throw Exception("Error al abrir Play Store: ${e.message}")
+                            }
                             
                             // 4. Programar temporizador de seguridad (watchdog) de 10 minutos
-                            val watchdogIntent = android.content.Intent(this, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
-                                action = "UPDATE_TIMEOUT"
+                            try {
+                                val watchdogIntent = android.content.Intent(this, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
+                                    action = "UPDATE_TIMEOUT"
+                                }
+                                val pendingIntent = android.app.PendingIntent.getBroadcast(
+                                    this,
+                                    9911,
+                                    watchdogIntent,
+                                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                                )
+                                val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                                val triggerTime = android.os.SystemClock.elapsedRealtime() + 10 * 60 * 1000L
+                                alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent)
+                            } catch (e: Exception) {
+                                android.util.Log.w("LockSuiteFCM", "No se pudo programar el temporizador watchdog: ${e.message}")
                             }
-                            val pendingIntent = android.app.PendingIntent.getBroadcast(
-                                this,
-                                9911,
-                                watchdogIntent,
-                                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-                            )
-                            val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-                            val triggerTime = android.os.SystemClock.elapsedRealtime() + 10 * 60 * 1000L
-                            // Usar set() normal para evitar SecurityException en Android 12+ (no se necesita exactitud de milisegundos)
-                            alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent)
                             true
                         } catch (e: Exception) {
                             e.printStackTrace()
+                            commandErrorReason = e.message ?: e.toString()
                             false
                         }
                     } else {
+                        commandErrorReason = "No package specified"
                         false
                     }
                 }
@@ -391,13 +422,18 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                         com.ejemplo.locksuite.security.PinManager.resetAttempts(this)
                         true
                     } else {
+                        commandErrorReason = "pinHash or pinSalt empty"
                         false
                     }
                 }
-                else -> false
+                else -> {
+                    commandErrorReason = "Unknown command: $command"
+                    false
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            commandErrorReason = e.message ?: e.toString()
             success = false
         }
 
@@ -408,11 +444,14 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 val baseRef = FirebaseDatabase.getInstance().reference
                 val status = if (success) "applied" else "failed"
                 
-                val ackData = mapOf(
+                val ackData = mutableMapOf<String, Any>(
                     "status" to status,
                     "command" to command,
                     "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
                 )
+                if (commandErrorReason != null) {
+                    ackData["reason"] = commandErrorReason!!
+                }
                 baseRef.child("devices/$deviceId/commandAcks/$commandId").setValue(ackData)
                 baseRef.child("devices/$deviceId/info/commandAcks/$commandId").setValue(ackData).addOnFailureListener {}
             } catch (e: Exception) {

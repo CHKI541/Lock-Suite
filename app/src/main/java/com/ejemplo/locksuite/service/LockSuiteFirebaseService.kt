@@ -291,9 +291,21 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                         try {
                             val localDpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
                             val localAdminComponent = android.content.ComponentName(this, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
+                            
+                            // 1. Des-suspender Play Store
                             localDpm.setPackagesSuspended(localAdminComponent, arrayOf("com.android.vending"), false)
+                            
+                            // 2. Levantar restricciones de instalación temporalmente y marcar en progreso
                             val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
-                            prefs.edit().putString("updating_package", packageName).apply()
+                            prefs.edit()
+                                .putString("updating_package", packageName)
+                                .putBoolean("mdm_install_in_progress", true)
+                                .apply()
+                            
+                            localDpm.clearUserRestriction(localAdminComponent, android.os.UserManager.DISALLOW_INSTALL_APPS)
+                            localDpm.clearUserRestriction(localAdminComponent, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+                            
+                            // 3. Abrir Play Store con la app correspondiente
                             val playStoreIntent = android.content.Intent(
                                 android.content.Intent.ACTION_VIEW,
                                 android.net.Uri.parse("market://details?id=$packageName")
@@ -301,6 +313,8 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
                             }
                             startActivity(playStoreIntent)
+                            
+                            // 4. Programar temporizador de seguridad (watchdog) de 10 minutos
                             val watchdogIntent = android.content.Intent(this, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
                                 action = "UPDATE_TIMEOUT"
                             }
@@ -312,7 +326,8 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                             )
                             val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
                             val triggerTime = android.os.SystemClock.elapsedRealtime() + 10 * 60 * 1000L
-                            alarmManager.setExact(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent)
+                            // Usar set() normal para evitar SecurityException en Android 12+ (no se necesita exactitud de milisegundos)
+                            alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent)
                             true
                         } catch (e: Exception) {
                             e.printStackTrace()

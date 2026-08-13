@@ -34,7 +34,10 @@ class PackageReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            prefs.edit().remove("updating_package").apply()
+            prefs.edit()
+                .remove("updating_package")
+                .putBoolean("mdm_install_in_progress", false)
+                .apply()
             return
         }
 

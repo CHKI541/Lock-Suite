@@ -80,6 +80,83 @@ class BlockOverlayManager(private val service: AccessibilityService) {
         }
     }
 
+    fun showBlockingMessageOverlay(message: String) {
+        mainHandler.post {
+            val key = "blocking_message"
+            if (activeOverlays.containsKey(key)) return@post
+            
+            val overlayView = android.widget.LinearLayout(service).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setBackgroundColor(Color.parseColor("#151821")) // Vertical gradient deep blue/black
+                
+                // Add message text view
+                addView(android.widget.TextView(service).apply {
+                    text = message
+                    setTextColor(Color.WHITE)
+                    textSize = 22f
+                    gravity = Gravity.CENTER
+                    setPadding(80, 80, 80, 40)
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                })
+                
+                // Add status subtitle text view
+                addView(android.widget.TextView(service).apply {
+                    tag = "subtitle"
+                    text = "Por favor, no toque la pantalla..."
+                    setTextColor(Color.parseColor("#8E9AA8"))
+                    textSize = 15f
+                    gravity = Gravity.CENTER
+                    setPadding(80, 0, 80, 80)
+                })
+                
+                // Add progress bar
+                addView(android.widget.ProgressBar(service).apply {
+                    isIndeterminate = true
+                })
+            }
+            
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.CENTER
+            }
+            
+            try {
+                windowManager.addView(overlayView, params)
+                activeOverlays[key] = overlayView
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun updateBlockingMessageSubtitle(subtitle: String) {
+        mainHandler.post {
+            val key = "blocking_message"
+            val overlay = activeOverlays[key] as? android.widget.LinearLayout ?: return@post
+            val subtitleView = overlay.findViewWithTag<android.widget.TextView>("subtitle")
+            subtitleView?.text = subtitle
+        }
+    }
+
+    fun hideBlockingMessageOverlay() {
+        mainHandler.post {
+            val key = "blocking_message"
+            activeOverlays.remove(key)?.let { view ->
+                try {
+                    windowManager.removeView(view)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
     private fun updatePosition(view: View, rect: Rect) {
         val params = view.layoutParams as WindowManager.LayoutParams
         params.x = rect.left

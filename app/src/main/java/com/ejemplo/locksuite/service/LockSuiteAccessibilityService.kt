@@ -140,6 +140,31 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Bloqueo y automatización durante actualización de apps (UPDATE_APP)
+        val prefs = PrefsHelper.getMdmPrefs(this)
+        val updatingPkg = prefs.getString("updating_package", null)
+        val isUpdateInProgress = prefs.getBoolean("mdm_install_in_progress", false)
+        if (isUpdateInProgress && !updatingPkg.isNullOrBlank()) {
+            if (packageName == "com.android.vending") {
+                handlePlayStoreAutoUpdate(ev, updatingPkg)
+                return
+            } else if (packageName != LOCKSUITE_PKG) {
+                // Redirigir de vuelta a Play Store para evitar que navegue por otras apps mientras se actualiza
+                try {
+                    val playStoreIntent = Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse("market://details?id=$updatingPkg")
+                    ).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    }
+                    startActivity(playStoreIntent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                return
+            }
+        }
+
         val eventType = ev.eventType
         if (eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
@@ -846,6 +871,132 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed({
             blockInProgress = false
         }, 700)
+    }
+
+    private fun handlePlayStoreAutoUpdate(event: AccessibilityEvent, updatingPkg: String) {
+        // 1. Mostrar/mantener el overlay de bloqueo a pantalla completa
+        val appName = try {
+            packageManager.getApplicationLabel(
+                packageManager.getApplicationInfo(updatingPkg, 0)
+            ).toString()
+        } catch (e: Exception) { updatingPkg }
+        overlayManager.showBlockingMessageOverlay("Actualizando $appName")
+
+        // 2. Escanear la pantalla de Play Store buscando botones de acción.
+        // Usamos dos banderas separadas para no confundir el botón de completado
+        // ("Abrir") con el de actualización ("Actualizar").
+        val root = rootInActiveWindow ?: return
+
+        var foundActionButton = false       // Hay botón Actualizar/Instalar → hacer clic
+        var foundCompletionButton = false   // Hay botón Abrir/Desinstalar → ya terminó
+
+        fun scanNodes(node: AccessibilityNodeInfo?) {
+            if (node == null) return
+            val text = node.text?.toString()?.lowercase() ?: ""
+            val viewId = node.viewIdResourceName ?: ""
+
+            val isActionButton = viewId == "com.android.vending:id/buy_button" ||
+                viewId == "com.android.vending:id/action_button"
+
+            if (isActionButton || node.isClickable) {
+                when {
+                    // Botón de completado: la actualización ya terminó
+                    text == "abrir" || text == "open" || text == "פתח" ||
+                    text == "desinstalar" || text == "uninstall" ||
+                    text == "desactivar" || text == "disable" ->
+                        foundCompletionButton = true
+
+                    // Botón de acción principal: hacer clic para instalar/actualizar
+                    text == "actualizar" || text == "update" || text == "עדכן" ||
+                    text == "instalar" || text == "install" || text == "התקן" ||
+                    text == "habilitar" || text == "enable" ||
+                    isActionButton && text.isNotBlank() && !foundCompletionButton -> {
+                        if (!foundActionButton && performClickOnNode(node)) {
+                            foundActionButton = true
+                            overlayManager.updateBlockingMessageSubtitle("Descargando e instalando...")
+                        }
+                    }
+
+                    // Diálogos de confirmación intermedios (ej: descargar por datos)
+                    text == "continuar" || text == "continue" ||
+                    text == "aceptar" || text == "ok" ||
+                    text == "proceder" || text == "descargar" || text == "download" ||
+                    text == "sí" || text == "yes" ->
+                        performClickOnNode(node)
+                }
+            }
+
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { child ->
+                    scanNodes(child)
+                    child.recycle()
+                }
+            }
+        }
+
+        scanNodes(root)
+        root.recycle()
+
+        // 3. Si SOLO vemos "Abrir" (sin ningún botón de acción activo),
+        //    la actualización terminó → cerrar y re-bloquear.
+        if (foundCompletionButton && !foundActionButton) {
+            Log.i(TAG, "Play Store auto-update completado para $updatingPkg. Cerrando y re-bloqueando...")
+            overlayManager.hideBlockingMessageOverlay()
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            try {
+                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+                policyManager.restoreInstallRestrictions()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            PrefsHelper.getMdmPrefs(this).edit()
+                .remove("updating_package")
+                .putBoolean("mdm_install_in_progress", false)
+                .apply()
+            cancelUpdateTimeoutAlarm(applicationContext)
+        }
+    }
+
+    private fun performClickOnNode(node: AccessibilityNodeInfo?): Boolean {
+        // Subir por el árbol de nodos buscando uno clickeable, reciclando los
+        // intermedios para evitar leaks de memoria nativa de AccessibilityNodeInfo.
+        var temp: AccessibilityNodeInfo? = node?.parent
+        try {
+            if (node?.isClickable == true) {
+                return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+            while (temp != null) {
+                if (temp.isClickable) {
+                    return temp.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }
+                val next = temp.parent
+                temp.recycle()
+                temp = next
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            temp?.recycle()
+        }
+        return false
+    }
+
+    private fun cancelUpdateTimeoutAlarm(context: Context) {
+        try {
+            val watchdogIntent = Intent(context, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
+                action = "UPDATE_TIMEOUT"
+            }
+            val pendingIntent = android.app.PendingIntent.getBroadcast(
+                context,
+                9911,
+                watchdogIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            alarmManager.cancel(pendingIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     override fun onInterrupt() {

@@ -504,13 +504,8 @@ class PolicyManager(private val context: Context) {
                     e.printStackTrace()
                 }
             } else {
-                // Si ya no hay apps bloqueadas en WebView ni gifs bloqueados, apagar la VPN por completo para ahorrar batería
-                val hasCustomDnsRulesA = try {
-                    com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.getAllRules().isNotEmpty()
-                } catch (e: Exception) {
-                    false
-                }
-                if (WebViewBlockManager.getBlockedPackages(context).isEmpty() && !isGifsBlocked() && !hasCustomDnsRulesA) {
+                // Si ninguna política activa requiere la VPN, apagarla por completo para ahorrar batería
+                if (!com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(context)) {
                     val stopServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
                         action = "STOP_VPN"
                     }
@@ -557,15 +552,8 @@ class PolicyManager(private val context: Context) {
                     e.printStackTrace()
                 }
             } else {
-                // Si ya no hay apps bloqueadas en WebView, ni ad blocking, ni gifs bloqueados, apagar la VPN
-                val isAdBlockActive = isAdBlockingEnabled()
-                val hasBlockedWebViews = WebViewBlockManager.getBlockedPackages(context).isNotEmpty()
-                val hasCustomDnsRulesB = try {
-                    com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.getAllRules().isNotEmpty()
-                } catch (e: Exception) {
-                    false
-                }
-                if (!isAdBlockActive && !hasBlockedWebViews && !hasCustomDnsRulesB) {
+                // Si ninguna política activa requiere la VPN, apagarla por completo para ahorrar batería
+                if (!com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(context)) {
                     val stopServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
                         action = "STOP_VPN"
                     }

@@ -22,8 +22,15 @@ object NetworkForwarder {
                 val linkProps = cm.getLinkProperties(activeNetwork)
                 val dnsList = linkProps?.dnsServers
                 if (!dnsList.isNullOrEmpty()) {
+                    // Preferencia a DNS IPv4
                     for (dns in dnsList) {
                         if (dns is Inet4Address && !dns.isLoopbackAddress && dns.hostAddress != "10.0.0.1") {
+                            return dns
+                        }
+                    }
+                    // Soporte para redes IPv6 puras / DNS64
+                    for (dns in dnsList) {
+                        if (!dns.isLoopbackAddress && dns.hostAddress != "10.0.0.1" && dns.hostAddress != "::1") {
                             return dns
                         }
                     }
@@ -33,7 +40,11 @@ object NetworkForwarder {
             // Fallback
         }
         val customIp = PrefsHelper.getMdmPrefs(vpnService).getString("upstream_dns_ip", "8.8.8.8") ?: "8.8.8.8"
-        return InetAddress.getByName(customIp)
+        return try {
+            InetAddress.getByName(customIp)
+        } catch (e: Exception) {
+            InetAddress.getByName("8.8.8.8")
+        }
     }
 
     fun forwardDnsQuery(
@@ -48,14 +59,6 @@ object NetworkForwarder {
             socket.soTimeout = TIMEOUT_MS
 
             val upstream = getUpstreamDnsAddress(vpnService)
-            // connect() hace que el kernel descarte cualquier datagrama que no venga
-            // exactamente del resolutor al que le preguntamos. Antes el socket quedaba
-            // sin conectar y receive() aceptaba el PRIMER datagrama que llegara, viniera
-            // de donde viniera: alguien en la misma red Wi-Fi (un locutorio, un café, una
-            // red abierta) podía adelantarse al resolutor real y responder por él,
-            // apuntando cualquier dominio permitido a la IP que quisiera. Con estos
-            // celulares conectándose a redes que no controlamos, es una defensa barata
-            // que conviene tener.
 
             socket.send(DatagramPacket(packet.payload, packet.payload.size, upstream, UPSTREAM_DNS_PORT))
 
@@ -63,9 +66,25 @@ object NetworkForwarder {
             val responsePacket = DatagramPacket(responseBuffer, responseBuffer.size)
             socket.receive(responsePacket)
 
-            // Segunda verificación, independiente de la anterior: el ID de transacción
-            // de la respuesta tiene que coincidir con el de la consulta. Cubre el caso
-            // de un atacante en la misma red que además falsifique la IP de origen.
+            // Verificación 1: la respuesta tiene que venir del resolutor al que le
+            // preguntamos. Un socket UDP sin conectar acepta el PRIMER datagrama que
+            // llegue, venga de donde venga: alguien en la misma red Wi-Fi (un locutorio,
+            // un café, una red abierta) puede adelantarse al resolutor real y responder
+            // por él, apuntando cualquier dominio permitido a la IP que quiera.
+            //
+            // Antes esto se resolvía con socket.connect(), pero se quitó a propósito
+            // (commit "Fix split-tunnel internet blockage... removing UDP socket connect")
+            // porque connect() después de protect() puede re-asociar el socket a la red
+            // del túnel y cortar internet. Comparar la dirección de origen a mano logra lo
+            // mismo sin tocar el enrutamiento, así que es el reemplazo seguro.
+            if (responsePacket.address != upstream) {
+                android.util.Log.w("KosherVPN", "Respuesta DNS descartada: vino de ${responsePacket.address}, no del resolutor consultado.")
+                return
+            }
+
+            // Verificación 2, independiente de la anterior: el ID de transacción de la
+            // respuesta tiene que coincidir con el de la consulta. Cubre el caso de un
+            // atacante en la misma red que además falsifique la IP de origen.
             if (responsePacket.length < 12 || packet.payload.size < 2 ||
                 responseBuffer[0] != packet.payload[0] ||
                 responseBuffer[1] != packet.payload[1]

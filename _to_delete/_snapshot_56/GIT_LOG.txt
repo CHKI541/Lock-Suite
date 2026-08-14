@@ -1,0 +1,25 @@
+d7fba2d Actualizacion automatica a version 0.6.12 (Codigo 74)
+43ad3cb Actualizacion automatica a version 0.6.11 (Codigo 73)
+fc7ba44 Actualizacion automatica a version 0.6.10 (Codigo 72)
+7f4ff7b Actualizacion automatica a version 0.6.9 (Codigo 71)
+c301600 Actualizacion automatica a version 0.6.8 (Codigo 70)
+8c4e654 Actualizacion automatica a version 0.6.7 (Codigo 69)
+ab5d91f Actualizacion automatica a version 0.6.6 (Codigo 68)
+12ca726 Actualizacion automatica a version 0.6.5 (Codigo 67)
+3f42636 Actualizacion automatica a version 0.6.3 (Codigo 65)
+bac6f99 Actualizacion automatica a version 0.6.2 (Codigo 64)
+b4409b8 Split Firebase deployment steps and add critical deployment notes to README
+dfbf8e4 Update walkthrough.md with v0.6.1 changes
+88281cf Actualizacion automatica a version 0.6.1 (Codigo 63)
+cc57be1 Fix UI DNS buttons visibility by adding --accent CSS variable, and wire quick-update button to apps update modal
+2ac9627 Actualizacion automatica a version 0.6.0 (Codigo 62)
+6c9c9bf Actualizacion automatica a version 0.5.5 (Codigo 61)
+e9aa622 Actualizacion automatica a version 0.5.4 (Codigo 60)
+7f894c8 Fix split-tunnel internet blockage by disabling Always-on VPN lockdown and removing UDP socket connect
+7c6ad27 Fix R8 WorkDatabase startup crash - kept Room/WorkManager classes (v57 / 0.5.1)
+8bba19a Migration to Firebase Hosting for OTA updates & 0.5.0 Release deep revision fixes
+b968149 Fix tab switcher listener syntax error in app.js
+ef3cbe0 Increment cache-busting version tags for styles.css and app.js in index.html
+38aafa0 Update walkthrough.md with web panel UI improvements
+223cde9 Implement sidebar expand button, app icons, and tooltips in web panel
+89dbf78 Add 32-bit (armeabi-v7a) support, update version to 0.4.9.3, and fix /presets firebase database rule

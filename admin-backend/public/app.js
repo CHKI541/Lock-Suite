@@ -674,10 +674,10 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                 return false;
             }
             d = t.pin, s = t.remember;
-            verifiedDevicePins[selectedDeviceId] = t.pin;
+            verifiedDevicePins[e] = t.pin;
             const dHash = c.pinHash || (c.info && c.info.pinHash);
             if (dHash) {
-                verifiedDevicePinHashes[selectedDeviceId] = dHash;
+                verifiedDevicePinHashes[e] = dHash;
             }
             continue;
         }
@@ -1847,7 +1847,9 @@ async function runCommandOnGroup(groupId, command, packages = null, buttonEl = n
             const payload = {
                 deviceId: deviceId,
                 command: command,
-                packages: packages
+                packages: packages,
+                devicePin: verifiedDevicePins[deviceId] || null,
+                rememberDevice: true
             };
             if (extraParams) {
                 Object.assign(payload, extraParams);
@@ -1893,7 +1895,13 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             await fetch("https://sendcommandv8-687828714595.us-central1.run.app", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "Authorization": `Bearer ${idToken}` },
-                body: JSON.stringify({ deviceId: deviceId, command: cmd, packages: pkgs })
+                body: JSON.stringify({
+                    deviceId: deviceId,
+                    command: cmd,
+                    packages: pkgs,
+                    devicePin: verifiedDevicePins[deviceId] || null,
+                    rememberDevice: true
+                })
             }).catch(() => {});
         };
 

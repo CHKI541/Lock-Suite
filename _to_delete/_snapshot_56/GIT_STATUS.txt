@@ -1,0 +1,18 @@
+warning: Empty last update token.
+ M Informe_Correcciones_LineaPorLinea_2026-07-26.txt
+ M Informe_Segunda_Revision_Profunda_2026-07-27.txt
+ M _to_delete/app__src__main__java__com__ejemplo__locksuite__service__LockSuiteFirebaseService.kt
+ M _to_delete/app__src__main__java__com__ejemplo__locksuite__ui__auth__LoginActivity.kt
+ M admin-backend/database.rules.json
+ M admin-backend/functions/index.js
+ M admin-backend/public/app.js
+ M admin-backend/public/version.json
+ M app/build.gradle.kts
+ M app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt
+ M app/src/main/java/com/ejemplo/locksuite/service/LockSuiteAccessibilityService.kt
+ M app/src/main/java/com/ejemplo/locksuite/service/LockSuiteFirebaseService.kt
+ M app/src/main/java/com/ejemplo/locksuite/ui/emergency/BlockAccessibilityActivity.kt
+ M app/src/main/java/com/ejemplo/locksuite/util/FirebaseDeviceSync.kt
+ M app/src/main/java/com/ejemplo/locksuite/util/NetworkForwarder.kt
+?? DOCUMENTO_TECNICO_PARA_CLAUDE.md
+?? _snapshot/

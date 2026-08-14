@@ -4,16 +4,14 @@
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
         ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
-        ".write": "auth != null"
+        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || !data.exists() || data.child('ownerUid').val() === auth.uid || newData.child('ownerUid').val() === auth.uid)"
       }
     },
     "deviceSecrets": {
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
-        "pinHash": { ".write": "auth != null" },
-        "pinSalt": { ".write": "auth != null" },
-        "recoveryCode": { ".write": "auth != null" },
-        "commandSecret": { ".write": "auth != null && (!data.exists() || newData.val() === data.val())" }
+        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || !data.exists() || data.child('ownerUid').val() === auth.uid || newData.child('ownerUid').val() === auth.uid || root.child('devices').child($device_id).child('ownerUid').val() === auth.uid)",
+        "commandSecret": { ".write": "auth != null && (!data.exists() || newData.val() === data.val() || auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())" }
       }
     },
     "authorizedAdmins": {

@@ -287,7 +287,22 @@ class KosherVpnService : VpnService() {
         // Intentar resolver el UID y paquete dueño del socket al principio para logging y reglas personalizadas
         val ownerUid = resolveOwnerUid(packet)
         var logPackage = "desconocido"
-        if (ownerUid != android.os.Process.INVALID_UID) {
+        // La inmensa mayoría de las consultas DNS NO las emite la app: las emite netd, el
+        // proxy DNS del sistema, en nombre de la app (así funciona getaddrinfo en Android).
+        // O sea que el UID dueño del socket es el del sistema, no el de la app.
+        //
+        // Antes ese UID del sistema se resolvía igual a un nombre de paquete real
+        // (getPackagesForUid(1000) devuelve "android" o similar), así que logPackage
+        // quedaba distinto de "desconocido" y el código entraba en la rama de reglas POR
+        // APP con el paquete equivocado. Ahí no coincidía ninguna regla y —lo peor— ya
+        // nunca se llegaba a la rama de reserva, que es la que aplica la lista negra
+        // global de WebView y la regla de Mercado Pago. Resultado: esas dos protecciones
+        // quedaban sin efecto en la práctica, en TODAS las versiones de Android.
+        //
+        // Cualquier UID por debajo de 10000 (Process.FIRST_APPLICATION_UID) no pertenece a
+        // una app instalada sino al sistema. Se usa el número literal a propósito: esa
+        // constante es @hide en varias versiones del SDK.
+        if (ownerUid != android.os.Process.INVALID_UID && ownerUid >= 10000) {
             val packageName = packageManager.getPackagesForUid(ownerUid)?.firstOrNull()
             if (packageName != null) {
                 logPackage = packageName

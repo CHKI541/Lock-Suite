@@ -412,16 +412,28 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     val newHash = data["pinHash"]
                     val newSalt = data["pinSalt"]
                     if (!newHash.isNullOrBlank() && !newSalt.isNullOrBlank()) {
-                        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
-                        prefs.edit()
-                            .putString(com.ejemplo.locksuite.util.Constants.KEY_PIN_HASH, newHash)
-                            .putString(com.ejemplo.locksuite.util.Constants.KEY_PIN_SALT, newSalt)
-                            .apply()
-                        
-                        // MED-11: Cerrar sesiones locales activas y resetear intentos fallidos
-                        com.ejemplo.locksuite.security.SessionManager.closeSession()
-                        com.ejemplo.locksuite.security.PinManager.resetAttempts(this)
-                        true
+                        val isValidBase64 = try {
+                            android.util.Base64.decode(newHash, android.util.Base64.NO_WRAP)
+                            android.util.Base64.decode(newSalt, android.util.Base64.NO_WRAP)
+                            true
+                        } catch (e: Exception) {
+                            false
+                        }
+                        if (isValidBase64) {
+                            val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
+                            prefs.edit()
+                                .putString(com.ejemplo.locksuite.util.Constants.KEY_PIN_HASH, newHash)
+                                .putString(com.ejemplo.locksuite.util.Constants.KEY_PIN_SALT, newSalt)
+                                .apply()
+                            
+                            // MED-11: Cerrar sesiones locales activas y resetear intentos fallidos
+                            com.ejemplo.locksuite.security.SessionManager.closeSession()
+                            com.ejemplo.locksuite.security.PinManager.resetAttempts(this)
+                            true
+                        } else {
+                            commandErrorReason = "pinHash or pinSalt invalid format"
+                            false
+                        }
                     } else {
                         commandErrorReason = "pinHash or pinSalt empty"
                         false

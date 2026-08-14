@@ -1,0 +1,16 @@
+=== ¿siguen mis correcciones de la pasada anterior? ===
+isTrivialPin               1
+LOCKOUT_ELAPSED_KEY        1
+findQuestionEnd            2
+perAppDnsRulesSupported    1
+domainLabels               2
+isWatchdogRunning          2
+@Volatile                  3
+gifTokens                  2
+
+=== version actual ===
+        versionCode = 74
+        versionName = "0.6.12"
+
+=== archivos .kt totales ===
+55

@@ -1,0 +1,17 @@
+warning: Empty last update token.
+ Informe_Correcciones_LineaPorLinea_2026-07-26.txt  |  474 +++---
+ Informe_Segunda_Revision_Profunda_2026-07-27.txt   |  226 +--
+ ...locksuite__service__LockSuiteFirebaseService.kt |  884 +++++------
+ ..._ejemplo__locksuite__ui__auth__LoginActivity.kt | 1630 ++++++++++----------
+ admin-backend/database.rules.json                  |    5 +-
+ admin-backend/functions/index.js                   |    1 +
+ admin-backend/public/app.js                        |   16 +-
+ admin-backend/public/version.json                  |   14 +-
+ app/build.gradle.kts                               |  348 ++---
+ .../com/ejemplo/locksuite/mdm/PolicyManager.kt     |   26 +-
+ .../service/LockSuiteAccessibilityService.kt       |    6 +-
+ .../locksuite/service/LockSuiteFirebaseService.kt  |  143 +-
+ .../ui/emergency/BlockAccessibilityActivity.kt     |  342 ++--
+ .../ejemplo/locksuite/util/FirebaseDeviceSync.kt   |   68 +-
+ .../com/ejemplo/locksuite/util/NetworkForwarder.kt |   13 +-
+ 15 files changed, 2129 insertions(+), 2067 deletions(-)

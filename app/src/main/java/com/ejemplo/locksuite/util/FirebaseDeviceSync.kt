@@ -52,13 +52,19 @@ object FirebaseDeviceSync {
 
     fun syncToken(context: Context, token: String) {
         withAuth {
+            val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
-            ref.updateChildren(mapOf(
+            val payload = mutableMapOf<String, Any>(
                 "fcmToken" to token,
                 "info/fcmToken" to token,
                 "lastSeen" to ServerValue.TIMESTAMP,
                 "info/lastSeen" to ServerValue.TIMESTAMP
-            )).addOnFailureListener { it.printStackTrace() }
+            )
+            if (authUid.isNotEmpty()) {
+                payload["ownerUid"] = authUid
+                payload["info/ownerUid"] = authUid
+            }
+            ref.updateChildren(payload).addOnFailureListener { it.printStackTrace() }
         }
     }
 
@@ -69,11 +75,17 @@ object FirebaseDeviceSync {
      */
     fun syncLastSeenOnly(context: Context) {
         withAuth {
+            val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
-            ref.updateChildren(mapOf(
+            val payload = mutableMapOf<String, Any>(
                 "lastSeen" to ServerValue.TIMESTAMP,
                 "info/lastSeen" to ServerValue.TIMESTAMP
-            )).addOnFailureListener { it.printStackTrace() }
+            )
+            if (authUid.isNotEmpty()) {
+                payload["ownerUid"] = authUid
+                payload["info/ownerUid"] = authUid
+            }
+            ref.updateChildren(payload).addOnFailureListener { it.printStackTrace() }
         }
     }
 
@@ -85,33 +97,44 @@ object FirebaseDeviceSync {
      */
     fun syncRecoveryCode(context: Context, plaintextCode: String) {
         withAuth {
+            val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
             val secretsRef = FirebaseDatabase.getInstance().getReference("deviceSecrets/${deviceId(context)}")
-            secretsRef.updateChildren(
-                mapOf("recoveryCode" to plaintextCode)
-            ).addOnFailureListener { it.printStackTrace() }
+            val payload = mutableMapOf<String, Any>(
+                "recoveryCode" to plaintextCode
+            )
+            if (authUid.isNotEmpty()) {
+                payload["ownerUid"] = authUid
+            }
+            secretsRef.updateChildren(payload).addOnFailureListener { it.printStackTrace() }
         }
     }
 
     fun syncPinCredentials(context: Context, pinHash: String, pinSalt: String) {
         withAuth {
+            val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
             // 1. Escribir credenciales reales en la ruta protegida deviceSecrets
             val secretsRef = FirebaseDatabase.getInstance().getReference("deviceSecrets/${deviceId(context)}")
-            secretsRef.updateChildren(
-                mapOf(
-                    "pinHash" to pinHash,
-                    "pinSalt" to pinSalt,
-                    "commandSecret" to getOrCreateCommandSecret(context)
-                )
-            ).addOnFailureListener { it.printStackTrace() }
+            val secretsPayload = mutableMapOf<String, Any>(
+                "pinHash" to pinHash,
+                "pinSalt" to pinSalt,
+                "commandSecret" to getOrCreateCommandSecret(context)
+            )
+            if (authUid.isNotEmpty()) {
+                secretsPayload["ownerUid"] = authUid
+            }
+            secretsRef.updateChildren(secretsPayload).addOnFailureListener { it.printStackTrace() }
 
             // 2. Escribir solo la bandera hasPinConfigured en la ruta pública
             val publicRef = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
-            publicRef.updateChildren(
-                mapOf(
-                    "hasPinConfigured" to true,
-                    "info/hasPinConfigured" to true
-                )
-            ).addOnFailureListener { it.printStackTrace() }
+            val publicPayload = mutableMapOf<String, Any>(
+                "hasPinConfigured" to true,
+                "info/hasPinConfigured" to true
+            )
+            if (authUid.isNotEmpty()) {
+                publicPayload["ownerUid"] = authUid
+                publicPayload["info/ownerUid"] = authUid
+            }
+            publicRef.updateChildren(publicPayload).addOnFailureListener { it.printStackTrace() }
         }
     }
 
@@ -271,11 +294,16 @@ object FirebaseDeviceSync {
     }
 
     private fun writeFields(context: Context, fields: Map<String, Any>) {
+        val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
         val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
         val payload = mutableMapOf<String, Any>()
         fields.forEach { (key, value) ->
             payload[key] = value
             payload["info/$key"] = value
+        }
+        if (authUid.isNotEmpty()) {
+            payload["ownerUid"] = authUid
+            payload["info/ownerUid"] = authUid
         }
         payload["lastSeen"] = ServerValue.TIMESTAMP
         payload["info/lastSeen"] = ServerValue.TIMESTAMP

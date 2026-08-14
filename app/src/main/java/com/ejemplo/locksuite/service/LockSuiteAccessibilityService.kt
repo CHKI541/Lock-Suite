@@ -148,7 +148,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (packageName == "com.android.vending") {
                 handlePlayStoreAutoUpdate(ev, updatingPkg)
                 return
-            } else if (packageName != LOCKSUITE_PKG) {
+            } else if (packageName != LOCKSUITE_PKG &&
+                packageName != "com.google.android.gms" &&
+                packageName != "com.google.android.packageinstaller" &&
+                packageName != "com.android.packageinstaller" &&
+                packageName != "com.android.systemui") {
                 // Redirigir de vuelta a Play Store para evitar que navegue por otras apps mientras se actualiza
                 try {
                     val playStoreIntent = Intent(

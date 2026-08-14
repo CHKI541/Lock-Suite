@@ -70,17 +70,24 @@ object AdBlocker {
     fun isBlocked(domain: String): Boolean {
         if (!isReady) return false
         
-        // Limpiamos el dominio y lo separamos por puntos (ej: "ads.google-analytics.com" -> ["ads", "google-analytics", "com"])
-        val labels = domain.lowercase().removeSuffix(".").split(".")
-        if (labels.size < 2) return false
-        
-        // Probamos los sufijos combinando los componentes del final hacia el principio (ej: "ads.google-analytics.com", "google-analytics.com")
-        // Excluimos el último elemento (el TLD, como ".com" solo) para no romper el internet completo.
-        for (i in 0 until labels.size - 1) {
-            val suffix = labels.subList(i, labels.size).joinToString(".")
+        val clean = domain.lowercase().removeSuffix(".")
+        if (clean.length < 3 || !clean.contains('.')) return false
+
+        // 1. Comprobación directa del dominio completo
+        if (blockedSet.contains(clean)) return true
+
+        // 2. Comprobar sufijos progresivamente sin instanciar colecciones ni joinToString
+        var dotIndex = clean.indexOf('.')
+        while (dotIndex != -1) {
+            val suffix = clean.substring(dotIndex + 1)
+            // Excluimos si solo queda el TLD (sin ningún otro punto, ej: "com")
+            if (!suffix.contains('.')) {
+                break
+            }
             if (blockedSet.contains(suffix)) {
                 return true
             }
+            dotIndex = clean.indexOf('.', dotIndex + 1)
         }
         return false
     }

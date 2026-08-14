@@ -1849,7 +1849,16 @@ async function runCommandOnGroup(groupId, command, packages = null, buttonEl = n
                 command: command,
                 packages: packages,
                 devicePin: verifiedDevicePins[deviceId] || null,
-                rememberDevice: true
+                // rememberDevice iba fijo en true. Ese parámetro hace que la Cloud
+                // Function marque a este administrador como "de confianza" para el
+                // dispositivo de forma PERMANENTE, y desde ahí deja de pedirle el PIN.
+                // O sea que una sola operación sobre un grupo convertía una verificación
+                // puntual en un permiso permanente sobre todos los equipos del grupo, sin
+                // que nadie lo pidiera. No hace falta para que el comando funcione: el PIN
+                // ya viaja en devicePin y la Function lo valida igual. Si el administrador
+                // había tildado "recordar" al ingresar el PIN, la confianza ya se otorgó
+                // en ese momento.
+                rememberDevice: false
             };
             if (extraParams) {
                 Object.assign(payload, extraParams);
@@ -1900,7 +1909,9 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
                     command: cmd,
                     packages: pkgs,
                     devicePin: verifiedDevicePins[deviceId] || null,
-                    rememberDevice: true
+                    // Ver la nota de runCommandOnGroup: iba fijo en true y otorgaba
+                    // confianza permanente sobre cada equipo sin que nadie lo pidiera.
+                    rememberDevice: false
                 })
             }).catch(() => {});
         };

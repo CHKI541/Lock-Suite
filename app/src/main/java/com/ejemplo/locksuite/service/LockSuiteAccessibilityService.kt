@@ -461,6 +461,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         checkAndBlockWebViewInTree(packageName, immediate = true)
     }
 
+    private val webViewRetryRunnables = mutableListOf<Runnable>()
+
     private fun checkAndBlockWebViewInTree(packageName: String, immediate: Boolean) {
         if (immediate) {
             val root = rootInActiveWindow
@@ -478,30 +480,38 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
         }
 
-        listOf(200L, 500L, 900L, 1500L, 2500L).forEach { delay ->
-            mainHandler.postDelayed({
-                if (blockInProgress) return@postDelayed
-                val current = rootInActiveWindow ?: return@postDelayed
-                val currentPkg = current.packageName?.toString() ?: run {
-                    current.recycle()
-                    return@postDelayed
-                }
-                val relevantPkg = currentPkg == packageName ||
-                                  WEBVIEW_PROVIDER_PACKAGES.contains(currentPkg)
+        // Cancelar reintentos previos acumulados para no sobrecargar la CPU con escaneos redundantes
+        webViewRetryRunnables.forEach { mainHandler.removeCallbacks(it) }
+        webViewRetryRunnables.clear()
 
-                if (!relevantPkg) {
-                    current.recycle()
-                    return@postDelayed
-                }
+        listOf(250L, 800L, 1800L).forEach { delay ->
+            val retryRunnable = object : Runnable {
+                override fun run() {
+                    webViewRetryRunnables.remove(this)
+                    if (blockInProgress) return
+                    val current = rootInActiveWindow ?: return
+                    val currentPkg = current.packageName?.toString() ?: run {
+                        current.recycle()
+                        return
+                    }
+                    val relevantPkg = currentPkg == packageName ||
+                                      WEBVIEW_PROVIDER_PACKAGES.contains(currentPkg)
 
-                val found = containsWebView(current)
-                Log.d(TAG, "Reintento +${delay}ms pkg=$packageName currentPkg=$currentPkg webViewFound=$found")
-                current.recycle()
-                if (found) {
-                    Log.w(TAG, "🚫 WebView detectado con retraso de ${delay}ms para $packageName")
-                    triggerBlock(packageName)
+                    if (!relevantPkg) {
+                        current.recycle()
+                        return
+                    }
+
+                    val found = containsWebView(current)
+                    current.recycle()
+                    if (found) {
+                        Log.w(TAG, "🚫 WebView detectado con retraso de ${delay}ms para $packageName")
+                        triggerBlock(packageName)
+                    }
                 }
-            }, delay)
+            }
+            webViewRetryRunnables.add(retryRunnable)
+            mainHandler.postDelayed(retryRunnable, delay)
         }
     }
 
@@ -922,6 +932,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         var foundOpenButtonNode: AccessibilityNodeInfo? = null
         var confirmationDialogButtonNode: AccessibilityNodeInfo? = null
 
+        // IMPORTANTE: este recorrido NO recicla los nodos (antes hacía child.recycle()
+        // dentro del bucle y root.recycle() al final). Los nodos que coinciden se guardan
+        // por referencia (foundActionButtonNode / foundOpenButtonNode /
+        // confirmationDialogButtonNode) y se usan DESPUÉS del escaneo, en los pasos A/B/C.
+        // Al reciclarlos durante el recorrido, esas referencias quedaban apuntando a un
+        // nodo ya reciclado y el primer acceso (performClickOnNode lee node.parent) lanzaba
+        // IllegalStateException en las versiones de Android donde recycle() no es no-op
+        // (p. ej. Android 11/12): el clic de "Actualizar" fallaba y la actualizacion nunca
+        // arrancaba. AccessibilityNodeInfo.recycle() esta deprecado; en Android moderno lo
+        // maneja el recolector de basura, asi que no reciclar aca es seguro.
         fun scanNodes(node: AccessibilityNodeInfo?) {
             if (node == null) return
             val text = node.text?.toString()?.trim()?.lowercase() ?: ""
@@ -961,15 +981,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
 
             for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { child ->
-                    scanNodes(child)
-                    child.recycle()
-                }
+                scanNodes(node.getChild(i))
             }
         }
 
         scanNodes(root)
-        root.recycle()
 
         // 3. Ejecutar acciones encontradas
         // A. Si hay diálogo de confirmación, hacer clic para destrabar
@@ -1061,6 +1077,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        webViewRetryRunnables.forEach { mainHandler.removeCallbacks(it) }
+        webViewRetryRunnables.clear()
         if (::overlayManager.isInitialized) {
             overlayManager.clearAll()
         }

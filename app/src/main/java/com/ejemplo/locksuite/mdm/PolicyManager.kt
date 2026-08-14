@@ -225,7 +225,16 @@ class PolicyManager(private val context: Context) {
     fun setWifiConfigBlocked(block: Boolean): Boolean {
         val r1 = setRestriction(UserManager.DISALLOW_CONFIG_WIFI, block)
         val r2 = setRestriction(UserManager.DISALLOW_NETWORK_RESET, block)
-        val r3 = setRestriction("no_config_mobile_networks", block)
+        // Nota sobre la guarda "if (SDK >= P)" que había acá: no aportaba compatibilidad,
+        // la sacaba. UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS es una constante String
+        // de compilación, así que el compilador la reemplaza por su literal
+        // ("no_config_mobile_networks") y el bytecode queda idéntico al de pasar el string
+        // a mano — nunca hubo riesgo de que "faltara la constante" en Android 7/8. Y si el
+        // sistema rechazara la clave, setRestriction ya atrapa la excepción y devuelve
+        // false. Con la guarda, en Android 7/8 no se intentaba aplicar la restricción y
+        // aun así se devolvía true: el panel informaba un bloqueo que no existía. Se vuelve
+        // a intentar siempre y se reporta el resultado real.
+        val r3 = setRestriction(UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS, block)
         return r1 && r2 && r3
     }
 

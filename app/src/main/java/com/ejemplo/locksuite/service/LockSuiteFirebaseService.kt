@@ -316,7 +316,41 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                                 android.util.Log.w("LockSuiteFCM", "No se pudieron remover restricciones de instalación: ${e.message}")
                             }
                             
-                            // 3. Abrir Play Store con la app correspondiente, fallback al navegador si falla
+                            // 3. Programar el temporizador de seguridad (watchdog) de 10 minutos ANTES de
+                            // intentar abrir Play Store. Es a propósito: mientras "mdm_install_in_progress"
+                            // esté en true, PolicyManager.refreshInstallRestriction() se salta a sí misma
+                            // para no pisar una instalación en curso, así que ni el reinicio ni el watchdog
+                            // de 15 min (reapplyAllRestrictions) van a re-imponer las restricciones que
+                            // acabamos de levantar. Esta alarma es la única red de seguridad real: si el
+                            // paso 4 falla, o si el proceso muere justo después de levantar las
+                            // restricciones y antes de terminar de abrir Play Store, el equipo quedaría con
+                            // las instalaciones desbloqueadas indefinidamente sin esto. Por eso se arma
+                            // antes de cualquier cosa que pueda fallar, no después.
+                            val watchdogPendingIntent = try {
+                                val watchdogIntent = android.content.Intent(this, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
+                                    action = "UPDATE_TIMEOUT"
+                                }
+                                val pendingIntent = android.app.PendingIntent.getBroadcast(
+                                    this,
+                                    9911,
+                                    watchdogIntent,
+                                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                                )
+                                val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                                val triggerTime = android.os.SystemClock.elapsedRealtime() + 10 * 60 * 1000L
+                                alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent)
+                                pendingIntent
+                            } catch (e: Exception) {
+                                android.util.Log.w("LockSuiteFCM", "No se pudo programar el temporizador watchdog: ${e.message}")
+                                null
+                            }
+                            
+                            // 4. Abrir Play Store con la app correspondiente, fallback al navegador si falla.
+                            // Si ninguno de los dos abre (por ejemplo, un equipo sin navegador disponible
+                            // porque "Bloquear navegadores" está activo), no tiene sentido esperar los 10
+                            // minutos del watchdog para recién ahí recuperar el bloqueo: se revierte todo
+                            // en el acto (restricciones, prefs y la alarma ya armada) antes de reportar el
+                            // error al panel.
                             try {
                                 val playStoreIntent = android.content.Intent(
                                     android.content.Intent.ACTION_VIEW,
@@ -335,29 +369,14 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                                     }
                                     startActivity(webIntent)
                                 } catch (ex: Exception) {
+                                    rollbackFailedUpdateApp(watchdogPendingIntent)
                                     throw Exception("No se encontró Play Store ni navegador para actualizar: ${ex.message}")
                                 }
                             } catch (e: Exception) {
+                                rollbackFailedUpdateApp(watchdogPendingIntent)
                                 throw Exception("Error al abrir Play Store: ${e.message}")
                             }
                             
-                            // 4. Programar temporizador de seguridad (watchdog) de 10 minutos
-                            try {
-                                val watchdogIntent = android.content.Intent(this, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
-                                    action = "UPDATE_TIMEOUT"
-                                }
-                                val pendingIntent = android.app.PendingIntent.getBroadcast(
-                                    this,
-                                    9911,
-                                    watchdogIntent,
-                                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-                                )
-                                val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-                                val triggerTime = android.os.SystemClock.elapsedRealtime() + 10 * 60 * 1000L
-                                alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent)
-                            } catch (e: Exception) {
-                                android.util.Log.w("LockSuiteFCM", "No se pudo programar el temporizador watchdog: ${e.message}")
-                            }
                             true
                         } catch (e: Exception) {
                             e.printStackTrace()
@@ -475,6 +494,32 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         // Reportar el nuevo estado resultante a la base de datos para que se refleje de inmediato en el panel web
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(this)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // Revierte por completo un UPDATE_APP que no llegó a abrir ni Play Store ni el
+    // navegador: cancela el watchdog ya armado (no hace falta esperar 10 minutos si ya
+    // sabemos que falló), restaura las restricciones de instalación y el estado de Play
+    // Store vía PolicyManager, y limpia "updating_package". No hace falta tocar
+    // "mdm_install_in_progress" acá porque restoreInstallRestrictions() ya lo pone en
+    // false como primer paso.
+    private fun rollbackFailedUpdateApp(watchdogPendingIntent: android.app.PendingIntent?) {
+        try {
+            if (watchdogPendingIntent != null) {
+                (getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).cancel(watchdogPendingIntent)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
+            PolicyManager(this).restoreInstallRestrictions()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        try {
+            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).edit().remove("updating_package").apply()
         } catch (e: Exception) {
             e.printStackTrace()
         }

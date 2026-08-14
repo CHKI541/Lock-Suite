@@ -77,6 +77,32 @@ function getDeviceField(device, field, fallback = null) {
   return fallback;
 }
 
+// Detecta PINs triviales, con la MISMA regla que PinManager.isTrivialPin() en la app:
+// todos los dígitos iguales, o una secuencia ascendente/descendente de dígitos
+// consecutivos ("1234", "9876"). Existe porque la app rechaza estos PINs al
+// configurarlos y al cambiarlos desde el Dashboard, pero la vía remota (comando
+// CHANGE_PIN) se salteaba esa validación por completo: el celular recibe el hash ya
+// calculado, así que no tiene con qué juzgar la fuerza del PIN. Sin esta comprobación
+// del lado del servidor, un PIN fuerte se podía debilitar a "1234" desde el panel.
+function isTrivialPin(pin) {
+  if (!pin || pin.length === 0) return true;
+  if ([...pin].every((c) => c === pin[0])) return true;
+
+  let ascending = true;
+  for (let i = 0; i < pin.length - 1; i++) {
+    if (pin.charCodeAt(i + 1) - pin.charCodeAt(i) !== 1) { ascending = false; break; }
+  }
+  if (ascending) return true;
+
+  let descending = true;
+  for (let i = 0; i < pin.length - 1; i++) {
+    if (pin.charCodeAt(i) - pin.charCodeAt(i + 1) !== 1) { descending = false; break; }
+  }
+  if (descending) return true;
+
+  return false;
+}
+
 // Hashear PIN igual que PinManager.kt
 function hashPin(pin, saltBase64) {
   const saltBytes = Buffer.from(saltBase64, "base64");
@@ -195,6 +221,12 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     if (command === "CHANGE_PIN") {
       if (!newPin || !/^\d{4,16}$/.test(newPin)) {
         res.status(400).json({ error: "PIN inválido." });
+        return;
+      }
+      if (isTrivialPin(newPin)) {
+        res.status(400).json({
+          error: "PIN demasiado débil: no uses dígitos repetidos ni secuencias como 1234 o 9876.",
+        });
         return;
       }
       const pinSalt = crypto.randomBytes(16).toString("base64");

@@ -144,6 +144,11 @@ class PolicyManager(private val context: Context) {
         return true
     }
 
+    fun isPlayStoreSuspended(): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        return prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
+    }
+
     fun restoreInstallRestrictions() {
         val prefs = PrefsHelper.getMdmPrefs(context)
         prefs.edit().putBoolean("mdm_install_in_progress", false).apply()

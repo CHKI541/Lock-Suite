@@ -88,7 +88,10 @@ class BlockOverlayManager(private val service: AccessibilityService) {
             val overlayView = android.widget.LinearLayout(service).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setBackgroundColor(Color.parseColor("#151821")) // Vertical gradient deep blue/black
+                setBackgroundColor(Color.parseColor("#090A0F")) // 100% solid opaque background
+                isClickable = true
+                isFocusable = true
+                setOnTouchListener { _, _ -> true } // Consume 100% of touches so nothing passes through
                 
                 // Add message text view
                 addView(android.widget.TextView(service).apply {
@@ -120,8 +123,10 @@ class BlockOverlayManager(private val service: AccessibilityService) {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or 
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.OPAQUE
             ).apply {
                 gravity = Gravity.CENTER
             }

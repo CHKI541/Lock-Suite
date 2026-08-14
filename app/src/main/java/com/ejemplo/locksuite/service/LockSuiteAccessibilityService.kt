@@ -28,6 +28,7 @@ import java.util.concurrent.Executors
 class LockSuiteAccessibilityService : AccessibilityService() {
 
     companion object {
+        @Volatile var instance: LockSuiteAccessibilityService? = null
         private const val TAG = "LockSuite_WV"
         private const val SETTINGS_PKG = "com.android.settings"
         private const val LOCKSUITE_PKG = "com.ejemplo.locksuite"
@@ -89,7 +90,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     @Volatile private var blockInProgress = false
 
     // Componentes del Bloqueador de Imágenes
-    private lateinit var overlayManager: BlockOverlayManager
+    lateinit var overlayManager: BlockOverlayManager
     private lateinit var aiGate: AIContentGate
     private val bgExecutor = Executors.newSingleThreadExecutor()
 
@@ -117,6 +118,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         info.notificationTimeout = 100
         serviceInfo = info
 
+        instance = this
         overlayManager = BlockOverlayManager(this)
         aiGate = AIContentGate(applicationContext)
 
@@ -165,6 +167,22 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
+                return
+            }
+        }
+
+        // Bloqueo estricto de Play Store fuera del flujo de actualización
+        if (!isUpdateInProgress && packageName == "com.android.vending") {
+            val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+            val shouldBlock = policyManager.isInstallAppsBlocked() || 
+                policyManager.isPlayStoreSuspended() || 
+                prefs.getBoolean("hide_com.android.vending", false) ||
+                prefs.getBoolean("suspend_com.android.vending", false)
+            if (shouldBlock) {
+                Log.w(TAG, "🚫 Intento no autorizado de abrir Google Play Store. Bloqueando y regresando a Home...")
+                overlayManager.hideBlockingMessageOverlay()
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                policyManager.restoreInstallRestrictions()
                 return
             }
         }
@@ -877,7 +895,18 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }, 700)
     }
 
+    private var updateSessionPkg: String? = null
+    private var updateSessionStartTime: Long = 0L
+    private var updateSessionClickedAction: Boolean = false
+
     private fun handlePlayStoreAutoUpdate(event: AccessibilityEvent, updatingPkg: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (updateSessionPkg != updatingPkg || (now - updateSessionStartTime) > 600_000L) {
+            updateSessionPkg = updatingPkg
+            updateSessionStartTime = now
+            updateSessionClickedAction = false
+        }
+
         // 1. Mostrar/mantener el overlay de bloqueo a pantalla completa
         val appName = try {
             packageManager.getApplicationLabel(
@@ -886,47 +915,48 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         } catch (e: Exception) { updatingPkg }
         overlayManager.showBlockingMessageOverlay("Actualizando $appName")
 
-        // 2. Escanear la pantalla de Play Store buscando botones de acción.
-        // Usamos dos banderas separadas para no confundir el botón de completado
-        // ("Abrir") con el de actualización ("Actualizar").
+        // 2. Escanear la pantalla de Play Store buscando botones de acción
         val root = rootInActiveWindow ?: return
 
-        var foundActionButton = false       // Hay botón Actualizar/Instalar → hacer clic
-        var foundCompletionButton = false   // Hay botón Abrir/Desinstalar → ya terminó
+        var foundActionButtonNode: AccessibilityNodeInfo? = null
+        var foundOpenButtonNode: AccessibilityNodeInfo? = null
+        var confirmationDialogButtonNode: AccessibilityNodeInfo? = null
 
         fun scanNodes(node: AccessibilityNodeInfo?) {
             if (node == null) return
-            val text = node.text?.toString()?.lowercase() ?: ""
+            val text = node.text?.toString()?.trim()?.lowercase() ?: ""
             val viewId = node.viewIdResourceName ?: ""
 
-            val isActionButton = viewId == "com.android.vending:id/buy_button" ||
+            val isActionBuyButton = viewId == "com.android.vending:id/buy_button" ||
                 viewId == "com.android.vending:id/action_button"
 
-            if (isActionButton || node.isClickable) {
+            if (isActionBuyButton || node.isClickable) {
                 when {
-                    // Botón de completado: la actualización ya terminó
-                    text == "abrir" || text == "open" || text == "פתח" ||
-                    text == "desinstalar" || text == "uninstall" ||
-                    text == "desactivar" || text == "disable" ->
-                        foundCompletionButton = true
-
-                    // Botón de acción principal: hacer clic para instalar/actualizar
+                    // Botón para iniciar actualización / instalación
                     text == "actualizar" || text == "update" || text == "עדכן" ||
                     text == "instalar" || text == "install" || text == "התקן" ||
-                    text == "habilitar" || text == "enable" ||
-                    isActionButton && text.isNotBlank() && !foundCompletionButton -> {
-                        if (!foundActionButton && performClickOnNode(node)) {
-                            foundActionButton = true
-                            overlayManager.updateBlockingMessageSubtitle("Descargando e instalando...")
+                    text == "habilitar" || text == "enable" -> {
+                        if (foundActionButtonNode == null) {
+                            foundActionButtonNode = node
                         }
                     }
 
-                    // Diálogos de confirmación intermedios (ej: descargar por datos)
+                    // Botón "Abrir" / "Open"
+                    text == "abrir" || text == "open" || text == "פתח" -> {
+                        if (foundOpenButtonNode == null) {
+                            foundOpenButtonNode = node
+                        }
+                    }
+
+                    // Diálogos de confirmación (ej: permitir descargar usando datos móviles)
                     text == "continuar" || text == "continue" ||
                     text == "aceptar" || text == "ok" ||
                     text == "proceder" || text == "descargar" || text == "download" ||
-                    text == "sí" || text == "yes" ->
-                        performClickOnNode(node)
+                    text == "sí" || text == "yes" -> {
+                        if (confirmationDialogButtonNode == null) {
+                            confirmationDialogButtonNode = node
+                        }
+                    }
                 }
             }
 
@@ -941,29 +971,50 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         scanNodes(root)
         root.recycle()
 
-        // 3. Si SOLO vemos "Abrir" (sin ningún botón de acción activo),
-        //    la actualización terminó → cerrar y re-bloquear.
-        if (foundCompletionButton && !foundActionButton) {
-            Log.i(TAG, "Play Store auto-update completado para $updatingPkg. Cerrando y re-bloqueando...")
-            overlayManager.hideBlockingMessageOverlay()
-            performGlobalAction(GLOBAL_ACTION_HOME)
-            try {
-                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
-                policyManager.restoreInstallRestrictions()
-            } catch (e: Exception) {
-                e.printStackTrace()
+        // 3. Ejecutar acciones encontradas
+        // A. Si hay diálogo de confirmación, hacer clic para destrabar
+        confirmationDialogButtonNode?.let { dialogNode ->
+            performClickOnNode(dialogNode)
+        }
+
+        // B. Si hay botón de Actualizar / Instalar, hacer clic
+        if (foundActionButtonNode != null) {
+            if (performClickOnNode(foundActionButtonNode)) {
+                updateSessionClickedAction = true
+                overlayManager.updateBlockingMessageSubtitle("Descargando e instalando...")
             }
-            PrefsHelper.getMdmPrefs(this).edit()
-                .remove("updating_package")
-                .putBoolean("mdm_install_in_progress", false)
-                .apply()
-            cancelUpdateTimeoutAlarm(applicationContext)
+        }
+
+        // C. Si la app ya tiene botón "Abrir" (y NO hay botón de Actualizar):
+        if (foundOpenButtonNode != null && foundActionButtonNode == null) {
+            val elapsed = now - updateSessionStartTime
+            if (updateSessionClickedAction || elapsed > 8000L) {
+                Log.i(TAG, "Play Store auto-update completado/al día para $updatingPkg. Cerrando y re-bloqueando...")
+                finishUpdateAndLock(applicationContext, updatingPkg)
+            }
         }
     }
 
+    fun finishUpdateAndLock(context: Context, updatingPkg: String) {
+        overlayManager.hideBlockingMessageOverlay()
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        try {
+            val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+            policyManager.restoreInstallRestrictions()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        PrefsHelper.getMdmPrefs(context).edit()
+            .remove("updating_package")
+            .putBoolean("mdm_install_in_progress", false)
+            .apply()
+        cancelUpdateTimeoutAlarm(context)
+        updateSessionPkg = null
+        updateSessionStartTime = 0L
+        updateSessionClickedAction = false
+    }
+
     private fun performClickOnNode(node: AccessibilityNodeInfo?): Boolean {
-        // Subir por el árbol de nodos buscando uno clickeable, reciclando los
-        // intermedios para evitar leaks de memoria nativa de AccessibilityNodeInfo.
         var temp: AccessibilityNodeInfo? = node?.parent
         try {
             if (node?.isClickable == true) {
@@ -1009,6 +1060,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         if (::overlayManager.isInitialized) {
             overlayManager.clearAll()
         }

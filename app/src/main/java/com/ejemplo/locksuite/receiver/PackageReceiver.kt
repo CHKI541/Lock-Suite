@@ -53,8 +53,27 @@ class PackageReceiver : BroadcastReceiver() {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
-                prefs.edit().remove("updating_package").apply()
+                prefs.edit()
+                    .remove("updating_package")
+                    .putBoolean("mdm_install_in_progress", false)
+                    .apply()
                 cancelUpdateTimeoutAlarm(context)
+
+                // Cerrar overlay de accesibilidad y regresar a Home
+                com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance?.let { service ->
+                    service.overlayManager.hideBlockingMessageOverlay()
+                    service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                } ?: run {
+                    try {
+                        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                            addCategory(Intent.CATEGORY_HOME)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(homeIntent)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
             }
         }
 

@@ -126,7 +126,7 @@ class BlockOverlayManager(private val service: AccessibilityService) {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or 
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or 
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.OPAQUE
+                PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.CENTER
             }
@@ -134,8 +134,9 @@ class BlockOverlayManager(private val service: AccessibilityService) {
             try {
                 windowManager.addView(overlayView, params)
                 activeOverlays[key] = overlayView
+                android.util.Log.i("LockSuite_Overlay", "✅ Overlay de bloqueo de actualización mostrado con éxito")
             } catch (e: Exception) {
-                e.printStackTrace()
+                android.util.Log.e("LockSuite_Overlay", "❌ Error al agregar overlay de actualización: ${e.message}", e)
             }
         }
     }

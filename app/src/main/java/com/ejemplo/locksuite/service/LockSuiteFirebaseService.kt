@@ -345,7 +345,19 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                                 null
                             }
                             
-                            // 4. Abrir Play Store con la app correspondiente, fallback al navegador si falla.
+                            // 4. Despertar pantalla si estuviera apagada para permitir la interacción del servicio
+                            try {
+                                val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                                val wl = pm.newWakeLock(
+                                    android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or android.os.PowerManager.ON_AFTER_RELEASE,
+                                    "LockSuite:FirebaseUpdateWake"
+                                )
+                                wl.acquire(15_000L)
+                            } catch (e: Exception) {
+                                android.util.Log.w("LockSuiteFCM", "No se pudo despertar pantalla: ${e.message}")
+                            }
+
+                            // 5. Abrir Play Store con la app correspondiente, fallback al navegador si falla.
                             // Si ninguno de los dos abre (por ejemplo, un equipo sin navegador disponible
                             // porque "Bloquear navegadores" está activo), no tiene sentido esperar los 10
                             // minutos del watchdog para recién ahí recuperar el bloqueo: se revierte todo

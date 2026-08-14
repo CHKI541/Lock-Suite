@@ -136,17 +136,15 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // Ignorar nuestra propia app
         if (packageName == LOCKSUITE_PKG) return
 
-        // Garantizar que no consuma batería si la pantalla está inactiva (apagada)
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (!powerManager.isInteractive) {
-            return
-        }
-
         // Bloqueo y automatización durante actualización de apps (UPDATE_APP)
+        // NOTA: este check va ANTES del check de pantalla apagada, porque UPDATE_APP
+        // puede llegar con la pantalla apagada y necesitamos procesar los eventos.
         val prefs = PrefsHelper.getMdmPrefs(this)
         val updatingPkg = prefs.getString("updating_package", null)
         val isUpdateInProgress = prefs.getBoolean("mdm_install_in_progress", false)
         if (isUpdateInProgress && !updatingPkg.isNullOrBlank()) {
+            // Asegurar que la pantalla esté encendida durante la actualización
+            ensureScreenOnForUpdate()
             if (packageName == "com.android.vending") {
                 handlePlayStoreAutoUpdate(ev, updatingPkg)
                 return
@@ -169,6 +167,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 }
                 return
             }
+        }
+
+        // Garantizar que no consuma batería si la pantalla está inactiva (apagada)
+        // Esto va DESPUÉS del check de UPDATE_APP, que sí necesita funcionar con pantalla apagada
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!powerManager.isInteractive) {
+            return
         }
 
         // Bloqueo estricto de Play Store fuera del flujo de actualización
@@ -917,7 +922,36 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             updateSessionClickedAction = false
         }
 
-        // 1. Mostrar/mantener el overlay de bloqueo a pantalla completa
+        // 1. PRIMERO: Obtener el root de Play Store ANTES de mostrar el overlay.
+        //    Usar la API `windows` para buscar la ventana de com.android.vending
+        //    específicamente, ya que rootInActiveWindow puede devolver null o el
+        //    tree del overlay si éste ya está visible de una llamada anterior.
+        var root: AccessibilityNodeInfo? = null
+        try {
+            // Buscar la ventana de Play Store entre todas las ventanas interactivas
+            for (window in windows) {
+                val windowRoot = window.root ?: continue
+                val windowPkg = windowRoot.packageName?.toString()
+                if (windowPkg == "com.android.vending") {
+                    root = windowRoot
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error al buscar ventana de Play Store via windows API: ${e.message}")
+        }
+        // Fallback a rootInActiveWindow si windows API no encontró nada
+        if (root == null) {
+            root = rootInActiveWindow
+            // Verificar que el root pertenece a Play Store, no a nuestro overlay
+            val rootPkg = root?.packageName?.toString()
+            if (rootPkg != null && rootPkg != "com.android.vending") {
+                Log.w(TAG, "rootInActiveWindow es de $rootPkg, no de Play Store. Ignorando este ciclo.")
+                root = null
+            }
+        }
+
+        // 2. Mostrar/mantener el overlay de bloqueo a pantalla completa
         val appName = try {
             packageManager.getApplicationLabel(
                 packageManager.getApplicationInfo(updatingPkg, 0)
@@ -925,56 +959,61 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         } catch (e: Exception) { updatingPkg }
         overlayManager.showBlockingMessageOverlay("Actualizando $appName")
 
-        // 2. Escanear la pantalla de Play Store buscando botones de acción
-        val root = rootInActiveWindow ?: return
+        // Si no pudimos obtener el tree de Play Store, esperamos al siguiente evento
+        if (root == null) {
+            Log.w(TAG, "No se pudo obtener el tree de Play Store. Esperando siguiente evento...")
+            return
+        }
 
+        // 3. Escanear la pantalla de Play Store buscando botones de acción
         var foundActionButtonNode: AccessibilityNodeInfo? = null
         var foundOpenButtonNode: AccessibilityNodeInfo? = null
         var confirmationDialogButtonNode: AccessibilityNodeInfo? = null
 
-        // IMPORTANTE: este recorrido NO recicla los nodos (antes hacía child.recycle()
-        // dentro del bucle y root.recycle() al final). Los nodos que coinciden se guardan
-        // por referencia (foundActionButtonNode / foundOpenButtonNode /
-        // confirmationDialogButtonNode) y se usan DESPUÉS del escaneo, en los pasos A/B/C.
-        // Al reciclarlos durante el recorrido, esas referencias quedaban apuntando a un
-        // nodo ya reciclado y el primer acceso (performClickOnNode lee node.parent) lanzaba
-        // IllegalStateException en las versiones de Android donde recycle() no es no-op
-        // (p. ej. Android 11/12): el clic de "Actualizar" fallaba y la actualizacion nunca
-        // arrancaba. AccessibilityNodeInfo.recycle() esta deprecado; en Android moderno lo
-        // maneja el recolector de basura, asi que no reciclar aca es seguro.
+        // IMPORTANTE: este recorrido NO recicla los nodos. Los nodos que coinciden se
+        // guardan por referencia y se usan DESPUÉS del escaneo, en los pasos A/B/C.
         fun scanNodes(node: AccessibilityNodeInfo?) {
             if (node == null) return
             val text = node.text?.toString()?.trim()?.lowercase() ?: ""
+            val desc = node.contentDescription?.toString()?.trim()?.lowercase() ?: ""
             val viewId = node.viewIdResourceName ?: ""
+
+            fun matchesAny(vararg keywords: String): Boolean {
+                return keywords.any { kw ->
+                    text == kw || desc == kw || text.contains(kw) || desc.contains(kw)
+                }
+            }
 
             val isActionBuyButton = viewId == "com.android.vending:id/buy_button" ||
                 viewId == "com.android.vending:id/action_button"
 
-            if (isActionBuyButton || node.isClickable) {
+            val isExcluded = text.contains("desinstalar") || desc.contains("desinstalar") ||
+                text.contains("uninstall") || desc.contains("uninstall") ||
+                text.contains("cancelar") || desc.contains("cancel")
+
+            if (!isExcluded && (isActionBuyButton || node.isClickable || text.isNotEmpty() || desc.isNotEmpty())) {
                 when {
                     // Botón para iniciar actualización / instalación
-                    text == "actualizar" || text == "update" || text == "עדכן" ||
-                    text == "instalar" || text == "install" || text == "התקן" ||
-                    text == "habilitar" || text == "enable" -> {
+                    matchesAny("actualizar", "update", "עדכן", "instalar", "install", "התקן", "habilitar", "enable") -> {
                         if (foundActionButtonNode == null) {
                             foundActionButtonNode = node
+                            Log.d(TAG, "🔵 Botón de acción encontrado: text='$text', desc='$desc', id=$viewId")
                         }
                     }
 
                     // Botón "Abrir" / "Open"
-                    text == "abrir" || text == "open" || text == "פתח" -> {
+                    matchesAny("abrir", "open", "פתח") -> {
                         if (foundOpenButtonNode == null) {
                             foundOpenButtonNode = node
+                            Log.d(TAG, "🟢 Botón Abrir encontrado: text='$text', desc='$desc'")
                         }
                     }
 
-                    // Diálogos de confirmación (ej: permitir descargar usando datos móviles)
-                    text == "continuar" || text == "continue" ||
-                    text == "aceptar" || text == "ok" ||
-                    text == "proceder" || text == "descargar" || text == "download" ||
-                    text == "sí" || text == "yes" -> {
+                    // Diálogos de confirmación
+                    matchesAny("continuar", "continue", "aceptar", "ok", "proceder", "descargar", "download", "sí", "yes", "reintentar", "retry") -> {
                         if (confirmationDialogButtonNode == null) {
                             confirmationDialogButtonNode = node
+                            Log.d(TAG, "🟡 Botón de diálogo encontrado: text='$text', desc='$desc'")
                         }
                     }
                 }
@@ -987,14 +1026,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         scanNodes(root)
 
-        // 3. Ejecutar acciones encontradas
+        // 4. Ejecutar acciones encontradas
         // A. Si hay diálogo de confirmación, hacer clic para destrabar
         confirmationDialogButtonNode?.let { dialogNode ->
+            Log.i(TAG, "▶ Haciendo clic en botón de confirmación de diálogo")
             performClickOnNode(dialogNode)
         }
 
         // B. Si hay botón de Actualizar / Instalar, hacer clic
         if (foundActionButtonNode != null) {
+            Log.i(TAG, "▶ Haciendo clic en botón Actualizar/Instalar")
             if (performClickOnNode(foundActionButtonNode)) {
                 updateSessionClickedAction = true
                 overlayManager.updateBlockingMessageSubtitle("Descargando e instalando...")
@@ -1008,6 +1049,27 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 Log.i(TAG, "Play Store auto-update completado/al día para $updatingPkg. Cerrando y re-bloqueando...")
                 finishUpdateAndLock(applicationContext, updatingPkg)
             }
+        }
+
+        // D. Si no encontró ningún botón relevante, logear para diagnóstico
+        if (foundActionButtonNode == null && foundOpenButtonNode == null && confirmationDialogButtonNode == null) {
+            Log.w(TAG, "⚠ Escaneo de Play Store: no se encontraron botones de acción. " +
+                "La página puede estar cargando o mostrando un estado no reconocido.")
+        }
+    }
+
+    private fun ensureScreenOnForUpdate() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!powerManager.isInteractive) {
+                val wakeLock = powerManager.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                    "LockSuite:UpdateWakeLock"
+                )
+                wakeLock.acquire(15_000L)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo encender pantalla para actualización: ${e.message}")
         }
     }
 
@@ -1031,23 +1093,29 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     private fun performClickOnNode(node: AccessibilityNodeInfo?): Boolean {
-        var temp: AccessibilityNodeInfo? = node?.parent
+        if (node == null) return false
         try {
-            if (node?.isClickable == true) {
-                return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            // 1. Intentar clic directo si el nodo es clickable
+            if (node.isClickable) {
+                val clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (clicked) return true
             }
-            while (temp != null) {
-                if (temp.isClickable) {
-                    return temp.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            // 2. Subir por los padres si el nodo no consumió el clic
+            var current: AccessibilityNodeInfo? = node.parent
+            while (current != null) {
+                if (current.isClickable) {
+                    val clicked = current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    if (clicked) return true
                 }
-                val next = temp.parent
-                temp.recycle()
-                temp = next
+                current = current.parent
+            }
+            // 3. Fallback: solicitar foco y reintentar clic
+            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
             }
         } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            temp?.recycle()
+            Log.e(TAG, "Error en performClickOnNode: ${e.message}")
         }
         return false
     }

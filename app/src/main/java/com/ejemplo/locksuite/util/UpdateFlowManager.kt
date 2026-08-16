@@ -62,6 +62,7 @@ object UpdateFlowManager {
     const val KEY_LAST_RESULT = "update_flow_last_result"
     const val KEY_LAST_RESULT_AT = "update_flow_last_result_at"
     const val KEY_LAST_RESULT_PKG = "update_flow_last_result_pkg"
+    const val KEY_DEBUG_LABELS = "update_flow_debug_labels"
 
     // ── Etapas ──
     const val STAGE_IDLE = "IDLE"
@@ -88,12 +89,11 @@ object UpdateFlowManager {
     const val ACTION_TIMEOUT = "UPDATE_TIMEOUT"
     const val WATCHDOG_REQUEST_CODE = 9911
 
-    /** Tope duro del flujo completo. Pasado esto se restaura si o si. */
-    const val TIMEOUT_MS = 10 * 60 * 1000L
+    /** Tiempo maximo que puede durar el flujo antes de que el watchdog lo cancele. */
+    const val WATCHDOG_TIMEOUT_MS = 10 * 60 * 1000L
 
-    /** Demora entre HOME y re-suspender Play Store, para no disparar el cartel
-     *  "aplicacion en pausa" del sistema sobre una app que todavia esta arriba. */
-    private const val RESTORE_DELAY_MS = 600L
+    /** Demora antes de re-suspender Play Store, para que no salte el cartel de pausa. */
+    const val RESTORE_DELAY_MS = 600L
 
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var lastSyncAt = 0L
@@ -163,6 +163,20 @@ object UpdateFlowManager {
         }
     }
 
+    /**
+     * Guarda las etiquetas de los botones que el escaneo vio en la ficha. Es lo que
+     * permite diagnosticar un equipo en un idioma no previsto sin pedirle un ADB al
+     * dueño: quedan visibles en el panel.
+     */
+    fun reportDebugLabels(context: Context, labels: List<String>) {
+        if (labels.isEmpty()) return
+        val joined = labels.joinToString(" · ").take(300)
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (prefs.getString(KEY_DEBUG_LABELS, null) == joined) return
+        prefs.edit().putString(KEY_DEBUG_LABELS, joined).apply()
+        syncToPanel(context, force = false)
+    }
+
     // ──────────────────────────────────────────────
     // Arranque
     // ──────────────────────────────────────────────
@@ -194,17 +208,10 @@ object UpdateFlowManager {
             }
         }
 
-        // SelfUpdater (auto-actualizacion de LockSuite y Tienda administrada) usa
-        // la MISMA bandera "mdm_install_in_progress" pero sin "updating_package".
-        // Si arrancaramos encima, el finish() de este flujo la pondria en false y
-        // le sacaria la red de seguridad a esa instalacion a mitad de camino.
         if (PrefsHelper.getMdmPrefs(ctx).getBoolean(KEY_IN_PROGRESS, false)) {
             return "Hay otra instalacion en curso en este equipo. Espera a que termine."
         }
 
-        // Sin el servicio de accesibilidad no hay pantalla que tape Play Store:
-        // arrancar igual dejaria la tienda abierta y navegable, que es
-        // exactamente lo que este flujo existe para impedir.
         if (LockSuiteAccessibilityService.instance == null) {
             return "El servicio de accesibilidad de LockSuite no esta activo. Sin el, la actualizacion dejaria Google Play abierto sin proteccion."
         }
@@ -220,13 +227,12 @@ object UpdateFlowManager {
         val prefs = PrefsHelper.getMdmPrefs(ctx)
         finishing = false
 
-        // 1. Estado persistido ANTES de tocar politicas: si el proceso muere en
-        //    el medio, el watchdog encuentra el flujo marcado y lo revierte.
         prefs.edit()
             .putString(KEY_PKG, packageName)
             .putBoolean(KEY_IN_PROGRESS, true)
             .putString(KEY_STAGE, STAGE_PREPARING)
             .remove(KEY_DETAIL)
+            .remove(KEY_DEBUG_LABELS)
             .putLong(KEY_STARTED_AT, System.currentTimeMillis())
             .putString(KEY_SOURCE, source)
             .putBoolean(KEY_CANCELABLE, cancelable)
@@ -235,15 +241,16 @@ object UpdateFlowManager {
 
         LockSuiteAccessibilityService.instance?.invalidateFlagsCache()
 
-        // 2. Tapar la pantalla YA. Antes el overlay recien aparecia cuando
-        //    llegaba el primer evento de accesibilidad DE Play Store, asi que
-        //    habia una ventana de uno o dos segundos con la tienda a la vista.
         showOverlay(ctx, packageName, STAGE_PREPARING, null, cancelable)
 
-        // 3. Destapar Play Store y levantar las restricciones de instalacion.
         try {
             val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
+
+            val wasUninstallBlocked = try { dpm.isUninstallBlocked(admin, packageName) } catch (e: Exception) { false }
+            prefs.edit().putBoolean("update_flow_prev_uninstall_blocked", wasUninstallBlocked).apply()
+            try { dpm.setUninstallBlocked(admin, packageName, true) } catch (e: Exception) { }
+
             try {
                 dpm.setApplicationHidden(admin, PKG_PLAY_STORE, false)
             } catch (e: Exception) {
@@ -256,7 +263,6 @@ object UpdateFlowManager {
             }
             try {
                 dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
-                dpm.clearUserRestriction(admin, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
             } catch (e: Exception) {
                 Log.w(TAG, "No se pudieron remover restricciones de instalacion: ${e.message}")
             }
@@ -264,13 +270,9 @@ object UpdateFlowManager {
             Log.w(TAG, "Error preparando politicas para la actualizacion: ${e.message}")
         }
 
-        // 4. Alarma de seguridad ANTES de abrir nada que pueda fallar.
         armWatchdog(ctx)
-
-        // 5. Pantalla encendida.
         wakeScreen(ctx)
 
-        // 6. Abrir Play Store.
         setStage(ctx, STAGE_OPENING_STORE)
         val opened = openStore(ctx, packageName)
         if (!opened) {
@@ -281,18 +283,19 @@ object UpdateFlowManager {
         setStage(ctx, STAGE_WAITING_STORE)
         syncToPanel(ctx, force = true)
         Log.i(TAG, "Flujo de actualizacion iniciado para $packageName (origen=$source)")
+
+        PlayUpdateSessionWatcher.start(
+            ctx, packageName,
+            onProgress = { pct -> setStage(ctx, STAGE_DOWNLOADING, "Descargando... $pct%") },
+            onFinished = { ok ->
+                if (ok) finish(ctx, RESULT_UPDATED, null)
+            }
+        )
+        LockSuiteAccessibilityService.instance?.startUpdateTicker()
+
         return null
     }
 
-    /**
-     * Abre (o trae al frente) la ficha de la app en Play Store.
-     *
-     * Ojo con los flags: la version anterior usaba FLAG_ACTIVITY_CLEAR_TASK y se
-     * llamaba desde onAccessibilityEvent en CADA evento (hasta diez por segundo).
-     * Eso destruia y recreaba la tarea de Play Store una y otra vez, y la
-     * descarga nunca llegaba a arrancar. Ahora solo NEW_TASK: si la tarea ya
-     * existe, se trae al frente tal como estaba.
-     */
     fun openStore(context: Context, packageName: String): Boolean {
         val ctx = context.applicationContext
         try {
@@ -340,7 +343,6 @@ object UpdateFlowManager {
         syncToPanel(ctx, force = false)
     }
 
-    /** Muestra (o refresca) la pantalla negra de actualizacion. */
     fun showOverlay(
         context: Context,
         packageName: String,
@@ -368,23 +370,12 @@ object UpdateFlowManager {
         finish(ctx, RESULT_CANCELLED, "Actualizacion cancelada.")
     }
 
-    /**
-     * Camino UNICO de salida. Idempotente: se puede llamar de mas sin romper
-     * nada, y siempre saca el overlay aunque el flujo ya figurara terminado
-     * (esa es justamente la red contra la pantalla negra trabada).
-     */
     fun finish(context: Context, result: String, message: String? = null) {
         val ctx = context.applicationContext
         val prefs = PrefsHelper.getMdmPrefs(ctx)
         val pkg = prefs.getString(KEY_PKG, null)
         val wasRunning = isRunning(ctx)
 
-        // Guarda de reentrada. Antes decia `finishing && wasRunning`, y como
-        // finish() limpia las preferencias apenas empieza, la segunda llamada
-        // siempre llegaba con wasRunning=false: la guarda no cortaba nunca y se
-        // repetia todo el cierre (un segundo GLOBAL_ACTION_HOME que sacaba al
-        // usuario de lo que estuviera usando, otro Toast, otra restauracion).
-        // forceCleanup() sigue pudiendo forzar el paso porque pone finishing=false.
         if (finishing) {
             LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
             return
@@ -393,8 +384,10 @@ object UpdateFlowManager {
 
         Log.i(TAG, "Cerrando flujo de actualizacion: result=$result pkg=$pkg running=$wasRunning")
 
-        // 1. Estado PRIMERO. Con esto el servicio de accesibilidad deja de
-        //    redirigir a Play Store en el mismo instante, antes del HOME.
+        PlayUpdateSessionWatcher.stop(ctx)
+        val service = LockSuiteAccessibilityService.instance
+        service?.stopUpdateTicker()
+
         prefs.edit()
             .remove(KEY_PKG)
             .putBoolean(KEY_IN_PROGRESS, false)
@@ -406,14 +399,11 @@ object UpdateFlowManager {
             .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
             .apply()
 
-        val service = LockSuiteAccessibilityService.instance
         service?.invalidateFlagsCache()
         service?.resetUpdateSession()
 
-        // 2. Sacar la pantalla negra SIEMPRE, pase lo que pase despues.
         service?.overlayManager?.hideBlockingMessageOverlay()
 
-        // 3. Cerrar Play Store volviendo al inicio.
         try {
             if (service != null) {
                 service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
@@ -428,21 +418,25 @@ object UpdateFlowManager {
             Log.w(TAG, "No se pudo volver al inicio: ${e.message}")
         }
 
-        // 4. Re-imponer los bloqueos con una demora corta: si se suspende Play
-        //    Store mientras todavia esta arriba, Android muestra el cartel
-        //    "aplicacion en pausa" encima del launcher.
-        //    La alarma watchdog NO se cancela hasta que esto termine: si el
-        //    proceso muere en el medio, sigue siendo la unica garantia.
         mainHandler.postDelayed({
             try {
                 PolicyManager(ctx).restoreInstallRestrictions()
             } catch (e: Exception) {
                 Log.e(TAG, "Error restaurando restricciones: ${e.message}")
             }
+            if (!pkg.isNullOrBlank()) {
+                try {
+                    val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
+                    dpm.setUninstallBlocked(admin, pkg,
+                        prefs.getBoolean("update_flow_prev_uninstall_blocked", false))
+                } catch (e: Exception) { e.printStackTrace() }
+            }
+            prefs.edit().remove("update_flow_prev_uninstall_blocked").apply()
+
             cancelWatchdog(ctx)
             releaseWake()
             finishing = false
-            // Por las dudas: si algo volvio a dibujar el overlay entre medio.
             LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
             syncToPanel(ctx, force = true)
         }, RESTORE_DELAY_MS)
@@ -487,7 +481,7 @@ object UpdateFlowManager {
     private fun armWatchdog(context: Context) {
         try {
             val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val at = SystemClock.elapsedRealtime() + TIMEOUT_MS
+            val at = SystemClock.elapsedRealtime() + WATCHDOG_TIMEOUT_MS
             // Exacta y a prueba de Doze: es la unica garantia de que el equipo
             // vuelva a bloquearse y de que la pantalla negra se saque si todo lo
             // demas falla. Con am.set() normal el sistema puede correrla mucho.

@@ -200,6 +200,7 @@
                 <label class="toggle-row"><span>Bloquear Ajustes de VPN</span><input type="checkbox" class="policy-switch" data-policy="vpnBlocked" /></label>
                 <label class="toggle-row"><span>Bloquear Control de Apps</span><input type="checkbox" class="policy-switch" data-policy="appsControlBlocked" /></label>
                 <label class="toggle-row"><span>Bloquear Ajuste de Volumen</span><input type="checkbox" class="policy-switch" data-policy="adjustVolumeBlocked" /></label>
+                <label class="toggle-row"><span>Proteger Servicio de Accesibilidad</span><input type="checkbox" class="policy-switch" data-policy="accessibilityProtected" /></label>
               </div>
             </div>
 
@@ -299,7 +300,10 @@
               <div class="sidebar-card hidden" id="update-flow-card">
                 <h3>🔄 Actualización de apps en curso</h3>
                 <p id="update-flow-app" style="font-weight: bold; margin: 4px 0;"></p>
-                <p id="update-flow-status" class="hint-text" style="margin: 0 0 10px;"></p>
+                <p id="update-flow-status" class="hint-text" style="margin: 0 0 6px;"></p>
+                <p id="update-flow-debug-row" class="hint-text" style="margin: 0 0 10px; font-size: 11px; display: none;">
+                  <strong>Botones vistos:</strong> <span id="update-flow-debug-text"></span>
+                </p>
                 <button id="update-flow-cancel-btn" class="action-btn warning-btn">✖ Cancelar actualización</button>
               </div>
               <div class="sidebar-card">
@@ -390,6 +394,7 @@
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ajustes de VPN</span><input type="checkbox" class="group-policy-switch" data-policy="vpnBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Control de Apps</span><input type="checkbox" class="group-policy-switch" data-policy="appsControlBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear Ajuste de Volumen</span><input type="checkbox" class="group-policy-switch" data-policy="adjustVolumeBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Proteger Servicio de Accesibilidad</span><input type="checkbox" class="group-policy-switch" data-policy="accessibilityProtected" /></label>
               </div>
             </div>
 

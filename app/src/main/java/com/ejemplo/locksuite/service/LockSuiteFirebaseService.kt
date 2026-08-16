@@ -351,6 +351,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "RESUME_LOCKSUITE" -> {
                     policyManager.setLockSuiteSuspended(false)
                 }
+                "PROTECT_ACCESSIBILITY" -> {
+                    policyManager.setAccessibilityProtection(true)
+                }
+                "UNPROTECT_ACCESSIBILITY" -> {
+                    policyManager.setAccessibilityProtection(false)
+                }
                 "UPDATE_LOCKSUITE" -> {
                     val idToAck = commandId
                     commandId = null

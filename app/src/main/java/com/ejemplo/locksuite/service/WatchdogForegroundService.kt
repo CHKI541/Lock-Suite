@@ -29,6 +29,7 @@ class WatchdogForegroundService : Service() {
     private var lastBlockLaunchTime = 0L
     private var lastSyncTime = 0L
     private var lastPrivateDnsEnforceTime = 0L
+    private var accessibilityObserver: android.database.ContentObserver? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val checkRunnable = object : Runnable {
         override fun run() {
@@ -93,6 +94,19 @@ class WatchdogForegroundService : Service() {
         scheduleWorkManagerWatchdog()
         handler.post(checkRunnable)
 
+        val uri = Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+        accessibilityObserver = object : android.database.ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) {
+                super.onChange(selfChange)
+                checkAccessibilityStatus()
+            }
+        }
+        try {
+            contentResolver.registerContentObserver(uri, false, accessibilityObserver!!)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Marcar en línea de inmediato al (re)arrancar el servicio
         try {
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
@@ -115,7 +129,9 @@ class WatchdogForegroundService : Service() {
         // Con LockSuite suspendido no se exige Accesibilidad ni se suspenden
         // navegadores: si no, la pantalla de bloqueo de accesibilidad aparecería
         // justo cuando el administrador acaba de liberar el equipo.
-        if (com.ejemplo.locksuite.mdm.PolicyManager(context).isLockSuiteSuspended()) return
+        val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+        if (policyManager.isLockSuiteSuspended()) return
+        if (!policyManager.isAccessibilityProtectionEnabled()) return
         if (!com.ejemplo.locksuite.security.PinManager.isPinConfigured(context)) return
         if (com.ejemplo.locksuite.security.SessionManager.isActive()) return
 
@@ -130,7 +146,6 @@ class WatchdogForegroundService : Service() {
 
         if (!isAccessibilityActive) {
             // Suspender navegadores
-            val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
             if (!policyManager.areBrowsersSuspended()) {
                 com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
                     .edit()
@@ -139,8 +154,8 @@ class WatchdogForegroundService : Service() {
                 policyManager.setBrowsersSuspended(true)
             }
 
-            // Evitar relanzar la actividad repetidamente si ya se lanzó hace menos de 15 segundos
-            if (now - lastBlockLaunchTime > 15000) {
+            // Evitar relanzar la actividad repetidamente si ya se lanzó hace menos de 3 segundos
+            if (now - lastBlockLaunchTime > 3000) {
                 lastBlockLaunchTime = now
                 // Abrir pantalla de bloqueo de accesibilidad
                 val blockIntent = Intent(context, com.ejemplo.locksuite.ui.emergency.BlockAccessibilityActivity::class.java).apply {
@@ -198,6 +213,10 @@ class WatchdogForegroundService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(checkRunnable)
+        accessibilityObserver?.let {
+            try { contentResolver.unregisterContentObserver(it) } catch (e: Exception) { }
+        }
+        accessibilityObserver = null
         super.onDestroy()
     }
 

@@ -940,6 +940,37 @@ class PolicyManager(private val context: Context) {
         }
     }
 
+    // ──────────────────────────────────────────────
+    // PROTECCIÓN DEL SERVICIO DE ACCESIBILIDAD
+    // ──────────────────────────────────────────────
+
+    fun isAccessibilityProtectionEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("accessibility_protection_enabled", true)
+
+    fun setAccessibilityProtection(enable: Boolean): Boolean {
+        if (deferIfSuspended("accessibility_protection_enabled", enable)) return true
+        val ok = applyAccessibilityProtection(enable)
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("accessibility_protection_enabled", enable).apply()
+        return ok
+    }
+
+    /**
+     * Aplica la protección al sistema vía DevicePolicyManager.
+     * Si enable=true, solo LockSuite puede tener un servicio de accesibilidad activo.
+     * Si enable=false o null, cualquier servicio permitido por el usuario funciona.
+     */
+    fun applyAccessibilityProtection(enable: Boolean): Boolean {
+        return try {
+            val list = if (enable) listOf(context.packageName) else null
+            dpm.setPermittedAccessibilityServices(adminComponent, list)
+            android.util.Log.i("PolicyManager", "setPermittedAccessibilityServices: $list")
+            true
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Error aplicando protección de accesibilidad: ${e.message}")
+            false
+        }
+    }
+
     // ─────────────────────────────────────────────
     // PERSISTENCIA Y REAPLICACIÓN
     // ─────────────────────────────────────────────
@@ -1099,6 +1130,11 @@ class PolicyManager(private val context: Context) {
 
         // Re-aplicar restricciones de instalación
         refreshInstallRestriction()
+
+        // Re-aplicar protección del servicio de accesibilidad
+        if (isAccessibilityProtectionEnabled()) {
+            applyAccessibilityProtection(true)
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -1251,6 +1287,7 @@ class PolicyManager(private val context: Context) {
 
         // Protecciones anti-manipulación (decisión del 16/8/2026: se levantan)
         safely { dpm.setUninstallBlocked(adminComponent, context.packageName, false) }
+        safely { dpm.setPermittedAccessibilityServices(adminComponent, null) }
         safely { clearFrpPolicy() }
         safely { KnoxHardening.setFactoryResetBlocked(context, false) }
         safely { KnoxHardening.setFlashingBlocked(context, false) }
@@ -1332,6 +1369,13 @@ class PolicyManager(private val context: Context) {
         // Permitir desinstalación de LockSuite tras la purga
         try {
             dpm.setUninstallBlocked(adminComponent, context.packageName, false)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Permitir otros servicios de accesibilidad tras la purga
+        try {
+            dpm.setPermittedAccessibilityServices(adminComponent, null)
         } catch (e: Exception) {
             e.printStackTrace()
         }

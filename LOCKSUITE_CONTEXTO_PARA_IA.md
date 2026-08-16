@@ -68,6 +68,8 @@ CAPA 3 — VISUAL (service/LockSuiteAccessibilityService.kt)
 | `receiver/PackageReceiver.kt` | Detecta fin real de instalación (`ACTION_PACKAGE_REPLACED`) durante auto-actualización de Play Store; timeout watchdog de 10 min. |
 | `service/LockSuiteAccessibilityService.kt` | Capa 3. Detección por texto/IDs de vista (incluye ídish). Automatiza clicks en el flujo de actualización de Play Store (`handlePlayStoreAutoUpdate`). |
 | `service/BlockOverlayManager.kt` | Overlay negro opaco a pantalla completa que absorbe el 100% de los toques durante una actualización forzada de app. Desde el 16/8 muestra título + estado en vivo + botón Cancelar. |
+| `util/PlayUpdateSessionWatcher.kt` | **(16/8, escrito y SIN CABLEAR)** Progreso y finalización de la actualización leídos de `PackageInstaller.SessionCallback` — números, no texto: anda en cualquier idioma. Ver B.14. |
+| `util/PlayButtonFinder.kt` | **(16/8, escrito y SIN CABLEAR)** Encuentra el botón "Actualizar" de Play Store por ID de vista, por palabra completa en 10 idiomas y por posición; devuelve candidatos ordenados en vez de una adivinanza. Ver B.14. |
 | `util/UpdateFlowManager.kt` | **(16/8)** Punto único de control del flujo "actualizar una app por Play Store con la pantalla tapada": arranque, etapas, cancelación y cierre. Todo arranque pasa por `start()` y toda salida por `finish()`. Nada más en el proyecto debe escribir `mdm_install_in_progress`. |
 | `service/LockSuiteFirebaseService.kt` | Recibe comandos FCM (BLOCK_VPN, UPDATE_APP, CHANGE_PIN, etc.), despacha, responde ACK. |
 | `util/FirebaseDeviceSync.kt` | Sincroniza estado al panel (Firebase Auth anónima — ver Pendientes B.3, esto no es una identidad segura). |
@@ -150,6 +152,8 @@ Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: *
 6. *(pantalla trabada)* La única forma de terminar bien era "aparece Abrir y no hay Actualizar". Cualquier otra cosa en pantalla —pedido de iniciar sesión, error de red, ficha en blanco— no terminaba nunca. Ahora hay cuatro salidas más: el `versionCode` del paquete cambió (la señal más confiable, no depende de ningún texto ni del broadcast), un freno por estancamiento a los 2 minutos, el botón Cancelar y el comando `CANCEL_UPDATE_APP` del panel.
 7. *(pantalla trabada)* `reapplyAllRestrictions()` no miraba `mdm_install_in_progress` al re-suspender Play Store ni al re-suspender apps individuales. El `WatchdogWorker` corre cada 15 min y el flujo dura hasta 10: se pisaban, y el Watchdog volvía a suspender Play Store con la descarga a medias.
 
+**PROBADO EN EL CELULAR EL 16/8 A LA TARDE: NO ANDA.** Se traba en "Buscando el botón Actualizar" o en "Esperando a Google Play". Es un octavo bug, distinto de los siete de arriba y más grave que todos ellos: **el bucle es puramente reactivo a eventos de accesibilidad, y Play Store deja de emitirlos apenas la ficha termina de cargar.** Si en esa ráfaga inicial el árbol de nodos todavía no estaba disponible o el botón todavía no estaba dibujado, no se vuelve a mirar nunca y la pantalla queda congelada en la última etapa que alcanzó a escribir. El arreglo (un tick propio de 700 ms) y el rediseño para dejar de depender del texto de la pantalla están en **B.14**.
+
 **Falta probar en equipo real, en este orden:** (a) actualizar una app con actualización pendiente desde el panel y confirmar que se instala sola, que el texto de la pantalla negra va cambiando y que al terminar Play Store se cierra y queda re-bloqueada; (b) lo mismo desde el botón nuevo "Actualizar apps" del celular, antes del PIN; (c) apretar Cancelar a mitad de la descarga y confirmar que vuelve a la pantalla común con todo re-bloqueado; (d) mandar una actualización de una app que ya está al día y confirmar que sale sola a los ~8 s; (e) confirmar que con el servicio de Accesibilidad apagado el flujo se **niega** a arrancar en vez de dejar Play Store abierta.
 
 **B.11 — Suspensión temporal de LockSuite (nueva el 16/8, sin probar en equipo real).** `PolicyManager.setLockSuiteSuspended(true)` deja el equipo como si LockSuite no estuviera instalado; `false` lo devuelve a como estaba. Interruptor en la app (pestaña Políticas, primera tarjeta) y en el panel (`SUSPEND_LOCKSUITE` / `RESUME_LOCKSUITE`, exigen PIN del dispositivo). **Alcance elegido por el dueño el 16/8: se levanta absolutamente todo, incluidas las protecciones anti-manipulación** (bloqueo de restauración de fábrica, Knox/flasheo, FRP y el bloqueo de desinstalar LockSuite). Es una suspensión literal, con la consecuencia de que mientras dure el usuario puede desinstalar LockSuite o formatear el equipo y no habría vuelta atrás — usarla solo con el equipo a la vista.
@@ -177,6 +181,24 @@ Mientras la suspensión está activa: `reapplyAllRestrictions()`, `refreshInstal
 - **Perillas que quedaron sin tocar a propósito**, por si después de probar todavía se siente pesado: `notificationTimeout = 100` (subirlo a 150–200 ms baja la carga pero retrasa el "tapar en el momento") y `FLAG_INCLUDE_NOT_IMPORTANT_VIEWS` (agranda bastante el árbol, pero hace falta para encontrar WebViews e imágenes no marcadas como importantes).
 
 Verificación hecha: parseo limpio con kotlinc 2.0.21 (con control negativo que confirma que el chequeo detecta errores reales) y type-check con **0 errores / 0 warnings** contra stubs de la API de Android escritos para eso. **No se corrió Gradle ni se probó en equipo.** Nota de convivencia: la reescritura de B.9 se hizo *encima* de estos cambios y los respetó — el snapshot de flags, los topes de recorrido y los caches siguen intactos, y la suspensión (B.11) se sumó al mismo snapshot en vez de leer preferencias por evento. Está bien así; mantenerlo.
+
+**B.14 — Rediseño del flujo de actualización: que ande en cualquier idioma y no dependa solo de la accesibilidad (16/8, escrito y SIN CABLEAR).** Pedido del dueño después de probar en el celular: rápido, sin posibilidad de evadir el filtro, y que funcione aunque el equipo no esté en español. Dos archivos nuevos ya están en el repo, autocontenidos y compilables solos, pero **todavía nadie los llama**: `util/PlayUpdateSessionWatcher.kt` y `util/PlayButtonFinder.kt`. Las ediciones exactas que faltan, en orden y listas para aplicar, están en `INSTRUCCIONES_ANTIGRAVITY_2026-08-16_ACTUALIZACION_Y_ACCESIBILIDAD.md`; el razonamiento y las alternativas descartadas, en `INSTRUCCIONES_ACTUALIZACION_Y_ACCESIBILIDAD_2026-08-16.md`. La idea:
+
+- **Tick propio de 700 ms.** Arregla el trabado de B.9. Es una función y dos llamadas, y conviene probarlo SOLO antes que el resto.
+- **`PackageInstaller.SessionCallback` para progreso y finalización.** Reporta las sesiones de todos los instaladores del equipo, Play Store incluida, con `appPackageName` y `getProgress()`. La misma información que muestra la tienda, pero en números y sin idioma. Reemplaza a buscar las palabras "Descargando" / "Instalando".
+- **Candidatos ordenados + verificación en vez de adivinanza.** Se aprieta un candidato, se esperan 2,5 s, y si no apareció sesión de instalación ni cambió el `versionCode`, se prueba el siguiente. Lo que hace que esto sea seguro es `dpm.setUninstallBlocked(target, true)` durante todo el flujo: aunque se apretara "Desinstalar" en un idioma desconocido, Android lo rechaza. **Sin esa red, este enfoque no va** — no quitarla si se toca el código.
+- **Hardening que salió de paso:** `UpdateFlowManager.start()` levanta también `DISALLOW_INSTALL_UNKNOWN_SOURCES`, que Play Store no necesita. Abre una ventana de hasta 10 minutos para sideloadear si el usuario lograra salir del overlay. Dejar solo `DISALLOW_INSTALL_APPS`.
+- **Diagnóstico visible:** publicar en `updateFlow.debugLabels` las etiquetas de los botones que el escaneo vio, y mostrarlas en el panel. Sin esto, cada equipo en un idioma nuevo es una sesión entera de adivinanza.
+- **La ruta que ni siquiera abre Play Store:** para las apps que el administrador ya hostea en `storeApps`, `SelfUpdater.downloadAndInstallApk()` instala en silencio como Device Owner. Sin pantalla negra, sin accesibilidad, sin idioma y sin superficie de evasión. **Es la única forma de tener rápido + silencioso + inevadible a la vez**; conviene preferirla cuando el APK está hosteado, pero no habilitarla hasta cerrar B.6 (checksum).
+
+**B.15 — Protección de Accesibilidad (16/8, pedida por el dueño, escrita y SIN IMPLEMENTAR).** **Aclaración que hay que darle al dueño tal cual: Android no tiene ninguna API de MDM para impedir que se desactive un servicio de accesibilidad.** No existe `DISALLOW_CONFIG_ACCESSIBILITY`; `setSecureSetting()` de Device Owner no acepta `ENABLED_ACCESSIBILITY_SERVICES`; y volver a encenderlo por código necesita `WRITE_SECURE_SETTINGS`, que un Device Owner no tiene. Es una decisión deliberada de Google: si un MDM pudiera clavar un servicio de accesibilidad, cualquier spyware con Device Owner también. Lo que sí se puede, y alcanza para que en la práctica no valga la pena intentarlo:
+
+- `dpm.setPermittedAccessibilityServices(admin, listOf(paquete))` — impide habilitar CUALQUIER otro servicio de accesibilidad. Es una API real y hoy no se usa. Cierra la puerta a instalar un servicio rival que le pelee a LockSuite.
+- **Detección instantánea con un `ContentObserver` sobre `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES`**, en vez de los 20 s del sondeo del Watchdog. Es la mejora más grande de la lista: lleva la ventana de "filtro caído" de hasta 20 segundos a milisegundos, que es lo que vuelve inútil la evasión en la práctica.
+- Reacción más dura cuando se detecta: relanzar `BlockAccessibilityActivity` cada 3 s en vez de 15 (hoy el antirrebote deja usar el equipo entre relanzamientos) y suspender todas las apps no críticas, no solo los navegadores.
+- En Samsung con Knox licenciado sí se puede ocultar la entrada de Accesibilidad de Ajustes (`RestrictionPolicy`); ahí queda cerrado de verdad. Va en `KnoxHardening.kt`.
+
+Interruptor `accessibility_protection_enabled`, **activado por defecto** (se pone solo la primera vez que el servicio se conecta, que es lo que pidió el dueño), con comandos `PROTECT_ACCESSIBILITY` / `UNPROTECT_ACCESSIBILITY` y switch en el panel. Código exacto en el documento de instrucciones §3.
 
 **B.10 — Menores / housekeeping:**
 
@@ -232,6 +254,17 @@ Archivos tocados: `util/UpdateFlowManager.kt` (nuevo), `service/BlockOverlayMana
 
 ---
 
+**Sesión B, segundo tramo — después de que el dueño probara en el celular.** "Actualizar app" se trabó en "Buscando el botón Actualizar" / "Esperando a Google Play". Causa raíz: el bucle no tiene reloj propio y Play Store se calla apenas carga la ficha (detalle al final de B.9). El dueño pidió además que ande en cualquier idioma, que no dependa solo de la accesibilidad, y una protección para que no se pueda desactivar la Accesibilidad.
+
+**A mitad de este tramo se cayó la VM del puente al dispositivo** (`device_bash` → "Workspace unavailable", cuatro reintentos en diez minutos) y no volvió. El puente de archivos siguió andando **en modo escritura**, así que se pudieron dejar archivos NUEVOS en el repo pero no editar los `.kt` existentes (esos no se pueden leer por el puente de archivos — es el problema de OneDrive ya anotado en A). Por eso este tramo quedó como dos piezas puestas más un documento de instrucciones, en vez de código aplicado:
+
+- En el repo, compilables solos pero **sin cablear**: `util/PlayUpdateSessionWatcher.kt` y `util/PlayButtonFinder.kt`.
+- `INSTRUCCIONES_ANTIGRAVITY_2026-08-16_ACTUALIZACION_Y_ACCESIBILIDAD.md` — las ediciones exactas que faltan, en orden.
+- `INSTRUCCIONES_ACTUALIZACION_Y_ACCESIBILIDAD_2026-08-16.md` — el razonamiento y las alternativas descartadas.
+- Ver B.14 y B.15. **Nada de este tramo está commiteado**: los dos `.kt` nuevos y los dos `.md` están en el working tree.
+
+---
+
 **Cómo convivieron las dos sesiones.** La sesión B tocó `LockSuiteAccessibilityService.kt` y `BlockOverlayManager.kt` **encima** de la sesión A, y las respetó: el snapshot de flags, los topes de recorrido del árbol y los caches de la sesión A siguen intactos, y la suspensión se sumó al mismo snapshot en vez de leer preferencias por evento. Se verificó archivo por archivo después del merge. Mantener ese patrón: cualquier cosa nueva en el servicio va al snapshot de flags, no a una lectura de preferencias en `onAccessibilityEvent`.
 
 Esto salió bien de casualidad más que por proceso. Sigue vigente la recomendación del final de este archivo: commitear en puntos de control claros, y releer el archivo actual antes de editarlo.
@@ -243,6 +276,7 @@ Esto salió bien de casualidad más que por proceso. Sigue vigente la recomendac
 **Próximo paso sugerido — seguir `INSTRUCCIONES_COMPILACION_ANTIGRAVITY_2026-08-16.md`, que tiene el detalle.** El resumen:
 
 1. **Compilar** (`.\gradlew.bat compileDebugKotlin`) y arreglar lo que salga. Son ~2.400 líneas nuevas más una Capa 3 reescrita que todavía no vio un compilador.
+1-bis. **Aplicar el punto 1 de `INSTRUCCIONES_ANTIGRAVITY_2026-08-16_ACTUALIZACION_Y_ACCESIBILIDAD.md`** (el tick de 700 ms) antes de probar la actualización de apps: sin eso, B.9 ya se sabe que se traba en el celular. Es una función y dos llamadas.
 2. **Probar B.8 primero** en el Android 13 real (`dumpsys accessibility`). Bloquea a todo lo demás.
 3. **Después, en este orden:** el checklist de B.13 (Capa 3 — empezando por que Mercado Pago NO rebote en el inicio ni en un pago), el de B.9 (actualización de apps) y el de B.11 (suspensión).
 4. **Subir a 0.6.19 / versionCode 81** al publicar. La 0.6.18 publicada NO contiene nada de esto.
@@ -252,7 +286,7 @@ Y B.1 y B.2 siguen siendo los de mayor impacto y menor esfuerzo de la lista.
 
 ## Estado del repo (git)
 
-Al 16/8, después de `bbdada1` y del commit de esta sesión: **todo el código está commiteado**. Lo único que puede aparecer en `git status` es ruido de fin de línea (CRLF) en `app/build.gradle.kts`, `admin-backend/public/version.json` y `ui/emergency/BlockAccessibilityActivity.kt` — son diffs de 0 líneas de contenido, ver B.10.
+Al 16/8, después de `bbdada1` y del commit de esta sesión: casi todo está commiteado. **Sin commitear** quedan los dos archivos nuevos del segundo tramo (`util/PlayUpdateSessionWatcher.kt`, `util/PlayButtonFinder.kt`) y sus dos documentos de instrucciones — la VM del puente se cayó antes de poder correr `git`. Lo único que puede aparecer en `git status` es ruido de fin de línea (CRLF) en `app/build.gradle.kts`, `admin-backend/public/version.json` y `ui/emergency/BlockAccessibilityActivity.kt` — son diffs de 0 líneas de contenido, ver B.10.
 
 Igual, **correr `git status` y `git diff --stat` al arrancar cualquier sesión nueva** en vez de confiar en este párrafo: puede haber más de un agente trabajando en paralelo y esto cambia todo el tiempo.
 

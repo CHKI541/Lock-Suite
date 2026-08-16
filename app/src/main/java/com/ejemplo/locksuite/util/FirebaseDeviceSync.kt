@@ -116,7 +116,8 @@ object FirebaseDeviceSync {
                 "startedAt" to prefs.getLong(UpdateFlowManager.KEY_STARTED_AT, 0L),
                 "lastResult" to (prefs.getString(UpdateFlowManager.KEY_LAST_RESULT, "") ?: ""),
                 "lastResultPackage" to (prefs.getString(UpdateFlowManager.KEY_LAST_RESULT_PKG, "") ?: ""),
-                "lastResultAt" to prefs.getLong(UpdateFlowManager.KEY_LAST_RESULT_AT, 0L)
+                "lastResultAt" to prefs.getLong(UpdateFlowManager.KEY_LAST_RESULT_AT, 0L),
+                "debugLabels" to (prefs.getString(UpdateFlowManager.KEY_DEBUG_LABELS, "") ?: "")
             )
             val payload = mutableMapOf<String, Any>(
                 "updateFlow" to flow,
@@ -302,7 +303,8 @@ object FirebaseDeviceSync {
                     // interruptor con este valor y un cartel bien visible cuando
                     // está en true, para que no se olvide un equipo suspendido.
                     "locksuiteSuspended" to policyManager.isLockSuiteSuspended(),
-                    "locksuiteSuspendedAt" to policyManager.getLockSuiteSuspendedAt()
+                    "locksuiteSuspendedAt" to policyManager.getLockSuiteSuspendedAt(),
+                    "accessibilityProtected" to policyManager.isAccessibilityProtectionEnabled()
                 )
             )
             syncAppsListInternal(context)

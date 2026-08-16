@@ -57,6 +57,7 @@ const ALLOWED_COMMANDS = new Set([
   // el estado desde las preferencias guardadas. Exige PIN del dispositivo (no
   // esta en la excepcion de UPDATE_*), porque deja el equipo sin proteccion.
   "SUSPEND_LOCKSUITE", "RESUME_LOCKSUITE",
+  "PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY",
 ]);
 
 function canonicalCommandPayload(payload) {

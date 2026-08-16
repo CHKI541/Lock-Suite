@@ -309,6 +309,16 @@ function updateSidebarUI(e, t) {
             const entry = apps[(flow.packageName || "").replace(/\./g, "_")];
             if (appEl) appEl.textContent = (entry && entry.label ? entry.label : (flow.packageName || "")) + ((flow.source === "local") ? "  ·  iniciada desde el celular" : "  ·  iniciada desde el panel");
             if (statusEl) statusEl.textContent = flow.statusText || flow.stage || "";
+            const debugRow = document.getElementById("update-flow-debug-row");
+            const debugText = document.getElementById("update-flow-debug-text");
+            if (debugRow && debugText) {
+                if (flow.debugLabels) {
+                    debugText.textContent = flow.debugLabels;
+                    debugRow.style.display = "block";
+                } else {
+                    debugRow.style.display = "none";
+                }
+            }
             const cancelBtn = document.getElementById("update-flow-cancel-btn");
             if (cancelBtn) cancelBtn.disabled = false;
         } else {
@@ -962,7 +972,8 @@ saveNameBtn.addEventListener("click", async () => {
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
-            kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"]
+            kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
+            accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"]
         } [n];
     if (!i) return;
     const d = a ? i[0] : i[1];
@@ -2072,6 +2083,7 @@ if (groupSidebar) {
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
+            accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
         } [policyKey];
         

@@ -26,6 +26,8 @@ import com.ejemplo.locksuite.mdm.WebViewBlockManager
 import com.ejemplo.locksuite.mdm.ImageBlockManager
 import com.ejemplo.locksuite.util.PrefsHelper
 import com.ejemplo.locksuite.util.UpdateFlowManager
+import com.ejemplo.locksuite.util.PlayButtonFinder
+import com.ejemplo.locksuite.util.PlayUpdateSessionWatcher
 import java.util.concurrent.Executors
 
 /**
@@ -43,10 +45,9 @@ import java.util.concurrent.Executors
  *   • Nada de consultas al PackageManager por evento. Se cachean con TTL.
  *   • Todo recorrido del árbol de nodos lleva tope de profundidad Y tope de nodos.
  *   • Los logs de diagnóstico van detrás de `if (VERBOSE)`. Como VERBOSE es una
- *     constante de compilación, R8 borra esas ramas enteras en la build de release.
- *
- * Optimización del 16/8/2026: ver INFORME_OPTIMIZACION_ACCESIBILIDAD_2026-08-16.md
- * en la raíz del proyecto para el detalle de qué se cambió y por qué.
+ *     constante `false`, R8 elimina por completo el bloque en la versión final.
+ *   • El snapshot de configuración se lee una vez por ráfaga desde SharedPreferences,
+ *     no por evento individual.
  */
 class LockSuiteAccessibilityService : AccessibilityService() {
 
@@ -91,9 +92,15 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         /** Mínimo entre dos clics automáticos, para no encadenar toques sobre la misma pantalla. */
         private const val UPDATE_CLICK_COOLDOWN_MS = 1_500L
         /** Con "Abrir" en pantalla y sin haber hecho nada, se da por ya actualizada pasado esto. */
-        private const val UPDATE_UP_TO_DATE_GRACE_MS = 8_000L
+        private const val UPDATE_UP_TO_DATE_GRACE_MS = 3_000L
         /** Sin haber podido clickear ni ver progreso pasado esto, se aborta y se destapa la pantalla. */
-        private const val UPDATE_STALL_MS = 120_000L
+        private const val UPDATE_STALL_MS = 75_000L
+        /** Cada cuánto el flujo vuelve a mirar la pantalla, sin depender de eventos. */
+        private const val UPDATE_TICK_MS = 700L
+        /** Cuánto se espera tras apretar un candidato antes de probar el siguiente. */
+        private const val CANDIDATE_WAIT_MS = 2_500L
+        /** Cuántos candidatos distintos se prueban antes de rendirse. */
+        private const val MAX_CANDIDATES = 6
         /** Cuántos padres se suben como máximo buscando quién acepta el clic. */
         private const val CLICK_PARENT_DEPTH = 6
 
@@ -332,6 +339,33 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         return browserPackages().contains(packageName)
     }
 
+    private val updateTickRunnable = object : Runnable {
+        override fun run() {
+            val ctx = applicationContext
+            val pkg = UpdateFlowManager.currentPackage(ctx)
+            if (pkg.isNullOrBlank() || !UpdateFlowManager.isRunning(ctx)) {
+                return   // sin re-encolar: el flujo terminó
+            }
+            try {
+                scanAndAct(pkg)
+            } catch (e: Exception) {
+                Log.w(TAG, "tick de actualización: ${e.message}")
+            }
+            mainHandler.postDelayed(this, UPDATE_TICK_MS)
+        }
+    }
+
+    /** La llama UpdateFlowManager.start(). */
+    fun startUpdateTicker() {
+        mainHandler.removeCallbacks(updateTickRunnable)
+        mainHandler.post(updateTickRunnable)
+    }
+
+    /** La llama UpdateFlowManager.finish(). Tiene que estar en TODOS los caminos de salida. */
+    fun stopUpdateTicker() {
+        mainHandler.removeCallbacks(updateTickRunnable)
+    }
+
     // ──────────────────────────────────────────────
     // Configuración del servicio
     // ──────────────────────────────────────────────
@@ -358,6 +392,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         mdmPrefs.registerOnSharedPreferenceChangeListener(prefsListener)
         cachedFlags = null
+
+        val p = PrefsHelper.getMdmPrefs(this)
+        if (!p.contains("accessibility_protection_enabled")) {
+            p.edit().putBoolean("accessibility_protection_enabled", true).apply()
+            try { policyManager.applyAccessibilityProtection(true) } catch (e: Exception) { }
+        }
 
         instance = this
 
@@ -1449,90 +1489,38 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // ──────────────────────────────────────────────
 
     private var updateSessionPkg: String? = null
-    private var updateSessionStartTime: Long = 0L
-    private var updateSessionClickedAction: Boolean = false
-    private var updateSessionLastClickAt: Long = 0L
-    private var updateSessionSawProgress: Boolean = false
-    private var lastStoreRelaunchAt: Long = 0L
-
-    /** Etiquetas EXACTAS del botón que inicia la actualización o instalación. */
-    private val updateActionLabels = setOf(
-        "actualizar", "update", "actualizar todo", "update all", "actualizar todas",
-        "instalar", "install", "habilitar", "enable", "reanudar", "resume",
-        "עדכן", "התקן", "עדכן הכל"
-    )
-
-    /** Etiquetas EXACTAS del botón "Abrir" (la app quedó lista). */
-    private val updateOpenLabels = setOf("abrir", "open", "פתח")
-
-    /** Etiquetas EXACTAS de los botones de diálogos de confirmación. */
-    private val updateDialogLabels = setOf(
-        "continuar", "continue", "aceptar", "ok", "aceptar y continuar",
-        "proceder", "descargar", "download", "si", "yes",
-        "reintentar", "retry", "entendido", "got it",
-        "המשך", "אישור", "הורד", "כן"
-    )
-
-    /** Si el texto del nodo contiene alguno de estos, no se toca nunca. */
-    private val updateForbiddenFragments = listOf(
-        "desinstalar", "uninstall", "cancelar", "cancel", "detener", "stop",
-        "pausar", "pause", "suspender", "eliminar", "remove", "הסר", "בטל"
-    )
-
-    /** Textos que indican que Play Store ya está trabajando: no tocar nada. */
-    private val updateProgressFragments = listOf(
-        "descargando", "downloading", "instalando", "installing",
-        "pendiente", "pending", "en cola", "queued", "esperando", "waiting",
-        "verificando", "verifying", "preparando", "preparing",
-        "מוריד", "מתקין", "ממתין"
-    )
-
-    /** Los que sí indican instalación (no descarga), para afinar el texto en pantalla. */
-    private val updateInstallingFragments = setOf(
-        "instalando", "installing", "verificando", "verifying", "מתקין"
-    )
-
-    private val playStoreButtonIds = setOf(
-        "com.android.vending:id/buy_button",
-        "com.android.vending:id/action_button",
-        "com.android.vending:id/right_button",
-        "com.android.vending:id/positive_button"
-    )
+    private var updateSessionStartTime = 0L
+    private var updateSessionTreeSeenAt = 0L
+    private var updateSessionLastClickAt = 0L
+    private var updateSessionCandidatesTried = 0
+    private val updateSessionTriedKeys = HashSet<String>(8)
+    private var lastStoreRelaunchAt = 0L
 
     /** Invalida el snapshot de flags. La usa UpdateFlowManager al arrancar/terminar. */
     fun invalidateFlagsCache() {
         cachedFlags = null
     }
 
-    /** Limpia el estado de la sesión de escaneo. La usa UpdateFlowManager al terminar. */
     fun resetUpdateSession() {
         updateSessionPkg = null
         updateSessionStartTime = 0L
-        updateSessionClickedAction = false
+        updateSessionTreeSeenAt = 0L
         updateSessionLastClickAt = 0L
-        updateSessionSawProgress = false
+        updateSessionCandidatesTried = 0
+        updateSessionTriedKeys.clear()
         lastStoreRelaunchAt = 0L
         releaseUpdateWakeLock()
     }
 
-    /** Rect reutilizado por el escaneo, para no asignar uno por nodo. */
-    private val scanRect = Rect()
-
-    /** ¿El nodo está en la franja superior donde vive la fila de botones de la ficha? */
-    private fun isInMainRow(node: AccessibilityNodeInfo, limit: Int): Boolean {
-        node.getBoundsInScreen(scanRect)
-        return !scanRect.isEmpty && scanRect.top >= 0 && scanRect.top < limit
-    }
-
-    private class StoreScan(val mainRowLimit: Int) {
-        var action: AccessibilityNodeInfo? = null
-        var actionFallback: AccessibilityNodeInfo? = null
-        var open: AccessibilityNodeInfo? = null
-        var dialog: AccessibilityNodeInfo? = null
-        var progressText: String? = null
-        var sawProgressBar = false
-        var installing = false
-        var nodes = 0
+    /**
+     * Firma estable de un nodo entre escaneos. Los AccessibilityNodeInfo se recrean
+     * en cada escaneo, así que no sirve compararlos por identidad para saber si un
+     * candidato ya se probó.
+     */
+    private fun candidateKey(c: PlayButtonFinder.Candidate): String {
+        val id = c.node.viewIdResourceName ?: ""
+        val txt = c.node.text?.toString() ?: c.node.contentDescription?.toString() ?: ""
+        return "$id|${c.top}|${c.left}|$txt"
     }
 
     /**
@@ -1554,94 +1542,20 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * IMPORTANTE: este recorrido NO recicla nodos. Los que coinciden se guardan
-     * por referencia y se usan DESPUÉS del escaneo. (Fix B.9-b: reciclarlos acá
-     * rompía el clic en Android 11/12 con IllegalStateException.)
+     * Un ciclo del flujo. Lo llama el tick cada UPDATE_TICK_MS y también cada evento
+     * de accesibilidad de Play Store (el evento es un despertador extra, no la única
+     * fuente — ese era el bug).
      */
-    private fun scanPlayStoreTree(node: AccessibilityNodeInfo?, depth: Int, out: StoreScan) {
-        if (node == null || depth > MAX_TREE_DEPTH || out.nodes >= MAX_NODES_PER_SCAN) return
-        out.nodes++
-
-        val className = node.className?.toString() ?: ""
-        if (className.endsWith("ProgressBar") && isInMainRow(node, out.mainRowLimit)) {
-            out.sawProgressBar = true
-        }
-
-        val rawText = node.text?.toString()?.trim() ?: ""
-        val rawDesc = node.contentDescription?.toString()?.trim() ?: ""
-
-        if (rawText.isNotEmpty() || rawDesc.isNotEmpty()) {
-            val text = foldAccents(rawText)
-            val desc = foldAccents(rawDesc)
-            val probe = if (text.isNotEmpty()) text else desc
-
-            // El filtro de fila principal también vale acá. Sin él bastaba una
-            // palabra de la descripción de la app ("pagos pendientes" contiene
-            // "pendiente") para que el flujo creyera que Play Store ya estaba
-            // descargando: no clickeaba nunca Actualizar y, peor, marcaba
-            // updateSessionSawProgress, que es justo lo que desactiva el freno
-            // por estancamiento. Resultado: pantalla negra hasta los 10 minutos.
-            val progressHit = if (isInMainRow(node, out.mainRowLimit)) {
-                updateProgressFragments.firstOrNull { probe.contains(it) }
-            } else null
-            if (progressHit != null) {
-                if (out.progressText == null) {
-                    out.progressText = (if (rawText.isNotEmpty()) rawText else rawDesc)
-                }
-                if (progressHit in updateInstallingFragments) out.installing = true
-            }
-
-            val forbidden = updateForbiddenFragments.any { probe.contains(it) }
-            if (!forbidden) {
-                val isKnownButton = node.viewIdResourceName in playStoreButtonIds
-                val looksClickable = node.isClickable || isKnownButton || className.endsWith("Button")
-
-                // Los botones "Actualizar" / "Abrir" que nos importan son los de
-                // la ficha de la app, que están arriba. Más abajo, la misma ficha
-                // muestra carruseles de "apps similares" con sus propios botones
-                // "Instalar" y "Abrir": sin este filtro, en una app que ya estaba
-                // al día el escaneo agarraba el "Instalar" de OTRA app del
-                // carrusel y lo apretaba, instalando algo que nadie pidió.
-                // (Los botones de diálogo no llevan este filtro: los diálogos y
-                // hojas inferiores aparecen justamente abajo.)
-                when {
-                    text in updateActionLabels || desc in updateActionLabels -> {
-                        if (isInMainRow(node, out.mainRowLimit)) {
-                            if (looksClickable) {
-                                if (out.action == null) out.action = node
-                            } else if (out.actionFallback == null) {
-                                out.actionFallback = node
-                            }
-                        }
-                    }
-                    text in updateOpenLabels || desc in updateOpenLabels -> {
-                        if (out.open == null && isInMainRow(node, out.mainRowLimit)) out.open = node
-                    }
-                    text in updateDialogLabels || desc in updateDialogLabels -> {
-                        if (out.dialog == null && looksClickable) out.dialog = node
-                    }
-                }
-            }
-        }
-
-        for (i in 0 until node.childCount) {
-            scanPlayStoreTree(node.getChild(i), depth + 1, out)
-        }
-    }
-
-    private fun handlePlayStoreAutoUpdate(event: AccessibilityEvent, updatingPkg: String) {
+    private fun scanAndAct(updatingPkg: String) {
         val ctx = applicationContext
         val now = SystemClock.elapsedRealtime()
 
         if (updateSessionPkg != updatingPkg) {
+            resetUpdateSession()
             updateSessionPkg = updatingPkg
             updateSessionStartTime = now
-            updateSessionClickedAction = false
-            updateSessionLastClickAt = 0L
-            updateSessionSawProgress = false
         }
 
-        // Mantener la pantalla tapada y con el estado al día.
         UpdateFlowManager.showOverlay(
             ctx, updatingPkg,
             UpdateFlowManager.currentStage(ctx),
@@ -1649,116 +1563,107 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             UpdateFlowManager.isCancelable(ctx)
         )
 
-        // Señal más confiable que cualquier texto en pantalla: si el versionCode
-        // del paquete cambió, la actualización YA se instaló. No depende de que
-        // llegue ACTION_PACKAGE_REPLACED ni de cómo esté redactada la pantalla.
+        // ── 1. ¿Ya se instaló? Señal concluyente, no depende de la pantalla ──
         if (UpdateFlowManager.targetAlreadyUpdated(ctx)) {
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
             UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UPDATED, null)
             return
         }
 
+        // ── 2. ¿Play Store ya está descargando? Entonces NO tocar nada ──
+        val pct = PlayUpdateSessionWatcher.currentProgressFor(ctx, updatingPkg)
+        if (pct >= 0 || PlayUpdateSessionWatcher.sawSession) {
+            UpdateFlowManager.setStage(
+                ctx,
+                UpdateFlowManager.STAGE_DOWNLOADING,
+                if (pct >= 0) "Descargando... $pct%" else null
+            )
+            return
+        }
+
+        // ── 3. Árbol de Play Store ──
         val root = findPlayStoreRoot()
         if (root == null) {
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE)
+            // Si a los 6 s todavía no hay árbol, la ficha probablemente nunca abrió:
+            // reintentar el intent (con el mismo freno de 1,5 s de siempre).
+            if (now - updateSessionStartTime > 6_000L &&
+                now - lastStoreRelaunchAt > STORE_RELAUNCH_MIN_MS
+            ) {
+                lastStoreRelaunchAt = now
+                UpdateFlowManager.openStore(ctx, updatingPkg)
+            }
+            return
+        }
+        if (updateSessionTreeSeenAt == 0L) updateSessionTreeSeenAt = now
+
+        val dm = resources.displayMetrics
+        val scan = PlayButtonFinder.scan(root, dm.widthPixels, dm.heightPixels)
+        UpdateFlowManager.reportDebugLabels(ctx, scan.debugLabels)
+
+        val cooledDown = now - updateSessionLastClickAt > CANDIDATE_WAIT_MS
+
+        // ── 4. Diálogo de confirmación, solo después de haber apretado algo ──
+        //     (antes de eso, un texto suelto que coincida se llevaría todos los ciclos)
+        if (updateSessionCandidatesTried > 0 && scan.dialogs.isNotEmpty() && cooledDown) {
+            val d = scan.dialogs.first()
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_CONFIRMING)
+            if (performClickOnNode(d.node)) {
+                updateSessionLastClickAt = now
+                Log.i(TAG, "Clic en diálogo: ${d.reason}")
+            }
             return
         }
 
-        // 60 % de la altura de pantalla: la fila de botones de la ficha entra
-        // holgada, y los carruseles de apps sugeridas quedan afuera.
-        val scan = StoreScan((resources.displayMetrics.heightPixels * 0.6f).toInt())
-        try {
-            scanPlayStoreTree(root, 0, scan)
-        } catch (e: Exception) {
-            Log.w(TAG, "Error escaneando la pantalla de Play Store: ${e.message}")
-            return
+        // ── 5. Probar el próximo candidato a "Actualizar" ──
+        //     Se aprieta UNO y se espera: si a CANDIDATE_WAIT_MS no apareció sesión de
+        //     instalación ni cambió el versionCode, se prueba el siguiente. Esa
+        //     verificación es lo que hace que funcione en un idioma no previsto.
+        if (cooledDown && updateSessionCandidatesTried < MAX_CANDIDATES) {
+            val next = scan.actions.firstOrNull { candidateKey(it) !in updateSessionTriedKeys }
+            if (next != null) {
+                updateSessionTriedKeys.add(candidateKey(next))
+                updateSessionCandidatesTried++
+                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON)
+                if (performClickOnNode(next.node)) {
+                    updateSessionLastClickAt = now
+                    Log.i(TAG, "Candidato ${updateSessionCandidatesTried}/${MAX_CANDIDATES} apretado: ${next.reason}")
+                }
+                return
+            }
         }
 
-        // ── Play Store ya está trabajando: NO tocar nada ──
-        // Sin esto, el ciclo seguía "haciendo clic en Actualizar" sobre la fila
-        // de progreso, que es donde vive el botón de cancelar la descarga.
-        val busy = scan.progressText != null || (scan.sawProgressBar && updateSessionClickedAction)
-        if (busy) {
-            updateSessionSawProgress = true
-            UpdateFlowManager.setStage(
+        // ── 6. Ya estaba al día ──
+        //     Sin candidatos de actualización, con un "Abrir" a la vista, y sin que
+        //     haya arrancado ninguna sesión.
+        if (scan.actions.none { it.score >= 80 } && scan.opens.isNotEmpty() &&
+            updateSessionTreeSeenAt > 0L && now - updateSessionTreeSeenAt > UPDATE_UP_TO_DATE_GRACE_MS
+        ) {
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+            UpdateFlowManager.finish(
                 ctx,
-                if (scan.installing) UpdateFlowManager.STAGE_INSTALLING else UpdateFlowManager.STAGE_DOWNLOADING,
-                scan.progressText?.takeIf { it.length in 1..60 }
+                UpdateFlowManager.RESULT_UP_TO_DATE,
+                "${UpdateFlowManager.appLabel(ctx, updatingPkg)} ya estaba actualizada."
             )
             return
         }
 
-        // ── Freno por estancamiento ──
-        // Si pasaron minutos sin que se haya llegado a apretar nada ni haber
-        // visto progreso, Play Store está mostrando algo que no entendemos
-        // (pedido de iniciar sesión, error de red, pantalla en blanco). Antes
-        // esto dejaba la pantalla negra fija hasta el watchdog de 10 minutos.
-        val elapsed = now - updateSessionStartTime
-        if (!updateSessionClickedAction && !updateSessionSawProgress && elapsed > UPDATE_STALL_MS) {
-            Log.w(TAG, "Actualización estancada para $updatingPkg tras ${elapsed / 1000}s. Abortando.")
+        // ── 7. Freno por estancamiento ──
+        if (now - updateSessionStartTime > UPDATE_STALL_MS) {
+            Log.w(TAG, "Actualización estancada para $updatingPkg. Etiquetas vistas: ${scan.debugLabels}")
             UpdateFlowManager.finish(
                 ctx,
                 UpdateFlowManager.RESULT_ERROR,
-                "No se pudo iniciar la actualización de ${UpdateFlowManager.appLabel(ctx, updatingPkg)}. Probá de nuevo más tarde."
+                "No se pudo actualizar ${UpdateFlowManager.appLabel(ctx, updatingPkg)}. Probá de nuevo más tarde."
             )
             return
         }
 
-        val cooledDown = now - updateSessionLastClickAt > UPDATE_CLICK_COOLDOWN_MS
-        val actionNode = scan.action ?: scan.actionFallback
-        val dialogNode = scan.dialog
-
-        // El botón "Actualizar" tiene prioridad MIENTRAS no lo hayamos apretado.
-        // Los diálogos de confirmación ("¿Descargar con datos móviles?") son
-        // consecuencia de ese clic, así que recién tienen prioridad después.
-        // Al revés, un texto suelto que coincidiera con una etiqueta de diálogo
-        // se llevaba todos los ciclos y nunca se llegaba a apretar Actualizar.
-        val preferAction = actionNode != null && !updateSessionClickedAction
-
-        // A. Botón Actualizar / Instalar
-        if (preferAction || (actionNode != null && dialogNode == null)) {
-            if (cooledDown) {
-                if (performClickOnNode(actionNode)) {
-                    updateSessionLastClickAt = now
-                    updateSessionClickedAction = true
-                    Log.i(TAG, "Clic en Actualizar/Instalar para $updatingPkg")
-                    UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING)
-                } else {
-                    UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON)
-                }
-            }
-            return
-        }
-
-        // B. Diálogo de confirmación (datos móviles, tamaño de descarga, reintentar)
-        if (dialogNode != null) {
-            if (cooledDown) {
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_CONFIRMING)
-                if (performClickOnNode(dialogNode)) updateSessionLastClickAt = now
-            }
-            return
-        }
-
-        // C. Solo hay "Abrir": o terminó, o la app ya estaba al día.
-        if (scan.open != null) {
-            if (updateSessionClickedAction || updateSessionSawProgress) {
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
-                UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UPDATED, null)
-            } else if (elapsed > UPDATE_UP_TO_DATE_GRACE_MS) {
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
-                UpdateFlowManager.finish(
-                    ctx,
-                    UpdateFlowManager.RESULT_UP_TO_DATE,
-                    "${UpdateFlowManager.appLabel(ctx, updatingPkg)} ya estaba actualizada."
-                )
-            } else {
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE)
-            }
-            return
-        }
-
-        // D. Todavía no hay nada reconocible (la ficha está cargando).
         UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON)
+    }
+
+    private fun handlePlayStoreAutoUpdate(event: AccessibilityEvent, updatingPkg: String) {
+        scanAndAct(updatingPkg)
     }
 
     /**
@@ -1835,6 +1740,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
         mainHandler.removeCallbacks(whatsappScanRunnable)
         mainHandler.removeCallbacks(mercadoPagoScanRunnable)
+        mainHandler.removeCallbacks(updateTickRunnable)
         webViewRetryRunnables.forEach { mainHandler.removeCallbacks(it) }
         webViewRetryRunnables.clear()
         releaseUpdateWakeLock()

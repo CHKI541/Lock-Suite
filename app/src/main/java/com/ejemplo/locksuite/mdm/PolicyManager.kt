@@ -30,6 +30,16 @@ class PolicyManager(private val context: Context) {
     }
 
     private fun setRestriction(restriction: String, enable: Boolean): Boolean {
+        // Con LockSuite suspendido, activar una restricción guarda la INTENCIÓN
+        // pero no la aplica al sistema: el equipo tiene que seguir libre hasta
+        // que se reanude. reapplyAllRestrictions() la va a aplicar en ese momento
+        // leyendo esta misma preferencia. Desactivar sí se aplica siempre: quitar
+        // algo nunca puede romper la promesa de "sin restricciones".
+        if (enable && isLockSuiteSuspended()) {
+            saveState(restriction, true)
+            android.util.Log.i("PolicyManager", "LockSuite suspendido: $restriction queda guardada pero sin aplicar")
+            return true
+        }
         return try {
             if (enable) {
                 dpm.addUserRestriction(adminComponent, restriction)
@@ -49,11 +59,30 @@ class PolicyManager(private val context: Context) {
         prefs.edit().putBoolean(restriction, enabled).apply()
     }
 
+    /**
+     * Con la suspensión activa, activar una política guarda la INTENCIÓN en las
+     * preferencias pero no toca el sistema: el equipo tiene que seguir libre
+     * hasta que se reanude, y en ese momento reapplyAllRestrictions() la aplica
+     * leyendo esta misma preferencia.
+     *
+     * Desactivar nunca se difiere: quitar algo no puede romper la promesa de
+     * "sin restricciones".
+     *
+     * @return true si el cambio quedó diferido (el llamador debe cortar acá).
+     */
+    private fun deferIfSuspended(prefKey: String, enable: Boolean): Boolean {
+        if (!enable || !isLockSuiteSuspended()) return false
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean(prefKey, true).apply()
+        android.util.Log.i("PolicyManager", "LockSuite suspendido: '$prefKey' se guarda pero no se aplica")
+        return true
+    }
+
     // ─────────────────────────────────────────────
     // POLÍTICAS DE SISTEMA
     // ─────────────────────────────────────────────
 
     fun setFactoryResetBlocked(block: Boolean): Boolean {
+        if (deferIfSuspended(UserManager.DISALLOW_FACTORY_RESET, block)) return true
         val ok = setRestriction(UserManager.DISALLOW_FACTORY_RESET, block)
         // DISALLOW_FACTORY_RESET por si solo saca la opcion de Ajustes: no hay garantia
         // publica de que tambien bloquee el menu de recovery fuera de Samsung (ver informe
@@ -66,6 +95,7 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setFlashingBlocked(block: Boolean): Boolean {
+        if (deferIfSuspended("flashing_blocked", block)) return true
         return try {
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("flashing_blocked", block).apply()
             // Bloqueo de flasheo por Odin/Download mode: solo existe via Knox SDK en
@@ -103,6 +133,10 @@ class PolicyManager(private val context: Context) {
 
     fun refreshInstallRestriction(): Boolean {
         val prefs = PrefsHelper.getMdmPrefs(context)
+        if (prefs.getBoolean("locksuite_suspended", false)) {
+            android.util.Log.i("PolicyManager", "LockSuite suspendido: omitiendo refreshInstallRestriction")
+            return true
+        }
         if (prefs.getBoolean("mdm_install_in_progress", false)) {
             android.util.Log.i("PolicyManager", "Instalación MDM en progreso: omitiendo refreshInstallRestriction")
             return true
@@ -152,6 +186,10 @@ class PolicyManager(private val context: Context) {
     fun restoreInstallRestrictions() {
         val prefs = PrefsHelper.getMdmPrefs(context)
         prefs.edit().putBoolean("mdm_install_in_progress", false).apply()
+        if (prefs.getBoolean("locksuite_suspended", false)) {
+            android.util.Log.i("PolicyManager", "LockSuite suspendido: no se re-imponen los bloqueos de instalación")
+            return
+        }
         
         // Restaurar restricción de orígenes desconocidos si estaba activada previamente
         if (isRestrictionEnabled(UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)) {
@@ -243,6 +281,7 @@ class PolicyManager(private val context: Context) {
     // ─────────────────────────────────────────────
 
     fun setCameraDisabled(disabled: Boolean): Boolean {
+        if (deferIfSuspended("camera_disabled", disabled)) return true
         return try {
             dpm.setCameraDisabled(adminComponent, disabled)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("camera_disabled", disabled).apply()
@@ -258,6 +297,7 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setScreenCaptureBlocked(block: Boolean): Boolean {
+        if (deferIfSuspended("screen_capture_blocked", block)) return true
         return try {
             dpm.setScreenCaptureDisabled(adminComponent, block)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("screen_capture_blocked", block).apply()
@@ -273,6 +313,7 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setStatusBarDisabled(disabled: Boolean): Boolean {
+        if (deferIfSuspended("statusbar_disabled", disabled)) return true
         return try {
             dpm.setStatusBarDisabled(adminComponent, disabled)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("statusbar_disabled", disabled).apply()
@@ -294,6 +335,7 @@ class PolicyManager(private val context: Context) {
      *                         desde applyAllPolicies / Watchdog para no interrumpir al usuario.
      */
     fun setKosherLauncherEnabled(enabled: Boolean, openImmediately: Boolean = true): Boolean {
+        if (deferIfSuspended("kosher_launcher_enabled", enabled)) return true
         return try {
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("kosher_launcher_enabled", enabled).apply()
             
@@ -385,6 +427,7 @@ class PolicyManager(private val context: Context) {
 
 
     fun setKeyguardDisabled(disabled: Boolean): Boolean {
+        if (deferIfSuspended("keyguard_disabled", disabled)) return true
         return try {
             dpm.setKeyguardDisabled(adminComponent, disabled)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("keyguard_disabled", disabled).apply()
@@ -433,6 +476,7 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setVpnConfigBlocked(block: Boolean): Boolean {
+        if (deferIfSuspended(UserManager.DISALLOW_CONFIG_VPN, block)) return true
         return try {
             if (block) {
                 // Forzar a LockSuite como la VPN permanente (Always-on), con lockdown
@@ -590,6 +634,7 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setInternetBlocked(block: Boolean): Boolean {
+        if (deferIfSuspended("internet_blocked", block)) return true
         return try {
             if (block) {
                 // Configura un proxy local inexistente (127.0.0.1:9999) para forzar el fallo de toda conexión de red (WiFi y Datos)
@@ -904,6 +949,14 @@ class PolicyManager(private val context: Context) {
     }
 
     fun reapplyAllRestrictions() {
+        // Mientras LockSuite está suspendido nadie vuelve a aplicar nada: ni el
+        // arranque, ni el Watchdog de 15 min, ni un comando del panel. La única
+        // forma de volver a aplicar es quitar la suspensión, que llama a esta
+        // misma función después de bajar la marca.
+        if (isLockSuiteSuspended()) {
+            android.util.Log.i("PolicyManager", "LockSuite suspendido: omitiendo reapplyAllRestrictions")
+            return
+        }
         val restrictions = listOf(
             UserManager.DISALLOW_FACTORY_RESET,
             UserManager.DISALLOW_INSTALL_APPS,
@@ -987,12 +1040,20 @@ class PolicyManager(private val context: Context) {
         // Suspender Google Play Store si el bloqueo de instalación está activado o si fue suspendida individualmente
         val prefs = PrefsHelper.getMdmPrefs(context)
         val appController = AppController(context)
-        val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
-        try {
-            appController.suspendApp("com.android.vending", shouldSuspendPlayStore)
-            android.util.Log.i("PolicyManager", "reapplyAllRestrictions: Google Play Store estado de suspensión aplicado ($shouldSuspendPlayStore)")
-        } catch (e: Exception) {
-            e.printStackTrace()
+        // BUG CORREGIDO (16/8/2026): este bloque no miraba "mdm_install_in_progress".
+        // El Watchdog corre cada 15 minutos y el flujo de actualización dura hasta
+        // 10, así que se pisaban: el Watchdog volvía a suspender Play Store con la
+        // descarga a medias, Android mostraba "aplicación en pausa" debajo del
+        // overlay negro, la automatización ya no encontraba ningún botón y la
+        // pantalla quedaba trabada hasta el watchdog de 10 minutos.
+        if (!isInstallInProgress) {
+            val shouldSuspendPlayStore = prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
+            try {
+                appController.suspendApp("com.android.vending", shouldSuspendPlayStore)
+                android.util.Log.i("PolicyManager", "reapplyAllRestrictions: Google Play Store estado de suspensión aplicado ($shouldSuspendPlayStore)")
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         // Aplicar FRP si está activado
@@ -1021,10 +1082,14 @@ class PolicyManager(private val context: Context) {
             setSystemWebViewSuspended(true)
         }
 
-        // Re-aplicar suspensiones individuales de aplicaciones (solo si están suspendidas explícitamente)
+        // Re-aplicar suspensiones individuales de aplicaciones (solo si están suspendidas explícitamente).
+        // Igual que arriba: la app que se está actualizando queda exenta mientras
+        // dure el flujo, o el Watchdog la suspendería en plena instalación.
+        val updatingPkgNow = prefs.getString("updating_package", null)
         val userApps = appController.getUserApps(loadIcon = false)
         for (app in userApps) {
-            if (!app.isCritical && app.packageName != "com.android.vending") {
+            if (!app.isCritical && app.packageName != "com.android.vending" &&
+                app.packageName != updatingPkgNow) {
                 val isIndividuallySuspended = prefs.getBoolean("suspend_${app.packageName}", false)
                 if (isIndividuallySuspended) {
                     appController.suspendApp(app.packageName, true)
@@ -1034,6 +1099,204 @@ class PolicyManager(private val context: Context) {
 
         // Re-aplicar restricciones de instalación
         refreshInstallRestriction()
+    }
+
+    // ─────────────────────────────────────────────
+    // SUSPENSIÓN TEMPORAL DE LOCKSUITE
+    //
+    // "Suspender" deja el equipo exactamente como si LockSuite no estuviera
+    // instalado, y al desactivarla vuelve todo a como estaba.
+    //
+    // La clave del diseño es que la suspensión NO borra ni cambia ninguna de las
+    // preferencias que guardan la configuración deseada. Solo levanta el estado
+    // real en el sistema operativo. Como reapplyAllRestrictions() reconstruye
+    // todo leyendo esas mismas preferencias, quitar la suspensión es simplemente
+    // volver a llamarla: no hace falta guardar ninguna copia del estado previo,
+    // que es justo donde este tipo de función se suele romper (copia incompleta,
+    // copia pisada por otro cambio, copia perdida al reiniciar).
+    //
+    // Por eso acá se llama directo a `dpm.*` en vez de a los setters de esta
+    // misma clase: los setters escriben la preferencia, y eso destruiría la
+    // configuración que hay que restaurar después.
+    //
+    // Alcance (decidido con el dueño del proyecto el 16/8/2026): se levanta
+    // ABSOLUTAMENTE TODO, incluidas las protecciones anti-manipulación (bloqueo
+    // de restauración de fábrica, Knox/flasheo, FRP y el bloqueo de desinstalar
+    // LockSuite). Es una suspensión literal. Implica que, mientras dure, el
+    // usuario puede desinstalar LockSuite o formatear el equipo y no habría
+    // vuelta atrás: usarla solo con el equipo a la vista.
+    // ─────────────────────────────────────────────
+
+    fun isLockSuiteSuspended(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("locksuite_suspended", false)
+    }
+
+    fun getLockSuiteSuspendedAt(): Long {
+        return PrefsHelper.getMdmPrefs(context).getLong("locksuite_suspended_at", 0L)
+    }
+
+    fun setLockSuiteSuspended(suspend: Boolean): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (isLockSuiteSuspended() == suspend) return true
+
+        return try {
+            if (suspend) {
+                // Cortar cualquier actualización en curso ANTES de soltar las
+                // políticas: si no, quedaría una pantalla negra encima de un
+                // equipo que ya no tiene ninguna restricción.
+                try {
+                    if (com.ejemplo.locksuite.util.UpdateFlowManager.isRunning(context)) {
+                        com.ejemplo.locksuite.util.UpdateFlowManager.forceCleanup(
+                            context,
+                            com.ejemplo.locksuite.util.UpdateFlowManager.RESULT_CANCELLED
+                        )
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+
+                // La marca va primero: los watchdogs (Foreground cada 20 s,
+                // Worker cada 15 min, BootReceiver) la leen para no volver a
+                // aplicar nada mientras dure la suspensión. Si se levantaran las
+                // políticas antes de marcar, el watchdog podía re-imponerlas en
+                // el medio y dejar el equipo a mitad de camino.
+                prefs.edit()
+                    .putBoolean("locksuite_suspended", true)
+                    .putLong("locksuite_suspended_at", System.currentTimeMillis())
+                    .apply()
+                liftAllForSuspension()
+            } else {
+                prefs.edit()
+                    .putBoolean("locksuite_suspended", false)
+                    .remove("locksuite_suspended_at")
+                    .apply()
+                // reapplyAllRestrictions() reconstruye TODO desde las preferencias
+                // (restricciones, hardware, launcher, VPN, FRP, Knox, suspensiones
+                // individuales de apps y bloqueo de instalación).
+                reapplyAllRestrictions()
+                try {
+                    com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            try {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * Levanta el estado real en el sistema sin tocar ninguna preferencia.
+     * Cada paso va en su propio try/catch: que un fabricante rechace una
+     * llamada puntual no puede dejar el equipo a medio liberar.
+     */
+    private fun liftAllForSuspension() {
+        val allRestrictions = listOf(
+            UserManager.DISALLOW_FACTORY_RESET,
+            UserManager.DISALLOW_INSTALL_APPS,
+            UserManager.DISALLOW_UNINSTALL_APPS,
+            UserManager.DISALLOW_DEBUGGING_FEATURES,
+            UserManager.DISALLOW_USER_SWITCH,
+            UserManager.DISALLOW_MODIFY_ACCOUNTS,
+            UserManager.DISALLOW_SAFE_BOOT,
+            UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
+            UserManager.DISALLOW_CONFIG_WIFI,
+            UserManager.DISALLOW_NETWORK_RESET,
+            "no_config_mobile_networks",
+            UserManager.DISALLOW_ADJUST_VOLUME,
+            UserManager.DISALLOW_APPS_CONTROL,
+            UserManager.DISALLOW_BLUETOOTH,
+            UserManager.DISALLOW_BLUETOOTH_SHARING,
+            UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
+            UserManager.DISALLOW_CONFIG_TETHERING,
+            UserManager.DISALLOW_CONFIG_VPN,
+            UserManager.DISALLOW_CONFIG_DATE_TIME
+        )
+        allRestrictions.forEach { restriction ->
+            try {
+                dpm.clearUserRestriction(adminComponent, restriction)
+            } catch (e: Exception) {
+                android.util.Log.w("PolicyManager", "No se pudo levantar $restriction: ${e.message}")
+            }
+        }
+
+        // Hardware y pantalla
+        safely { dpm.setCameraDisabled(adminComponent, false) }
+        safely { dpm.setScreenCaptureDisabled(adminComponent, false) }
+        safely { dpm.setStatusBarDisabled(adminComponent, false) }
+        safely { dpm.setKeyguardDisabled(adminComponent, false) }
+
+        // Proxy global de "bloquear todo el internet"
+        safely { dpm.setRecommendedGlobalProxy(adminComponent, null) }
+
+        // Always-on VPN designada por el MDM
+        safely {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                dpm.setAlwaysOnVpnPackage(adminComponent, null, false)
+            }
+        }
+
+        // Launcher Kosher: devolver el launcher nativo y parar la marca de agua
+        safely { dpm.clearPackagePersistentPreferredActivities(adminComponent, context.packageName) }
+        safely {
+            context.stopService(Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java))
+        }
+
+        // Protecciones anti-manipulación (decisión del 16/8/2026: se levantan)
+        safely { dpm.setUninstallBlocked(adminComponent, context.packageName, false) }
+        safely { clearFrpPolicy() }
+        safely { KnoxHardening.setFactoryResetBlocked(context, false) }
+        safely { KnoxHardening.setFlashingBlocked(context, false) }
+
+        // Cortar el filtro de red
+        safely {
+            context.stopService(Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java))
+        }
+
+        // Desbloquear TODAS las apps: des-suspender en un solo llamado (mucho más
+        // rápido que uno por paquete) y des-ocultar solo las que están ocultas.
+        try {
+            val pm = context.packageManager
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                PackageManager.MATCH_UNINSTALLED_PACKAGES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_UNINSTALLED_PACKAGES
+            }
+            val packages = pm.getInstalledApplications(flags).map { it.packageName }
+
+            packages.chunked(50).forEach { chunk ->
+                safely { dpm.setPackagesSuspended(adminComponent, chunk.toTypedArray(), false) }
+            }
+            packages.forEach { pkg ->
+                try {
+                    if (dpm.isApplicationHidden(adminComponent, pkg)) {
+                        dpm.setApplicationHidden(adminComponent, pkg, false)
+                    }
+                } catch (e: Exception) {
+                    // Paquetes del sistema que no admiten el cambio: se ignoran.
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PolicyManager", "Error desbloqueando apps para la suspensión", e)
+        }
+
+        android.util.Log.w("PolicyManager", "LockSuite SUSPENDIDO: todas las restricciones levantadas")
+    }
+
+    private inline fun safely(block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Paso de suspensión omitido: ${e.message}")
+        }
     }
 
     fun clearAllRestrictions() {
@@ -1116,7 +1379,8 @@ class PolicyManager(private val context: Context) {
             e.printStackTrace()
         }
 
-        // Clear local preferences
+        // Clear local preferences (incluida la marca de suspensión: tras la purga
+        // no queda ninguna política que suspender)
         PrefsHelper.getMdmPrefs(context).edit().clear().apply()
     }
 
@@ -1172,6 +1436,7 @@ class PolicyManager(private val context: Context) {
     }
 
     fun setBrowsersSuspended(suspend: Boolean): Boolean {
+        if (deferIfSuspended("browsers_suspended", suspend)) return true
         return try {
             suspendAllKnownBrowsers(suspend)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("browsers_suspended", suspend).apply()
@@ -1198,6 +1463,7 @@ class PolicyManager(private val context: Context) {
             }
         }
         if (installed.isEmpty()) return false
+        if (deferIfSuspended("system_webview_suspended", suspend)) return true
         return try {
             dpm.setPackagesSuspended(adminComponent, installed.toTypedArray(), suspend)
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("system_webview_suspended", suspend).apply()

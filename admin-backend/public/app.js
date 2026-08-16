@@ -274,6 +274,47 @@ function updateSidebarUI(e, t) {
         const n = e.getAttribute("data-policy");
         e.checked = field(t, n, false) === true;
     });
+
+    // ── Suspensión de LockSuite: resaltar la tarjeta cuando está activa ──
+    const isSuspended = field(t, "locksuiteSuspended", false) === true;
+    const suspendCard = document.getElementById("suspend-card");
+    const suspendTitle = document.getElementById("suspend-card-title");
+    const suspendHint = document.getElementById("suspend-card-hint");
+    if (suspendCard) {
+        suspendCard.style.background = isSuspended ? "#7f3b12" : "";
+        suspendCard.style.border = isSuspended ? "1px solid #e67e22" : "";
+    }
+    if (suspendTitle) {
+        suspendTitle.textContent = isSuspended ? "⚠️ LockSuite SUSPENDIDO" : "⏸️ Suspender LockSuite";
+    }
+    if (suspendHint) {
+        if (isSuspended) {
+            const since = field(t, "locksuiteSuspendedAt", 0);
+            const sinceTxt = since ? " (desde " + new Date(since).toLocaleString() + ")" : "";
+            suspendHint.textContent = "Este celular no tiene ninguna restricción activa" + sinceTxt + ". Desactivá la suspensión para que todo vuelva a como estaba.";
+        } else {
+            suspendHint.textContent = "Levanta temporalmente TODAS las restricciones y desbloquea todas las aplicaciones, como si LockSuite no estuviera instalado. Al desactivarla, todo vuelve exactamente a como estaba.";
+        }
+    }
+
+    // ── Estado en vivo de la actualización por Google Play ──
+    const flow = field(t, "updateFlow", null) || {};
+    const flowCard = document.getElementById("update-flow-card");
+    if (flowCard) {
+        if (flow.running === true) {
+            flowCard.classList.remove("hidden");
+            const appEl = document.getElementById("update-flow-app");
+            const statusEl = document.getElementById("update-flow-status");
+            const apps = appsOf(t);
+            const entry = apps[(flow.packageName || "").replace(/\./g, "_")];
+            if (appEl) appEl.textContent = (entry && entry.label ? entry.label : (flow.packageName || "")) + ((flow.source === "local") ? "  ·  iniciada desde el celular" : "  ·  iniciada desde el panel");
+            if (statusEl) statusEl.textContent = flow.statusText || flow.stage || "";
+            const cancelBtn = document.getElementById("update-flow-cancel-btn");
+            if (cancelBtn) cancelBtn.disabled = false;
+        } else {
+            flowCard.classList.add("hidden");
+        }
+    }
     const apps = appsOf(t);
     const i = apps.com_android_vending || null,
         d = field(t, "installAppsBlocked", false) === true;
@@ -873,8 +914,22 @@ saveNameBtn.addEventListener("click", async () => {
     if (!e.target.classList.contains("policy-switch")) return;
     const t = e.target,
         n = t.getAttribute("data-policy"),
-        a = t.checked,
-        i = {
+        a = t.checked;
+    // Suspensión de LockSuite: no es un bloqueo más, apaga todos los demás.
+    // Va aparte del mapa genérico porque necesita confirmación explícita y un
+    // texto que diga con todas las letras qué implica.
+    if (n === "locksuiteSuspended") {
+        if (a && !confirm("¿Suspender LockSuite en este celular?\n\nSe van a levantar TODAS las restricciones y a desbloquear todas las aplicaciones, incluidas las protecciones que impiden desinstalar LockSuite y restaurar de fábrica. Mientras dure la suspensión el equipo queda sin ninguna protección.\n\nAl desactivarla, todo vuelve exactamente a como estaba.")) {
+            t.checked = false;
+            return;
+        }
+        t.disabled = true;
+        runCommandOnDevice(selectedDeviceId, a ? "SUSPEND_LOCKSUITE" : "RESUME_LOCKSUITE", null, t, () => {
+            t.checked = !a;
+        });
+        return;
+    }
+    const i = {
             factoryResetBlocked: ["BLOCK_FACTORY_RESET", "UNBLOCK_FACTORY_RESET"],
             flashingBlocked: ["BLOCK_FLASHING", "UNBLOCK_FLASHING"],
             installAppsBlocked: ["BLOCK_INSTALL_APPS", "UNBLOCK_INSTALL_APPS"],
@@ -945,7 +1000,16 @@ sidebarAllowlistBtn.addEventListener("click", () => {
         }
     }
     sidebarAllowlistBtn.disabled = !0, runCommandOnDevice(selectedDeviceId, "UPDATE_ALLOWLIST", e, sidebarAllowlistBtn);
-}), sidebarLockBtn.addEventListener("click", () => {
+});
+const updateFlowCancelBtn = document.getElementById("update-flow-cancel-btn");
+if (updateFlowCancelBtn) {
+    updateFlowCancelBtn.addEventListener("click", () => {
+        if (!selectedDeviceId) return;
+        updateFlowCancelBtn.disabled = true;
+        runCommandOnDevice(selectedDeviceId, "CANCEL_UPDATE_APP", null, updateFlowCancelBtn);
+    });
+}
+sidebarLockBtn.addEventListener("click", () => {
     sidebarLockBtn.disabled = !0, runCommandOnDevice(selectedDeviceId, "LOCK_DEVICE", null, sidebarLockBtn)
 }), sidebarUnsuspendAllBtn.addEventListener("click", () => {
     if (confirm("¿Seguro que querés desbloquear todas las aplicaciones de este celular?")) {

@@ -55,6 +55,12 @@ class AppController(private val context: Context) {
     }
 
     fun hideApp(packageName: String, hide: Boolean): Boolean {
+        // Ver la nota de PolicyManager.setRestriction: mientras LockSuite está
+        // suspendido se registra la intención sin tocar el sistema.
+        if (hide && PrefsHelper.getMdmPrefs(context).getBoolean("locksuite_suspended", false)) {
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", true).apply()
+            return true
+        }
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
             // Si la app es crítica o especial y se solicita des-ocultarla (hide = false), el estado deseado
             // ya se cumple (no está oculta por protección del sistema) -> retornar true (éxito).
@@ -96,6 +102,10 @@ class AppController(private val context: Context) {
     }
 
     fun suspendApp(packageName: String, suspend: Boolean): Boolean {
+        if (suspend && PrefsHelper.getMdmPrefs(context).getBoolean("locksuite_suspended", false)) {
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", true).apply()
+            return true
+        }
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
             // Si la app es crítica y se solicita des-suspenderla (suspend = false), el estado deseado
             // ya se cumple (no está suspended) -> retornar true (éxito).

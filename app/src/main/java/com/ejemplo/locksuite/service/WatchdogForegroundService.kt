@@ -40,7 +40,8 @@ class WatchdogForegroundService : Service() {
             // Garantizar que la marca de agua flotante siga ejecutándose si el launcher está activo
             try {
                 val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
-                if (policyManager.isKosherLauncherEnabled() && Settings.canDrawOverlays(applicationContext)) {
+                if (!policyManager.isLockSuiteSuspended() &&
+                    policyManager.isKosherLauncherEnabled() && Settings.canDrawOverlays(applicationContext)) {
                     val watermarkIntent = Intent(applicationContext, WatermarkService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         applicationContext.startForegroundService(watermarkIntent)
@@ -111,6 +112,10 @@ class WatchdogForegroundService : Service() {
         val context = applicationContext
         val now = android.os.SystemClock.elapsedRealtime()
         if (now < temporaryPauseUntil) return
+        // Con LockSuite suspendido no se exige Accesibilidad ni se suspenden
+        // navegadores: si no, la pantalla de bloqueo de accesibilidad aparecería
+        // justo cuando el administrador acaba de liberar el equipo.
+        if (com.ejemplo.locksuite.mdm.PolicyManager(context).isLockSuiteSuspended()) return
         if (!com.ejemplo.locksuite.security.PinManager.isPinConfigured(context)) return
         if (com.ejemplo.locksuite.security.SessionManager.isActive()) return
 

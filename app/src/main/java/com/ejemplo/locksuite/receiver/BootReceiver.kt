@@ -83,6 +83,11 @@ class BootReceiver : BroadcastReceiver() {
                     null
                 }
 
+                // Con LockSuite suspendido no corre ningún filtro de red: la VPN
+                // de DNS es una restricción más y tiene que quedar apagada, si no
+                // el Watchdog la volvería a levantar cada 20 segundos.
+                if (prefs?.getBoolean("locksuite_suspended", false) == true) return false
+
                 val isVpnConfigBlocked = prefs?.getBoolean(android.os.UserManager.DISALLOW_CONFIG_VPN, false) ?: false
                 val hasAdBlocking = prefs?.getBoolean("global_ad_blocking", false) ?: false
                 val hasGifsBlocked = prefs?.getBoolean("block_gifs", false) ?: false

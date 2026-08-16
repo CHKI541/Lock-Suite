@@ -445,6 +445,10 @@ fun PoliciesTabContent(context: Context) {
     val prefs = remember { com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context) }
     var deviceNameInput by remember { mutableStateOf(prefs.getString("device_name", "") ?: "") }
 
+    val isSuspendedNow = remember(refreshKey) { policyManager.isLockSuiteSuspended() }
+    val suspendedSince = remember(refreshKey) { policyManager.getLockSuiteSuspendedAt() }
+    var pendingSuspendConfirm by remember { mutableStateOf(false) }
+
     val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     val isDeviceOwner = dpm.isDeviceOwnerApp(context.packageName)
 
@@ -475,6 +479,67 @@ fun PoliciesTabContent(context: Context) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // ──────────────────────────────────────────────
+        // Suspensión temporal de LockSuite
+        //
+        // Va primero y con colores propios a propósito: es el único interruptor
+        // de esta pantalla que apaga TODO lo demás, y un equipo que quedó
+        // suspendido por olvido es un equipo sin ninguna protección.
+        // ──────────────────────────────────────────────
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSuspendedNow) Color(0xFF7F3B12) else Color(0xFF1E3E62)
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        if (isSuspendedNow) "⚠ LockSuite SUSPENDIDO" else "Suspender LockSuite",
+                        color = if (isSuspendedNow) Color.White else Color(0xFFF1C40F),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                    Text(
+                        if (isSuspendedNow)
+                            "Todas las restricciones están levantadas y todas las aplicaciones desbloqueadas. El equipo está funcionando como si LockSuite no estuviera instalado — incluido poder desinstalarlo o restaurarlo de fábrica. Desactivá la suspensión para que todo vuelva exactamente a como estaba."
+                        else
+                            "Levanta temporalmente TODAS las restricciones y desbloquea todas las aplicaciones, como si LockSuite no estuviera instalado. Al desactivarla, todo vuelve exactamente a como estaba: no hace falta reconfigurar nada.",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 12.sp
+                    )
+                    if (isSuspendedNow && suspendedSince > 0L) {
+                        Text(
+                            "Suspendido desde: " + java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
+                                .format(java.util.Date(suspendedSince)),
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 11.sp
+                        )
+                    }
+                    PolicySwitchRow(
+                        label = "Suspensión activa",
+                        isChecked = isSuspendedNow,
+                        onCheckedChange = { wantSuspend ->
+                            if (wantSuspend) {
+                                // Confirmación obligatoria: es destructivo en el
+                                // sentido de que deja el equipo completamente abierto.
+                                pendingSuspendConfirm = true
+                                false // el switch se mueve recién si el admin confirma
+                            } else {
+                                val ok = policyManager.setLockSuiteSuspended(false)
+                                if (ok) {
+                                    Toast.makeText(context, "Suspensión desactivada. Restricciones restauradas.", Toast.LENGTH_LONG).show()
+                                }
+                                refreshKey++
+                                ok
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
@@ -806,6 +871,41 @@ fun PoliciesTabContent(context: Context) {
                 )
             }
         }
+    }
+
+    if (pendingSuspendConfirm) {
+        AlertDialog(
+            onDismissRequest = { pendingSuspendConfirm = false },
+            containerColor = Color(0xFF0B192C),
+            title = { Text("¿Suspender LockSuite?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Se van a levantar TODAS las restricciones y a desbloquear todas las aplicaciones de este equipo, incluidas las protecciones que impiden desinstalar LockSuite y restaurar de fábrica.\n\n" +
+                        "Mientras dure la suspensión el equipo queda sin ninguna protección. Al desactivarla, todo vuelve exactamente a como estaba.",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingSuspendConfirm = false
+                    val ok = policyManager.setLockSuiteSuspended(true)
+                    Toast.makeText(
+                        context,
+                        if (ok) "LockSuite suspendido. El equipo quedó sin restricciones." else "No se pudo suspender LockSuite.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    refreshKey++
+                }) {
+                    Text("Sí, suspender", color = Color(0xFFE67E22), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSuspendConfirm = false }) {
+                    Text("Cancelar", color = Color.White.copy(alpha = 0.7f))
+                }
+            }
+        )
     }
 }
 

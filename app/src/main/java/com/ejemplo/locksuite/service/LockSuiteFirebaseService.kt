@@ -73,6 +73,25 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
 
         var commandErrorReason: String? = null
         var success = true
+
+        // ── LockSuite suspendido: no se aplican políticas ──
+        // Mientras dura la suspensión el equipo tiene que estar realmente libre.
+        // Si se dejaran pasar los comandos de política, un switch tocado en el
+        // panel volvería a bloquear algo en el acto y la suspensión dejaría de
+        // significar lo que dice. Se rechaza con un mensaje claro en vez de
+        // ejecutar a medias. Las únicas excepciones son las que hacen falta
+        // justamente para salir de este estado o para no perder el control
+        // remoto del equipo.
+        val allowedWhileSuspended = setOf(
+            "RESUME_LOCKSUITE", "SUSPEND_LOCKSUITE", "UPDATE_LOCKSUITE",
+            "VERIFY_PIN", "CHANGE_PIN", "CANCEL_UPDATE_APP"
+        )
+        if (command !in allowedWhileSuspended && policyManager.isLockSuiteSuspended()) {
+            commandErrorReason = "LockSuite está suspendido en este equipo. Desactivá la suspensión antes de cambiar políticas."
+            sendCommandAck(commandId, command, false, commandErrorReason)
+            return
+        }
+
         try {
             success = when (command) {
                 "LOCK_DEVICE" -> {
@@ -288,117 +307,49 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     true
                 }
                 "UPDATE_APP" -> {
+                    // Todo el flujo (destapar Play Store, levantar restricciones,
+                    // armar el watchdog, tapar la pantalla, automatizar el clic y
+                    // volver a bloquear) vive en UpdateFlowManager. Acá solo se
+                    // traduce el resultado a un ACK para el panel.
                     val packageName = packagesList.firstOrNull()
-                    if (packageName != null) {
-                        try {
-                            val localDpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-                            val localAdminComponent = android.content.ComponentName(this, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
-                            
-                            // 1. Des-ocultar y des-suspender Play Store (silenciosamente si falla por no estar instalado)
-                            try {
-                                localDpm.setApplicationHidden(localAdminComponent, "com.android.vending", false)
-                                localDpm.setPackagesSuspended(localAdminComponent, arrayOf("com.android.vending"), false)
-                            } catch (e: Exception) {
-                                android.util.Log.w("LockSuiteFCM", "No se pudo des-ocultar/des-suspender Play Store: ${e.message}")
-                            }
-                            
-                            // 2. Levantar restricciones de instalación temporalmente y marcar en progreso
-                            val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
-                            prefs.edit()
-                                .putString("updating_package", packageName)
-                                .putBoolean("mdm_install_in_progress", true)
-                                .apply()
-                            
-                            try {
-                                localDpm.clearUserRestriction(localAdminComponent, android.os.UserManager.DISALLOW_INSTALL_APPS)
-                                localDpm.clearUserRestriction(localAdminComponent, android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
-                            } catch (e: Exception) {
-                                android.util.Log.w("LockSuiteFCM", "No se pudieron remover restricciones de instalación: ${e.message}")
-                            }
-                            
-                            // 3. Programar el temporizador de seguridad (watchdog) de 10 minutos ANTES de
-                            // intentar abrir Play Store. Es a propósito: mientras "mdm_install_in_progress"
-                            // esté en true, PolicyManager.refreshInstallRestriction() se salta a sí misma
-                            // para no pisar una instalación en curso, así que ni el reinicio ni el watchdog
-                            // de 15 min (reapplyAllRestrictions) van a re-imponer las restricciones que
-                            // acabamos de levantar. Esta alarma es la única red de seguridad real: si el
-                            // paso 4 falla, o si el proceso muere justo después de levantar las
-                            // restricciones y antes de terminar de abrir Play Store, el equipo quedaría con
-                            // las instalaciones desbloqueadas indefinidamente sin esto. Por eso se arma
-                            // antes de cualquier cosa que pueda fallar, no después.
-                            val watchdogPendingIntent = try {
-                                val watchdogIntent = android.content.Intent(this, com.ejemplo.locksuite.receiver.PackageReceiver::class.java).apply {
-                                    action = "UPDATE_TIMEOUT"
-                                }
-                                val pendingIntent = android.app.PendingIntent.getBroadcast(
-                                    this,
-                                    9911,
-                                    watchdogIntent,
-                                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-                                )
-                                val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-                                val triggerTime = android.os.SystemClock.elapsedRealtime() + 10 * 60 * 1000L
-                                alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent)
-                                pendingIntent
-                            } catch (e: Exception) {
-                                android.util.Log.w("LockSuiteFCM", "No se pudo programar el temporizador watchdog: ${e.message}")
-                                null
-                            }
-                            
-                            // 4. Despertar pantalla si estuviera apagada para permitir la interacción del servicio
-                            try {
-                                val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-                                val wl = pm.newWakeLock(
-                                    android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or android.os.PowerManager.ON_AFTER_RELEASE,
-                                    "LockSuite:FirebaseUpdateWake"
-                                )
-                                wl.acquire(15_000L)
-                            } catch (e: Exception) {
-                                android.util.Log.w("LockSuiteFCM", "No se pudo despertar pantalla: ${e.message}")
-                            }
-
-                            // 5. Abrir Play Store con la app correspondiente, fallback al navegador si falla.
-                            // Si ninguno de los dos abre (por ejemplo, un equipo sin navegador disponible
-                            // porque "Bloquear navegadores" está activo), no tiene sentido esperar los 10
-                            // minutos del watchdog para recién ahí recuperar el bloqueo: se revierte todo
-                            // en el acto (restricciones, prefs y la alarma ya armada) antes de reportar el
-                            // error al panel.
-                            try {
-                                val playStoreIntent = android.content.Intent(
-                                    android.content.Intent.ACTION_VIEW,
-                                    android.net.Uri.parse("market://details?id=$packageName")
-                                ).apply {
-                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                                }
-                                startActivity(playStoreIntent)
-                            } catch (e: android.content.ActivityNotFoundException) {
-                                try {
-                                    val webIntent = android.content.Intent(
-                                        android.content.Intent.ACTION_VIEW,
-                                        android.net.Uri.parse("https://play.google.com/store/apps/details?id=$packageName")
-                                    ).apply {
-                                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                                    }
-                                    startActivity(webIntent)
-                                } catch (ex: Exception) {
-                                    rollbackFailedUpdateApp(watchdogPendingIntent)
-                                    throw Exception("No se encontró Play Store ni navegador para actualizar: ${ex.message}")
-                                }
-                            } catch (e: Exception) {
-                                rollbackFailedUpdateApp(watchdogPendingIntent)
-                                throw Exception("Error al abrir Play Store: ${e.message}")
-                            }
-                            
-                            true
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                            commandErrorReason = e.message ?: e.toString()
-                            false
-                        }
-                    } else {
+                    if (packageName.isNullOrBlank()) {
                         commandErrorReason = "No package specified"
                         false
+                    } else {
+                        val error = com.ejemplo.locksuite.util.UpdateFlowManager.start(
+                            context = this,
+                            packageName = packageName,
+                            source = com.ejemplo.locksuite.util.UpdateFlowManager.SOURCE_PANEL,
+                            cancelable = true
+                        )
+                        if (error != null) {
+                            commandErrorReason = error
+                            false
+                        } else {
+                            true
+                        }
                     }
+                }
+                "CANCEL_UPDATE_APP" -> {
+                    if (com.ejemplo.locksuite.util.UpdateFlowManager.isRunning(this)) {
+                        com.ejemplo.locksuite.util.UpdateFlowManager.requestCancel(this)
+                        true
+                    } else {
+                        // Igual se fuerza la limpieza: si el panel manda cancelar es
+                        // porque ve algo trabado, y el caso clásico era preferencias
+                        // limpias con el overlay negro todavía en pantalla.
+                        com.ejemplo.locksuite.util.UpdateFlowManager.forceCleanup(
+                            this,
+                            com.ejemplo.locksuite.util.UpdateFlowManager.RESULT_CANCELLED
+                        )
+                        true
+                    }
+                }
+                "SUSPEND_LOCKSUITE" -> {
+                    policyManager.setLockSuiteSuspended(true)
+                }
+                "RESUME_LOCKSUITE" -> {
+                    policyManager.setLockSuiteSuspended(false)
                 }
                 "UPDATE_LOCKSUITE" -> {
                     val idToAck = commandId
@@ -511,27 +462,25 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         }
     }
 
-    // Revierte por completo un UPDATE_APP que no llegó a abrir ni Play Store ni el
-    // navegador: cancela el watchdog ya armado (no hace falta esperar 10 minutos si ya
-    // sabemos que falló), restaura las restricciones de instalación y el estado de Play
-    // Store vía PolicyManager, y limpia "updating_package". No hace falta tocar
-    // "mdm_install_in_progress" acá porque restoreInstallRestrictions() ya lo pone en
-    // false como primer paso.
-    private fun rollbackFailedUpdateApp(watchdogPendingIntent: android.app.PendingIntent?) {
+    /**
+     * Escribe el ACK de un comando en Firebase. Extraído para poder responderle
+     * al panel también cuando el comando se rechaza antes de entrar al `when`
+     * (por ejemplo con LockSuite suspendido): sin esto, el panel se quedaba
+     * esperando una confirmación que nunca llegaba.
+     */
+    private fun sendCommandAck(commandId: String?, command: String, success: Boolean, reason: String?) {
+        if (commandId.isNullOrBlank()) return
         try {
-            if (watchdogPendingIntent != null) {
-                (getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).cancel(watchdogPendingIntent)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        try {
-            PolicyManager(this).restoreInstallRestrictions()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        try {
-            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).edit().remove("updating_package").apply()
+            val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(this)
+            val baseRef = FirebaseDatabase.getInstance().reference
+            val ackData = mutableMapOf<String, Any>(
+                "status" to if (success) "applied" else "failed",
+                "command" to command,
+                "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
+            )
+            if (!reason.isNullOrBlank()) ackData["reason"] = reason
+            baseRef.child("devices/$deviceId/commandAcks/$commandId").setValue(ackData)
+            baseRef.child("devices/$deviceId/info/commandAcks/$commandId").setValue(ackData).addOnFailureListener {}
         } catch (e: Exception) {
             e.printStackTrace()
         }

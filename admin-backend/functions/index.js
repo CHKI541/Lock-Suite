@@ -50,6 +50,13 @@ const ALLOWED_COMMANDS = new Set([
   "BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS",
   "BLOCK_FLASHING", "UNBLOCK_FLASHING",
   "ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER",
+  // Cancelar una actualizacion de app en curso (contraparte de UPDATE_APP).
+  "CANCEL_UPDATE_APP",
+  // Suspension temporal de LockSuite: levanta TODAS las restricciones del
+  // equipo y desbloquea todas las apps; al reanudar, PolicyManager reconstruye
+  // el estado desde las preferencias guardadas. Exige PIN del dispositivo (no
+  // esta en la excepcion de UPDATE_*), porque deja el equipo sin proteccion.
+  "SUSPEND_LOCKSUITE", "RESUME_LOCKSUITE",
 ]);
 
 function canonicalCommandPayload(payload) {
@@ -191,7 +198,12 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     // o LockSuite mismo) sin el mismo nivel de riesgo que bloquear el equipo,
     // cambiar el PIN o aplicar restricciones - pedir el PIN ahi era friccion
     // pura para un caso de uso muy frecuente.
-    if (command !== "UPDATE_LOCKSUITE" && command !== "UPDATE_APP") {
+    // CANCEL_UPDATE_APP entra en la misma excepcion que UPDATE_APP: es su
+    // contraparte, y si para cancelar hiciera falta el PIN, un equipo con una
+    // pantalla de actualizacion trabada no se podria destrabar desde el panel
+    // — justo el caso en que mas urge poder hacerlo.
+    if (command !== "UPDATE_LOCKSUITE" && command !== "UPDATE_APP" &&
+        command !== "CANCEL_UPDATE_APP") {
       await verifyDevicePin(deviceId, deviceRef, deviceData, adminUid, devicePin, rememberDevice);
     }
 

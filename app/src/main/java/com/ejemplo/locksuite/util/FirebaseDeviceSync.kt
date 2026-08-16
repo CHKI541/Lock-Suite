@@ -90,6 +90,45 @@ object FirebaseDeviceSync {
     }
 
     /**
+     * Publica el estado del flujo de actualización por Play Store para que el
+     * panel pueda mostrarlo en vivo (y ofrecer el botón de cancelar) sin tener
+     * que sincronizar el dispositivo entero en cada cambio de etapa.
+     */
+    fun syncUpdateFlow(context: Context) {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val running = prefs.getBoolean(UpdateFlowManager.KEY_IN_PROGRESS, false) &&
+            !prefs.getString(UpdateFlowManager.KEY_PKG, null).isNullOrBlank()
+        val stage = prefs.getString(UpdateFlowManager.KEY_STAGE, UpdateFlowManager.STAGE_IDLE)
+            ?: UpdateFlowManager.STAGE_IDLE
+        val detail = prefs.getString(UpdateFlowManager.KEY_DETAIL, null)
+        val pkg = prefs.getString(UpdateFlowManager.KEY_PKG, "") ?: ""
+
+        withAuth {
+            val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+            val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
+            val flow = mapOf(
+                "running" to running,
+                "packageName" to pkg,
+                "stage" to stage,
+                "statusText" to UpdateFlowManager.stageLabel(stage, detail),
+                "source" to (prefs.getString(UpdateFlowManager.KEY_SOURCE, "") ?: ""),
+                "cancelable" to prefs.getBoolean(UpdateFlowManager.KEY_CANCELABLE, true),
+                "startedAt" to prefs.getLong(UpdateFlowManager.KEY_STARTED_AT, 0L),
+                "lastResult" to (prefs.getString(UpdateFlowManager.KEY_LAST_RESULT, "") ?: ""),
+                "lastResultPackage" to (prefs.getString(UpdateFlowManager.KEY_LAST_RESULT_PKG, "") ?: ""),
+                "lastResultAt" to prefs.getLong(UpdateFlowManager.KEY_LAST_RESULT_AT, 0L)
+            )
+            val payload = mutableMapOf<String, Any>(
+                "updateFlow" to flow,
+                "info/updateFlow" to flow,
+                "lastSeen" to ServerValue.TIMESTAMP
+            )
+            if (authUid.isNotEmpty()) payload["ownerUid"] = authUid
+            ref.updateChildren(payload).addOnFailureListener { it.printStackTrace() }
+        }
+    }
+
+    /**
      * Sincroniza el código de recuperación de emergencia EN TEXTO PLANO a
      * deviceSecrets/{id}/recoveryCode. Solo lectura para admins autorizados
      * (ver database.rules.json) — el dispositivo verifica localmente contra
@@ -257,8 +296,13 @@ object FirebaseDeviceSync {
                     "mercadoPagoBlockOffersAccessibility" to policyManager.isMercadoPagoBlockOffersAccessibilityEnabled(),
                     "mercadoPagoBlockOffersVpn" to policyManager.isMercadoPagoBlockOffersVpnEnabled(),
                     "kosherLauncherEnabled" to policyManager.isKosherLauncherEnabled(),
-                    "stealthModeEnabled" to isStealth
+                    "stealthModeEnabled" to isStealth,
 
+                    // Suspensión temporal de LockSuite: el panel muestra un
+                    // interruptor con este valor y un cartel bien visible cuando
+                    // está en true, para que no se olvide un equipo suspendido.
+                    "locksuiteSuspended" to policyManager.isLockSuiteSuspended(),
+                    "locksuiteSuspendedAt" to policyManager.getLockSuiteSuspendedAt()
                 )
             )
             syncAppsListInternal(context)

@@ -7,6 +7,7 @@ import android.util.Log
 import com.ejemplo.locksuite.mdm.AppController
 import com.ejemplo.locksuite.util.FirebaseDeviceSync
 import com.ejemplo.locksuite.util.PrefsHelper
+import com.ejemplo.locksuite.util.UpdateFlowManager
 
 class PackageReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -26,18 +27,30 @@ class PackageReceiver : BroadcastReceiver() {
             return
         }
 
-        if (action == "UPDATE_TIMEOUT") {
-            Log.w("PackageReceiver", "⏳ Tiempo límite de actualización alcanzado. Re-suspendiendo Google Play Store...")
-            try {
-                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-                policyManager.restoreInstallRestrictions()
-            } catch (e: Exception) {
-                e.printStackTrace()
+        if (action == UpdateFlowManager.ACTION_TIMEOUT) {
+            // BUG CORREGIDO (16/8/2026): este camino limpiaba las preferencias y
+            // restauraba las restricciones, pero NO sacaba el overlay negro. Como
+            // el overlay lo dibuja el servicio de accesibilidad y nadie más lo
+            // tocaba, la pantalla "Actualizando..." quedaba fija para siempre y el
+            // equipo no respondía a nada. Ese era exactamente el síntoma reportado.
+            // Ahora se delega en el camino único de salida, que siempre lo saca.
+            Log.w("PackageReceiver", "⏳ Tiempo límite de actualización alcanzado. Cerrando el flujo y re-bloqueando...")
+            UpdateFlowManager.forceCleanup(context, UpdateFlowManager.RESULT_TIMEOUT)
+            return
+        }
+
+        // Mientras LockSuite está suspendido no se re-suspende ni se desinstala
+        // nada: el administrador levantó las restricciones a propósito.
+        if (com.ejemplo.locksuite.mdm.PolicyManager(context).isLockSuiteSuspended()) {
+            if (action == Intent.ACTION_PACKAGE_ADDED ||
+                action == Intent.ACTION_PACKAGE_REMOVED ||
+                action == Intent.ACTION_PACKAGE_REPLACED) {
+                try {
+                    FirebaseDeviceSync.syncDeviceInfo(context)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
-            prefs.edit()
-                .remove("updating_package")
-                .putBoolean("mdm_install_in_progress", false)
-                .apply()
             return
         }
 
@@ -46,34 +59,12 @@ class PackageReceiver : BroadcastReceiver() {
         val updatingPkg = prefs.getString("updating_package", null)
         if (action == Intent.ACTION_PACKAGE_REPLACED || action == Intent.ACTION_PACKAGE_ADDED) {
             if (updatingPkg != null && updatingPkg == packageName) {
-                Log.i("PackageReceiver", "✅ Actualización/Instalación de $packageName completada. Re-suspendiendo Google Play Store...")
-                try {
-                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-                    policyManager.restoreInstallRestrictions()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-                prefs.edit()
-                    .remove("updating_package")
-                    .putBoolean("mdm_install_in_progress", false)
-                    .apply()
-                cancelUpdateTimeoutAlarm(context)
-
-                // Cerrar overlay de accesibilidad y regresar a Home
-                com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance?.let { service ->
-                    service.overlayManager.hideBlockingMessageOverlay()
-                    service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
-                } ?: run {
-                    try {
-                        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-                            addCategory(Intent.CATEGORY_HOME)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        context.startActivity(homeIntent)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
+                // Señal del sistema de que la instalación terminó de verdad.
+                // Todo el cierre (overlay, HOME, restaurar restricciones, cancelar
+                // la alarma) vive en un solo lugar para que no haya dos caminos de
+                // salida que se pisen ni ninguno que se olvide del overlay.
+                Log.i("PackageReceiver", "✅ Actualización/Instalación de $packageName completada. Cerrando el flujo...")
+                UpdateFlowManager.finish(context, UpdateFlowManager.RESULT_UPDATED, null)
             }
         }
 
@@ -93,7 +84,11 @@ class PackageReceiver : BroadcastReceiver() {
                 // automáticamente. Desinstalar GMS rompería FCM (el canal de control
                 // remoto) y gran parte del teléfono: exactamente lo que el requisito
                 // de "nunca debe trabarse ni perder el control remoto" prohíbe.
+                // updatingPkg también queda exento: si el paquete es justamente el
+                // que el administrador mandó actualizar, desinstalarlo acá sería
+                // deshacer la actualización que se acaba de pedir.
                 val isAllowed = allowed.contains(packageName) || packageName == context.packageName ||
+                    packageName == updatingPkg ||
                     appController.isCritical(packageName) || appController.isPartialBlockOnly(packageName)
                 if (!isAllowed) {
                     Log.w("PackageReceiver", "🚫 Intento de instalación no autorizado: $packageName. Desinstalando...")
@@ -175,21 +170,4 @@ class PackageReceiver : BroadcastReceiver() {
         return list.any { it.activityInfo.packageName == packageName }
     }
 
-    private fun cancelUpdateTimeoutAlarm(context: Context) {
-        try {
-            val watchdogIntent = Intent(context, PackageReceiver::class.java).apply {
-                action = "UPDATE_TIMEOUT"
-            }
-            val pendingIntent = android.app.PendingIntent.getBroadcast(
-                context,
-                9911,
-                watchdogIntent,
-                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-            alarmManager.cancel(pendingIntent)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
 }

@@ -133,6 +133,12 @@ fun LoginScreen(
     var allowedPackagesSet by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isStoreLoading by remember { mutableStateOf(false) }
     
+    var showAppUpdateDialog by remember { mutableStateOf(false) }
+    var updatableApps by remember { mutableStateOf<List<com.ejemplo.locksuite.mdm.AppInfoData>>(emptyList()) }
+    var isUpdatableLoading by remember { mutableStateOf(false) }
+    var appUpdateSearch by remember { mutableStateOf("") }
+    var accessibilityReady by remember { mutableStateOf(false) }
+
     var updateProgress by remember { mutableStateOf<Int?>(null) }
     var storeDownloadingPackage by remember { mutableStateOf<String?>(null) }
     var storeProgress by remember { mutableStateOf(0) }
@@ -362,6 +368,33 @@ fun LoginScreen(
                     ) {
                         Text(
                             text = if (LocaleManager.getLang() == "he") "חנות אפליקציות" else if (LocaleManager.getLang() == "en") "App Store" else "Tienda",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Botón para actualizar aplicaciones por Google Play
+                    //
+                    // Agregado el 16/8/2026. Antes, para actualizar WhatsApp o Waze
+                    // en un equipo con Play Store bloqueada había que pedírselo al
+                    // administrador desde el panel. Este botón hace exactamente el
+                    // mismo flujo protegido (pantalla tapada, clic automático,
+                    // Play Store cerrada y vuelta a bloquear al terminar), así que
+                    // el usuario puede actualizar solo sin que eso abra ni por un
+                    // segundo un camino para instalar lo que quiera.
+                    Button(
+                        onClick = { showAppUpdateDialog = true },
+                        enabled = updateProgress == null,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = navyMedium,
+                            contentColor = Color.White,
+                            disabledContainerColor = Color.White.copy(alpha = 0.1f),
+                            disabledContentColor = Color.White.copy(alpha = 0.4f)
+                        ),
+                        modifier = Modifier.fillMaxWidth(0.85f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = if (LocaleManager.getLang() == "he") "עדכון אפליקציות" else if (LocaleManager.getLang() == "en") "Update apps" else "Actualizar apps",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -845,6 +878,184 @@ fun LoginScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showStoreDialog = false }) {
+                    Text(
+                        text = if (LocaleManager.getLang() == "he") "סגור" else if (LocaleManager.getLang() == "en") "Close" else "Cerrar",
+                        color = accentOrange,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            containerColor = navyDark,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+
+    // ──────────────────────────────────────────────
+    // Actualizar aplicaciones por Google Play (antes del PIN)
+    // ──────────────────────────────────────────────
+    LaunchedEffect(showAppUpdateDialog) {
+        if (!showAppUpdateDialog) {
+            appUpdateSearch = ""
+            return@LaunchedEffect
+        }
+        isUpdatableLoading = true
+        updatableApps = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                com.ejemplo.locksuite.mdm.AppController(context)
+                    .getUserApps(loadIcon = false)
+                    .filter { !it.isCritical && it.appType != "Sistema" }
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        isUpdatableLoading = false
+
+        // `instance` es un campo estático, no estado observable de Compose: si se
+        // leyera una sola vez, un servicio de accesibilidad que se conecta con el
+        // diálogo ya abierto dejaría los botones deshabilitados hasta cerrarlo y
+        // volverlo a abrir. Se relee mientras el diálogo esté visible.
+        while (true) {
+            accessibilityReady = com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance != null
+            delay(1500L)
+        }
+    }
+
+    if (showAppUpdateDialog) {
+        val filtered = remember(updatableApps, appUpdateSearch) {
+            val q = appUpdateSearch.trim().lowercase()
+            if (q.isEmpty()) updatableApps
+            else updatableApps.filter {
+                it.label.lowercase().contains(q) || it.packageName.lowercase().contains(q)
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showAppUpdateDialog = false },
+            title = {
+                Text(
+                    text = if (LocaleManager.getLang() == "he") "עדכון אפליקציות" else if (LocaleManager.getLang() == "en") "Update apps" else "Actualizar apps",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = if (LocaleManager.getLang() == "he")
+                            "המסך יוסתר בזמן העדכון. בסיום, החנות תיסגר והחסימות יחזרו."
+                        else if (LocaleManager.getLang() == "en")
+                            "The screen stays covered while it updates. When it finishes, the Play Store closes and the blocks come back on."
+                        else
+                            "La pantalla queda tapada mientras se actualiza. Al terminar, Google Play se cierra y los bloqueos vuelven solos.",
+                        color = Color.White.copy(alpha = 0.65f),
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (!accessibilityReady) {
+                        Text(
+                            text = "⚠ El servicio de accesibilidad de LockSuite no está activo. Sin él la pantalla no se puede tapar, así que la actualización queda deshabilitada.",
+                            color = Color(0xFFE67E22),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+
+                    OutlinedTextField(
+                        value = appUpdateSearch,
+                        onValueChange = { appUpdateSearch = it },
+                        singleLine = true,
+                        placeholder = {
+                            Text(
+                                if (LocaleManager.getLang() == "en") "Search app..." else "Buscar aplicación...",
+                                color = Color.Gray
+                            )
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = accentOrange,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.4f),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(300.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isUpdatableLoading) {
+                            CircularProgressIndicator(color = accentOrange)
+                        } else if (filtered.isEmpty()) {
+                            Text(
+                                text = if (LocaleManager.getLang() == "en") "No apps found." else "No se encontraron aplicaciones.",
+                                color = Color.White.copy(alpha = 0.7f),
+                                textAlign = TextAlign.Center
+                            )
+                        } else {
+                            androidx.compose.foundation.lazy.LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(filtered.size) { index ->
+                                    val app = filtered[index]
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(navyMedium.copy(alpha = 0.5f), shape = RoundedCornerShape(12.dp))
+                                            .padding(12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(app.packageName, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                                        }
+                                        Button(
+                                            onClick = {
+                                                val error = com.ejemplo.locksuite.util.UpdateFlowManager.start(
+                                                    context = context,
+                                                    packageName = app.packageName,
+                                                    source = com.ejemplo.locksuite.util.UpdateFlowManager.SOURCE_LOCAL,
+                                                    cancelable = true
+                                                )
+                                                if (error != null) {
+                                                    Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                                                } else {
+                                                    showAppUpdateDialog = false
+                                                }
+                                            },
+                                            enabled = accessibilityReady,
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = accentOrange,
+                                                contentColor = navyDark,
+                                                disabledContainerColor = Color.White.copy(alpha = 0.1f),
+                                                disabledContentColor = Color.White.copy(alpha = 0.4f)
+                                            ),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = if (LocaleManager.getLang() == "he") "עדכן" else if (LocaleManager.getLang() == "en") "Update" else "Actualizar",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAppUpdateDialog = false }) {
                     Text(
                         text = if (LocaleManager.getLang() == "he") "סגור" else if (LocaleManager.getLang() == "en") "Close" else "Cerrar",
                         color = accentOrange,

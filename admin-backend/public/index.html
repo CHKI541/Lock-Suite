@@ -165,6 +165,15 @@
         <div class="sidebar-content">
           <!-- Pestaña 1: Políticas -->
           <div id="panel-policies" class="tab-panel active">
+            <!-- Suspensión temporal de LockSuite -->
+            <div class="sidebar-card" id="suspend-card">
+              <h3 id="suspend-card-title">⏸️ Suspender LockSuite</h3>
+              <p class="hint-text" id="suspend-card-hint">Levanta temporalmente TODAS las restricciones y desbloquea todas las aplicaciones, como si LockSuite no estuviera instalado. Al desactivarla, todo vuelve exactamente a como estaba.</p>
+              <div class="toggle-list">
+                <label class="toggle-row"><span>Suspensión activa</span><input type="checkbox" class="policy-switch" data-policy="locksuiteSuspended" /></label>
+              </div>
+            </div>
+
             <!-- Nombre del celular -->
             <div class="sidebar-card">
               <h3>Identificación</h3>
@@ -283,6 +292,16 @@
           </div>
 
             <div class="tab-panel" id="panel-actions">
+              <!-- Estado en vivo del flujo de actualización por Google Play.
+                   Se muestra solo cuando hay una actualización corriendo, y trae
+                   el botón para destrabarla sin tener que esperar los 10 minutos
+                   del watchdog. -->
+              <div class="sidebar-card hidden" id="update-flow-card">
+                <h3>🔄 Actualización de apps en curso</h3>
+                <p id="update-flow-app" style="font-weight: bold; margin: 4px 0;"></p>
+                <p id="update-flow-status" class="hint-text" style="margin: 0 0 10px;"></p>
+                <button id="update-flow-cancel-btn" class="action-btn warning-btn">✖ Cancelar actualización</button>
+              </div>
               <div class="sidebar-card">
                 <h3>Comandos Directos</h3>
                 <button class="action-btn lock-btn" id="sidebar-lock-btn">🔒 Bloquear dispositivo ahora</button>

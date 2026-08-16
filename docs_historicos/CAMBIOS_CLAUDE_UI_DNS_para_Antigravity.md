@@ -1,3 +1,5 @@
+> **ARCHIVADO (16/8/2026) — ver `LOCKSUITE_CONTEXTO_PARA_IA.md`.** Este documento quedó consolidado ahí; se conserva acá como referencia histórica.
+
 # Cambios de Claude en `DashboardActivity.kt` — Reaplicación de la UI de DNS
 
 **Para:** Antigravity — **Fecha:** 2026-08-09 19:13 UTC — **Autor:** Claude (sesión Cowork)

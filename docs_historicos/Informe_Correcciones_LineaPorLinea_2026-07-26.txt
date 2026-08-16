@@ -1,0 +1,240 @@
+> **ARCHIVADO (16/8/2026) — ver `LOCKSUITE_CONTEXTO_PARA_IA.md`.** Este documento quedó consolidado ahí; se conserva acá como referencia histórica.
+
+LockSuite MDM
+Informe de correcciones aplicadas y revisión línea por línea del código real
+Alcance: aplicación de las correcciones de la auditoría previa sobre los archivos reales del proyecto (no la reconstrucción usada originalmente), más una revisión completa línea por línea de los ~60 archivos fuente (app Android + backend de Firebase), con corrección directa de los errores nuevos encontrados.
+Fecha del informe: 26 de julio de 2026
+
+0. Cómo se hizo esta pasada
+Este informe cubre dos pedidos distintos que se hicieron en conjunto:
+informe_auditoria_locksuite.md) ya había diseñado — verificando archivo por archivo si ya estaban aplicadas, parcialmente aplicadas, o si hacía falta aplicarlas de cero sobre el código real.
+Hacer una revisión línea por línea completa de todo el código fuente real (no solo un resumen), módulo por módulo, corrigiendo directamente cualquier error nuevo que apareciera en el camino.
+Se leyó cada archivo de la aplicación Android completo (no por fragmentos): el motor de VPN y los parsers de red, PolicyManager.kt y AppController.kt completos, DashboardActivity.kt (2670 líneas), todos los receivers y workers, la capa de Accesibilidad completa (863 líneas), SessionManager, el bloqueo de imágenes por IA, WebViewPolicy, las utilidades (ApkInstaller, SelfUpdater, AdBlocker, PrefsHelper), los widgets, el AndroidManifest y los recursos XML. También se pudo acceder por primera vez al backend de administración (admin-backend/: Cloud Functions, reglas de Firebase Realtime Database y el panel web app.js), que en la auditoría anterior no estaba disponible — eso permitió cerrar el hallazgo §3.3 de la auditoría original, que antes había quedado como "no lo pude evaluar".
+Limitación importante de este entorno: esta revisión se hizo leyendo y razonando sobre el código fuente — este entorno no tiene el SDK de Android ni Gradle instalado, así que nada de esto fue compilado ni ejecutado de verdad. Cada corrección se verificó "a mano": rastreando todos los call sites con búsquedas en todo el proyecto antes de tocar una función, revisando que las firmas coincidieran en todos los lugares que las usan, y confirmando el comportamiento real de la plataforma Android con documentación oficial cuando hizo falta (por ejemplo, para las excepciones a las restricciones de broadcasts implícitos). Aun así, antes de publicar esta versión hace falta compilar un build real y probar todas las funciones a mano — la sección 8 de este informe detalla exactamente qué probar.
+1. Resumen ejecutivo
+En números:
+11 hallazgos de la auditoría original (secciones 1 y 2 de ese informe) — verificados contra el proyecto real; todos están aplicados. Dos de ellos (§1.6 R8/minify y §1.7 armeabi-v7a) necesitan que compiles y pruebes un build real antes de publicar.
+1 hallazgo de la auditoría original que había quedado sin poder evaluarse por falta de archivos (§3.3, reglas de Firebase) — ahora sí se pudo revisar con el backend real, se reforzó, y queda un aspecto de arquitectura de fondo documentado en la sección 3.
+2 correcciones de seguridad/UX de la pantalla de bloqueo que la auditoría original recomendaba "replicar" (botón de llamada de emergencia en LoginActivity y en EmergencyActivity) — aplicadas, y se detectó en el camino que la severidad real era mayor a la estimada (ver sección 4).
+17 errores nuevos encontrados y corregidos durante la revisión línea por línea (sección 5), ninguno de los cuales estaba en el informe de auditoría original — van desde "botones fantasma" en el panel de administración hasta una vía de evasión real en el filtrado de WebView y riesgos de que el sistema de auto-reparación (Watchdog) se detuviera silenciosamente ante un error.
+9 hallazgos quedan documentados pero sin corregir porque requieren una decisión tuya, un cambio de arquitectura, o código/información que este entorno no tiene (sección 7).
+Ningún hallazgo de esta pasada es del nivel de gravedad del problema original más grave (la contraseña maestra fija de §1.1, ya corregida antes de esta pasada). El más importante de los nuevos es el de aislamiento de escritura por dispositivo en Firebase (sección 3) — no es explotable trivialmente porque requiere que alguien más sepa o adivine el ID de otro dispositivo, pero es el tipo de cosa que vale la pena cerrar de raíz antes de escalar la cantidad de equipos en producción.
+2. Estado verificado de los hallazgos de la auditoría original
+La auditoría anterior se hizo sobre una reconstrucción del proyecto a partir de un volcado en Markdown, no sobre tus archivos reales. Antes de tocar nada nuevo, se verificó archivo por archivo que cada corrección ya diseñada estuviera realmente presente en el proyecto real — y en todos los casos lo estaba (probablemente porque, según los metadatos del propio proyecto, ya se habían aplicado a mano o en otra sesión antes de que empezáramos esta revisión). Esta tabla resume el estado verificado hoy:
+#
+Archivo(s)
+Hallazgo original
+Estado
+1.1
+Constants.kt, PinManager.kt, FirebaseDeviceSync.kt, EmergencyActivity.kt
+Contraseña/hash maestro fijo e idéntico en todas las instalaciones — permitía una purga de emergencia universal si alguien decompilaba el APK una sola vez.
+Corregido
+1.2
+KosherVpnService.kt
+El filtro DNS solo enrutaba al túnel las consultas al DNS falso del sistema; una app que apuntara directo a un DNS público fijo lo evadía.
+Corregido
+1.3
+WatchdogForegroundService.kt, BootReceiver.kt
+"DNS Privado" solo se desactivaba una vez; si el usuario lo reactivaba a mano en Ajustes, quedaba encendido indefinidamente.
+Corregido
+1.4
+BlockAccessibilityActivity.kt, LoginActivity.kt, EmergencyActivity.kt
+La pantalla de bloqueo no tenía ninguna forma de llamar a emergencias.
+Corregido (ver §4)
+1.5
+WatchdogForegroundService.kt
+El Watchdog corría cada 3 segundos, 24/7 — más frecuente de lo necesario, con costo real de batería.
+Corregido
+1.6
+app/build.gradle.kts
+Ofuscación (R8/minify) desactivada en release — decompilar el APK exponía nombres de clases/métodos tal cual.
+Corregido — requiere prueba real
+1.7
+app/build.gradle.kts
+APK restringido solo a arm64-v8a — no instalable en equipos de 32 bits, comunes en celulares económicos/viejos.
+Corregido — requiere prueba real
+2.1
+LockSuiteFirebaseService.kt
+El caché anti-repetición de comandos FCM podía "olvidar" un comando recién procesado por depender de un Set sin orden garantizado.
+Corregido
+2.2
+LockSuiteFirebaseService.kt
+Comentario desactualizado decía que los comandos del panel web no llevaban firma HMAC — el código ya la exige siempre.
+Corregido
+2.3
+LocaleManager.kt
+El texto de advertencia de purga decía "restablecerá el teléfono de fábrica", pero la función real no borra datos del usuario.
+Corregido
+2.4 / 3.4
+PolicyManager.kt
+La clave HMAC que firma los presets (.locksuite) es un string fijo en el código.
+Documentado, no corregido (ver §7)
+
+Nota sobre 1.6 y 1.7: ambos cambios (activar R8 y restaurar armeabi-v7a) están en el archivo de build, pero este entorno no tiene forma de compilar Android. Antes de publicar hace falta generar un build de release real y probar TODAS las funciones a mano (VPN, accesibilidad, FCM, actualización OTA, exportar/importar presets) — ver sección 8.
+3. Firebase: lo que antes no se podía evaluar, y lo que queda abierto
+La auditoría original marcó esto (su hallazgo §3.3) como potencialmente tan grave como la contraseña maestra fija, pero no lo pudo evaluar por no tener las reglas de Realtime Database ni las Cloud Functions. En esta pasada sí se pudo acceder a admin-backend/ completo: database.rules.json, functions/index.js (Cloud Function sendCommandV8) y el panel web app.js.
+3.1 Lo que ya está bien y protegido
+El diseño real es mejor de lo que la auditoría original temía. Los comandos de administración reales (bloquear apps, cambiar PIN, aplicar presets, etc.) no se escriben nunca directo a la base de datos desde el navegador del administrador — todos pasan por la Cloud Function sendCommandV8, que exige un token de Firebase Auth válido, verifica ese admin contra una lista blanca en el servidor (authorizedAdmins), y además exige el PIN del dispositivo (o que ese admin ya esté marcado como "de confianza" para ese equipo) antes de ejecutar nada. El comando recién se firma con HMAC por dispositivo y se envía por FCM. Esta parte es sólida.
+Las reglas actuales (database.rules.json) ya restringen la lectura de devices, deviceSecrets, commandLog, archivedDevices y groups a administradores autorizados (auth.token.admin === true o presencia en authorizedAdminsUids) — antes cualquier sesión autenticada, incluida una anónima, podía leer estos nodos. También se agregó una protección de inmutabilidad al commandSecret de cada dispositivo (una vez que existe, solo se puede volver a escribir con el mismo valor), evitando que alguien lo sobrescriba para luego falsificar comandos firmados.
+3.2 Lo que queda abierto — requiere tu decisión
+[PENDIENTE] Aislamiento de escritura por dispositivo en Realtime Database
+Las reglas actuales permiten escribir en devices/{deviceId} y en deviceSecrets/{deviceId}/{pinHash,pinSalt,recoveryCode} a cualquier usuario autenticado (auth != null) — incluida una sesión anónima, que es exactamente el tipo de sesión que usa la app en cada celular (FirebaseAuth.signInAnonymously()). No hay ninguna regla que ate esa sesión anónima específica al deviceId que está escribiendo.
+En la práctica esto significa que cualquiera que pueda autenticarse de forma anónima contra este mismo proyecto de Firebase (algo que solo requiere la configuración pública del cliente, presente en cualquier copia del APK o del propio panel) podría escribir en el nodo de un dispositivo que no es el suyo — por ejemplo, sobrescribir el pinHash/pinSalt reportado de otro equipo con valores de un PIN elegido por el atacante, o alterar su fcmToken. No es una vía para robar el PIN real de otro dispositivo (eso requiere lectura, que ya está bien restringida a admins), pero sí permite interferir con un equipo ajeno si se conoce o se adivina su deviceId.
+Por qué no lo corregí directamente: cerrarlo del todo no es un cambio de una línea. Hoy la única identidad que tiene un dispositivo frente a Firebase es una sesión anónima genérica — no existe ningún claim o token que ate esa sesión a un deviceId concreto, así que una regla como "solo el dueño de este nodo puede escribirlo" no tiene con qué comparar. Cerrarlo bien requiere una de estas dos rutas, y ambas son un cambio de arquitectura, no un parche:
+Emitir un Custom Token de Firebase Auth por dispositivo en el momento del aprovisionamiento (vía una Cloud Function), con un claim deviceId embebido, y cambiar la app para autenticarse con signInWithCustomToken en vez de signInAnonymously — luego la regla puede exigir auth.token.deviceId === $device_id.
+O mover esas escrituras detrás de una Cloud Function (como ya se hizo con los comandos de administración), en vez de escribir directo desde el cliente a la Realtime Database.
+Cualquiera de las dos es un cambio real de varias piezas (backend + app), y quería que lo decidas vos antes de tocarlo — es exactamente el mismo tipo de trade-off que ya señalaba la auditoría original en sus puntos 3.1-3.6.
+[NO ES UN BUG] Verificación del PIN en el panel: hay una comprobación del lado del cliente, pero no es la barrera real
+Al revisar app.js se encontró una función (verifyPinBackend) que lee pinHash/pinSalt directo de Firebase y compara el PIN ingresado con ese hash enteramente en el navegador del administrador, antes de "desbloquear" la acción en la interfaz. A primera vista, un chequeo de seguridad hecho solo en JavaScript del lado del cliente suena a que se puede evadir abriendo las herramientas de desarrollador.
+Se rastreó qué pasa realmente al ejecutar una acción: el navegador igual manda el PIN ingresado (devicePin) a la Cloud Function sendCommandV8, que vuelve a validarlo del lado del servidor contra el pinHash/pinSalt reales, de forma completamente independiente del resultado que haya mostrado la interfaz. Manipular la variable del cliente (por ejemplo, forzar isPinCorrect a verdadero desde la consola) no logra nada: el servidor rechaza igual cualquier PIN incorrecto. La comprobación del cliente es una mejora de UX (feedback inmediato, evita reintentos innecesarios) que se apoya en una barrera real que sí está del lado del servidor. Se documenta acá porque vale la pena que quede explícito en el código para quien lo lea después, pero no se trata de una vulnerabilidad.
+4. Botón de llamada de emergencia: corrección de un supuesto de la auditoría original
+La auditoría original (§1.4) había corregido la pantalla que de verdad "atrapa" al usuario (BlockAccessibilityActivity, que bloquea el botón Atrás y se relanza sola) agregándole un botón de llamada de emergencia. Sobre LoginActivity y EmergencyActivity decía textualmente que "ninguna de las dos bloquea el botón Atrás, así que la severidad es menor" — y por eso las dejó como una recomendación de bajo costo para la siguiente pasada, no como algo urgente.
+Al trabajar con el código real (no la reconstrucción), esa base ya no era exacta: LoginActivity sí bloquea el botón Atrás (tiene su propio onBackPressedDispatcher con un callback vacío desde antes de esta revisión — "el usuario no puede salir de la pantalla de login"). Es decir, la severidad real de no tener una salida de emergencia en esa pantalla era mayor a la que la auditoría había estimado sobre la reconstrucción, no menor.
+Se agregó el botón de llamada de emergencia (Intent.ACTION_DIAL, sin requerir el permiso CALL_PHONE) en ambos estados de LoginActivity — la pantalla de inicio y la de ingreso de PIN — y en EmergencyActivity. Las tres pantallas que pueden "atrapar" al usuario (BlockAccessibilityActivity, LoginActivity y EmergencyActivity) tienen hoy una salida real a emergencias, verificado leyendo el código actual de las tres.
+5. Revisión línea por línea: errores nuevos encontrados y corregidos
+Ninguno de los siguientes hallazgos estaba en la auditoría original — aparecieron al leer cada archivo completo, de punta a punta, y rastrear cómo se usa cada función en el resto del proyecto. Están agrupados por módulo.
+5.1 — mdm/AppController.kt
+[CORREGIDO] Código muerto en isAppSuspended()
+La condición tenía un término (isHidden && prefsSuspended) que nunca podía cambiar el resultado porque prefsSuspended ya aparecía antes en el OR — costaba una llamada Binder extra a isApplicationHidden en cada consulta, sin ningún efecto. Simplificado a prefsSuspended || osSuspended.
+[CORREGIDO] getUserApps() perdía la categoría de apps ocultas
+Ocultar una app (hideApp) la deshabilita a nivel de paquete, lo que hace que getLaunchIntentForPackage devuelva null incluso para apps que normalmente sí tienen ícono — eso las hacía caer por defecto en la categoría equivocada al listar apps del usuario. Se adelantó el cálculo de isHiddenNow y se agregó como caso explícito en la clasificación.
+[CORREGIDO] uninstallApp() no protegía apps críticas/protegidas
+Se agregó un guard al inicio de la función que rechaza desinstalar cualquier paquete marcado como crítico (isCritical) o de bloqueo parcial únicamente (isPartialBlockOnly), registrando un aviso — cerrando una vía por la que una llamada a esta función (interna o remota) podía desinstalar una app que el resto del sistema asume que siempre va a estar presente.
+5.2 — receiver/PackageReceiver.kt
+[CORREGIDO] Auto-desinstalación de apps no permitidas podía afectar apps críticas
+Cuando "Bloquear instalaciones" está activo, el receiver desinstala automáticamente cualquier app no incluida en la lista blanca al detectar ACTION_PACKAGE_ADDED. La comprobación de "¿está permitida?" solo miraba la lista blanca y el propio paquete de LockSuite — una actualización silenciosa en segundo plano de un paquete crítico del sistema (por ejemplo, Google Play Services) podía disparar una desinstalación automática mientras el bloqueo de instalaciones estaba activo. Se amplió la comprobación para incluir también isCritical() e isPartialBlockOnly() de AppController, igual que en el punto anterior.
+5.3 — Cadena de auto-reparación: WatchdogWorker.kt y LockSuiteApplication.kt
+[CORREGIDO] Una excepción sin capturar podía saltear el resto de la auto-reparación de ese ciclo
+En WatchdogWorker.doWork(), la llamada a PolicyManager(...).reapplyAllRestrictions() era la primera línea, sin try/catch, seguida de BootReceiver.ensureVpnRunning(...). Si la primera lanzaba una excepción, la segunda (el chequeo de que la VPN siga viva) directamente no se ejecutaba en todo ese ciclo del Worker. Se envolvió cada llamada en su propio try/catch, para que un fallo puntual en una política no cancele la verificación de la VPN ni la sincronización con Firebase de ese ciclo.
+El mismo patrón exacto estaba en LockSuiteApplication.onCreate() — ahí el riesgo es mayor, porque onCreate() es el punto de entrada de todo el proceso: una excepción sin capturar ahí puede tirar abajo la aplicación completa antes de que el Watchdog, la VPN o la sincronización con Firebase lleguen siquiera a arrancar. Se aplicó la misma corrección.
+5.4 — Recursos: AndroidManifest.xml y accessibility_service_config.xml
+[CORREGIDO] Intent-filter duplicado/inalcanzable en PackageReceiver
+El receiver tenía un segundo <intent-filter> para la acción UPDATE_TIMEOUT, pero esa acción (igual que su hermana INSTALL_SAFETY_TIMEOUT, que ya no tenía intent-filter y funciona bien) se programa siempre con un Intent explícito dirigido a este mismo componente — un intent-filter no hace falta ni se usa en ese caso. Se verificó con la documentación oficial de Android que las excepciones a las restricciones de broadcasts implícitos (vigentes desde la API 26) no cambian esto, y se quitó el filtro sobrante, dejando un comentario explicando por qué es seguro.
+[CORREGIDO] Descripción del Servicio de Accesibilidad apuntaba al string equivocado
+android:description usaba @string/app_name (el nombre de la app) en vez de @string/accessibility_description, un string ya existente y escrito específicamente para explicar qué hace el servicio — es el texto que Android le muestra al usuario en Ajustes al momento de activarlo. Corregida la referencia.
+5.5 — ui/dashboard/DashboardActivity.kt (2670 líneas, leído completo)
+[CORREGIDO] Aplicar un perfil guardado fallaba en silencio
+El botón "Aplicar" de un preset guardado no mostraba nada si importPolicyPresetJson devolvía false — el administrador no tenía forma de saber si la aplicación del perfil había fallado. Se agregó un Toast de error explícito.
+[CORREGIDO] Toast de depuración visible en producción
+El engranaje de cada app en la lista mostraba un Toast de debug ("Engranaje presionado: $expanded") en cada toque. Eliminado.
+[CORREGIDO] El estado del servicio Watchdog en "Servicios" estaba hardcodeado
+La fila de estado del Watchdog en la pestaña de Servicios siempre mostraba "ACTIVO", sin comprobar nada — a diferencia de las filas de Accesibilidad y VPN, que sí consultan el estado real. Se agregó una comprobación real vía ActivityManager.getRunningServices(), mostrando un aviso claro ("reabra la app para reiniciarlo") cuando el servicio no está corriendo.
+[CORREGIDO] El diálogo de cambio de PIN no rechazaba PINs triviales
+El PIN inicial (configurado en SetupPinActivity) sí se validaba contra secuencias obvias, pero el diálogo "Cambiar PIN de Administrador" del Dashboard no tenía ninguna validación de fuerza — un admin podía debilitar un PIN fuerte a algo como "1234" sin ninguna advertencia. Se agregó la misma comprobación (ver §5.11).
+5.6 — mdm/PolicyManager.kt
+[CORREGIDO] El interruptor "Ocultar ícono al suspender aplicaciones" no hacía nada observable
+setHideSuspendedApps(block) debía re-aplicar retroactivamente el ocultamiento de ícono a las apps ya suspendidas, pero el bucle llamaba a suspendApp(pkg, true) en vez de hideApp(pkg, block) — ignoraba por completo el parámetro block y ni siquiera tocaba la propiedad correcta. Un "botón fantasma" confirmado: el preference se guardaba, pero no producía ningún efecto visible. Corregido para llamar a hideApp con el valor real del parámetro.
+5.7 — service/LockSuiteAccessibilityService.kt (863 líneas, leído completo)
+[CORREGIDO] Palabra clave en ídish con un error de tipeo
+En la lista de "acciones peligrosas" que la detección anti-evasión de Ajustes busca por texto, una de las palabras en ídish ("desinstalar") tenía una letra latina "n" suelta al final en vez de la nun final hebrea correcta — lo que hacía que la comparación por substring nunca coincidiera con el texto real que Android muestra en ídish. Corregido el carácter.
+5.8 — security/SessionManager.kt
+[CORREGIDO] Campo sin @Volatile, escrito desde dos hilos distintos
+lastAuthAt se escribe tanto desde el hilo principal (Dashboard/Login) como desde un callback en segundo plano de Firebase (closeSession() al detectar un cambio remoto de PIN). Sin @Volatile, el modelo de memoria de la JVM no garantiza que un hilo vea el valor más reciente escrito por el otro. Se agregó @Volatile, con un comentario explicando el call site cruzado exacto.
+5.9 — mdm/WebViewPolicy.kt
+[CORREGIDO] Coincidencia de dominios por substring — vía de evasión real
+isDomainAllowedForGenericApp() (que decide, para cualquier app con el interruptor genérico "Bloquear WebView" activado, qué dominios puede resolver) usaba domain.contains(token) para decidir si un dominio pertenece a una app permitida. Un dominio como notinstagram-app.com o instagram.evil.com contiene la palabra "instagram" como substring sin ser en absoluto ese servicio — lo que en la práctica podía dejar pasar tráfico DNS a dominios no relacionados con solo elegir un nombre que contenga el token correcto. Se confirmó (leyendo KosherVpnService.kt) que esta función decide directamente el filtrado real a nivel de DNS, no es cosmética.
+Se reemplazó por una comparación por etiquetas del dominio (dominio.split(".")), exigiendo que el token sea una etiqueta completa o un componente completo separado por guiones — el mismo criterio de sufijo/etiqueta que ya usaban correctamente Waze/DiDi con su lista blanca CORE_DOMAINS dedicada.
+5.10 — service/AIFaceDetector.kt y AIPersonDetector.kt
+[CORREGIDO] Fuga de memoria latente en el detector de IA
+Si el bitmap de entrada no llegaba ya en formato ARGB_8888, el detector creaba una copia convertida (argb) para pasarle al modelo de MediaPipe, pero nunca la reciclaba tras la inferencia. Se rastreó la ruta real de llamada (processScreenshotByGrid → safeCrop → Bitmap.createBitmap) y hoy siempre produce recortes ya en ARGB_8888, así que en la práctica esta fuga no se activa todavía — pero es la clase de bug que se vuelve real en cuanto cambie el origen del bitmap. Se agregó el recycle() defensivo (solo cuando la copia es distinta del bitmap original) en ambos detectores.
+5.11 — Fuerza del PIN: SetupPinActivity.kt y security/PinManager.kt
+[CORREGIDO] La validación de PIN trivial solo cubría uno de los tres puntos de entrada
+isTrivialPin() (rechaza PINs de dígitos todos iguales o secuencias ascendentes/descendentes como "1234"/"9876") vivía como función privada dentro de SetupPinActivity.kt y solo la llamaba el botón táctil "OK" del teclado en pantalla — ni el propio flujo de tecla física (Key.Enter) de esa misma pantalla, ni el diálogo "Cambiar PIN de Administrador" del Dashboard, la usaban. En la práctica, un PIN débil se podía colar durante el setup inicial con un teclado físico conectado, y sobre todo se podía introducir más tarde sin ningún aviso a través del cambio de PIN — debilitando exactamente la protección que el setup inicial pretendía exigir.
+Se centralizó la función en PinManager.isTrivialPin(), y se la conectó en los tres puntos: el botón táctil y el flujo de tecla física de SetupPinActivity, y el diálogo de cambio de PIN de DashboardActivity.
+5.12 — Manejo de sesiones de instalación: util/ApkInstaller.kt y util/SelfUpdater.kt
+[CORREGIDO] Sesiones de PackageInstaller que podían quedar abiertas ante un fallo
+El patrón de instalación (abrir sesión → escribir el APK → hacer commit → cerrar) cerraba los streams y la sesión con llamadas secuenciales manuales al final del bloque. Si algo fallaba a mitad de la copia (por ejemplo, un error de lectura/escritura), el control saltaba directo al catch de más abajo sin pasar nunca por esos cierres — el stream de entrada, el de salida y, sobre todo, la sesión de PackageInstaller quedaban sin cerrar hasta que el sistema los recolectara solo. Con fallos repetidos (una red inestable durante una actualización OTA, por ejemplo) esto puede agotar el límite de sesiones activas de instalación del sistema operativo y bloquear instalaciones futuras sin ningún aviso claro para el usuario.
+Se reestructuraron ambos archivos (ApkInstaller.installApk(), y las dos rutas de SelfUpdater.kt: la auto-actualización de LockSuite y la descarga desde la Tienda administrada) para usar bloques use{} en los streams y un try/finally que garantiza session.close() pase lo que pase. Se verificó que la lógica existente de banderas (installCommitSubmitted, temporaryInstallAccessPrepared) y el manejo de la ventana de instalación temporal en PolicyManager.kt (refreshInstallRestriction()/restoreInstallRestrictions()) ya eran correctos y no hicieron falta cambios ahí.
+6. Módulos revisados línea por línea sin errores
+Estos archivos se leyeron completos y no necesitaron ningún cambio. Se listan para que quede claro qué ya se revisó a fondo y no hace falta repasar en una futura pasada:
+mdm/WebViewBlockManager.kt e mdm/ImageBlockManager.kt — cachés con double-checked locking correctamente implementadas.
+service/DetectionTypes.kt, DeviceCapability.kt, RegionExpander.kt, SkinHeuristic.kt, TileSkinMap.kt, BlockOverlayManager.kt.
+service/AIContentGate.kt — se analizó un caso límite (varios sujetos en un mismo tile de la cuadrícula de detección) y se concluyó que la prioridad actual cara-antes-que-cuerpo es un trade-off de diseño razonable, no un bug.
+service/LockSuiteTileService.kt.
+util/PrefsHelper.kt y util/AdBlocker.kt — el bloqueador de anuncios usa una búsqueda de sufijos O(1) sobre HashSet, publicación atómica del set cargado, y filtrado explícito del TLD para no bloquear dominios enteros de nivel superior.
+widget/AdminWidgetProvider.kt y widget/StoreWidgetProvider.kt — se verificó específicamente que el extra OPEN_STORE del widget de tienda llega a LoginActivity de forma segura (no evade la comprobación de PIN configurado, la sesión activa, ni el bloqueo del botón Atrás).
+Los dos archivos de test (MainScreenTest.kt, MainScreenViewModelTest.kt, bajo el paquete com.example.locksuite) resultaron ser plantilla por defecto de Android Studio, sin relación con el código real de la app (que vive en com.ejemplo.locksuite) — referencian clases (MainScreenViewModel, DataRepository, MainScreen) que no existen en ningún otro lugar del proyecto. No afectan la app publicada (el código de test no se empaqueta en el APK), pero conviene borrarlos por prolijidad — ver recomendación en la sección 7.
+7. Hallazgos documentados pero no corregidos — requieren tu decisión
+Estos son hallazgos reales, pero corregirlos implica un trade-off de producto, requiere información/código que no estaba disponible en esta revisión, o es una limitación de la plataforma Android que ningún cambio de código puede cerrar del todo. Se documentan en el código (donde corresponde) y acá, para que la decisión sea tuya con el contexto completo.
+7.1 — Heredados de la auditoría original, todavía abiertos
+[PENDIENTE] El filtro solo cubre DNS convencional, no DoH/DoT/QUIC ni IP directa (§3.1)
+Un navegador con DNS-sobre-HTTPS propio, o una app que resuelva por QUIC/HTTP3 o se conecte directo a una IP sin pasar por DNS, no pasa por este filtro. Cerrarlo del todo requiere reemplazar la VPN local (que hoy solo enruta el puerto 53, por eso es liviana) por un túnel completo que reenvíe TCP/UDP en general — un cambio de arquitectura mayor, con costo real en batería/CPU. Es el mismo trade-off "imposible de evadir" vs. "no debe consumir batería" del pedido original.
+[PENDIENTE] VPN sin modo Lockdown (§3.2)
+lockdownEnabled = false hoy. Activarlo (lockdownEnabled = true) corta todo internet si la VPN se cae por cualquier motivo — más resistente a evasión, pero ya hubo una regresión histórica documentada (walkthrough.md) donde esto causó problemas reales de conectividad y se desactivó a propósito. Recomendación: agregar telemetría de tiempo de VPN caída antes de decidir, no reactivarlo a ciegas.
+[PENDIENTE] Aislamiento de escritura por dispositivo en Firebase (§3.3)
+Ver detalle completo en la sección 3.2 de este informe — es una expansión de este mismo hallazgo original, ahora que se pudo revisar con el backend real.
+[PENDIENTE] Clave HMAC de presets fija en el código (§2.4 / §3.4)
+Mitigado en la práctica porque importPolicyPresetJson() solo se puede llegar a llamar con sesión de admin local (PIN) o comando FCM ya firmado con el commandSecret por dispositivo — pero el HMAC del preset en sí sigue siendo un secreto compartido fijo, no una firma asimétrica. Requiere backend (clave privada solo en el servidor, pública en la app) para resolverse de raíz.
+[PENDIENTE] Integridad del APK descargado en autoactualización y Tienda administrada (§3.5)
+SelfUpdater.kt instala en silencio, como Device Owner, el APK que indica version.json/el catálogo de la tienda, sin comparar un checksum esperado. Para la autoactualización de LockSuite, la verificación de firma de Android (mismo certificado que el ya instalado) da cierta protección gratis; para la Tienda administrada (paquetes nuevos), esa protección no aplica igual. Recomendación: agregar un campo sha256 (o firma) al catálogo y verificar el archivo descargado antes de instalarlo, abortando limpiamente si no coincide.
+[PENDIENTE] La Capa 3 (Accesibilidad) se puede apagar desde Ajustes (§3.6)
+Limitación de la plataforma, no un bug: Android no tiene un DISALLOW_* para "no permitir apagar este Servicio de Accesibilidad puntual". El Watchdog reacciona (relanza la pantalla de bloqueo, suspende navegadores) pero no puede prevenir la ventana entre que el usuario apaga el switch y esa reacción. No afecta a las Capas 1 (DPM) ni 2 (VPN/DNS), que siguen activas de forma independiente.
+7.2 — Encontrados en esta pasada, de menor severidad
+[PENDIENTE] SecretCodeReceiver exportado
+Necesita exported="true" para recibir el código secreto que envía el marcador telefónico del sistema — no hay forma de restringirlo sin romper esa función legítima. La acción destructiva que dispara queda igualmente detrás de la verificación del código de recuperación, así que el impacto real es bajo.
+[PENDIENTE] Etiqueta de estado del canal FCM hardcodeada en "LISTO"
+A diferencia del estado de Accesibilidad, VPN y ahora Watchdog (§5.5), no se encontró una forma barata y síncrona de comprobar en tiempo real si el canal de FCM está realmente listo para recibir comandos — queda como una etiqueta informativa, no verificada.
+[PENDIENTE] Asimetría en los dos interruptores de bloqueo de MercadoPago
+La comprobación OR de isMercadoPagoBlockOffersEnabled() dentro de mercadoPagoScanRunnable queda en la práctica sin efecto porque la puerta de entrada de handleMercadoPagoBlocking() ya es más estricta — no es explotable, es una asimetría de código para prolijidad.
+[PENDIENTE] Declaraciones sin uso en device_admin_policies.xml
+Quedaron declaraciones de políticas de Device Admin que no se referencian desde ningún lado del código actual — no representan un riesgo, pero conviene revisar si siguen haciendo falta.
+[PENDIENTE] Prioridad cara-antes-que-cuerpo en AIContentGate con varios sujetos por tile
+Ver también sección 6 — se evaluó como un trade-off de diseño razonable dado el costo de rendimiento de la alternativa, no como un error a corregir.
+[PENDIENTE] Carpetas capa3_opcion_a/ y capa3_opcion_b/ — prototipos huérfanos en la raíz del proyecto
+Al sincronizar los archivos corregidos con tu carpeta real se encontraron dos carpetas en la raíz del proyecto, junto a app/ y admin-backend/, que no había podido ver desde el volcado en Markdown de la sesión anterior: capa3_opcion_a/ (DnsPacketParser.kt, IpPacketParser.kt, KosherVpnService.kt, NetworkForwarder.kt — versiones bastante más chicas que las reales, por ejemplo KosherVpnService.kt de 5,2 KB ahí contra 17 KB en la app real) y capa3_opcion_b/ (NetworkFilterController.kt, RefreshHostsWorker.kt — un enfoque distinto por completo, con otros nombres de archivo).
+Ninguna de las dos vive dentro de app/src/main/..., así que Gradle no las compila — no tienen ningún efecto en la app instalada. Parecen ser dos intentos/prototipos anteriores de la Capa 3 (red/VPN) que se guardaron al lado del proyecto real en vez de descartarse. No las toqué (no formaba parte de lo que me pediste, y borrar carpetas enteras es una decisión tuya, no algo para hacer por mi cuenta) — pero vale la pena que decidas si las querés conservar como referencia histórica o mandarlas a _to_delete/, para que nadie las confunda con una tercera implementación real de la VPN en el futuro.
+[PENDIENTE] Plugin de kotlin.serialization sin uso aparente
+app/build.gradle.kts declara alias(libs.plugins.kotlin.serialization), pero no se encontró ningún uso de @Serializable ni kotlinx.serialization en el código fuente actual. Si no está reservado para algo planeado, se puede quitar para simplificar el build; si tenés planeado usarlo pronto, no hace falta tocarlo.
+[PENDIENTE] Archivos de test huérfanos de la plantilla de Android Studio
+Ver sección 6 — MainScreenTest.kt y MainScreenViewModelTest.kt no corresponden al código real de la app. Recomendado borrarlos por prolijidad; no bloquean nada.
+8. Antes de publicar: verificaciones que este entorno no pudo hacer
+Ninguno de los cambios de este informe se compiló ni se ejecutó — este entorno no tiene el SDK de Android. Esta lista es la mínima indispensable antes de subir una nueva versión a los celulares en producción:
+Compilar un build de release real y confirmar que proguard-rules.pro tiene las reglas -keep necesarias para Firebase, MediaPipe/TFLite y cualquier uso de reflexión — con R8 recién activado (§1.6), un build puede compilar bien y de todos modos fallar en tiempo de ejecución si falta una regla.
+Probar el build en un equipo armeabi-v7a (32 bits) real si tenés uno a mano — confirmar que la versión de MediaPipe Tasks-Vision que usás efectivamente publica binarios de 32 bits, ya que ahí depende la Capa 2 (bloqueo de imágenes por IA) en esos equipos (§1.7).
+Probar manualmente cada función después de compilar: VPN y filtrado DNS, Accesibilidad, comandos FCM, actualización OTA (autoactualización y Tienda administrada), exportar/importar presets, cambio de PIN (nuevo y trivial), botones de llamada de emergencia en las tres pantallas, y el estado del Watchdog en la pestaña de Servicios.
+Desplegar las reglas actualizadas de Firebase (database.rules.json) al proyecto real con firebase deploy --only database, y las Cloud Functions si no estaban ya desplegadas — confirmar en el panel que un dispositivo de prueba puede sincronizar y que un admin puede seguir operando con normalidad antes de asumir que está en producción.
+Probar en una matriz chica de equipos físicos de distintos fabricantes (Xiaomi/MIUI, Samsung/One UI, etc.) — los gestores de batería propios de cada fabricante no siempre respetan el estado de Device Owner y pueden matar servicios en segundo plano; esto ya lo señalaba la auditoría original y sigue siendo válido.
+9. Resumen de archivos modificados en esta pasada
+Además de los 11 archivos de la sección 2 (ya cubiertos en esa tabla) y de admin-backend/database.rules.json (sección 3), esta pasada de revisión línea por línea modificó:
+Archivo
+Cambio
+mdm/AppController.kt
+isAppSuspended() sin código muerto; getUserApps() clasifica apps ocultas correctamente; uninstallApp() protege apps críticas/parciales.
+receiver/PackageReceiver.kt
+Auto-desinstalación por lista blanca ya no afecta apps críticas/protegidas.
+worker/WatchdogWorker.kt
+try/catch independiente en cada paso de auto-reparación del ciclo.
+LockSuiteApplication.kt
+Mismo fix que WatchdogWorker, aplicado a onCreate() de la Application.
+AndroidManifest.xml
+Quitado intent-filter duplicado/inalcanzable de PackageReceiver.
+res/xml/accessibility_service_config.xml
+android:description apunta al string correcto.
+ui/dashboard/DashboardActivity.kt
+4 correcciones: error visible al aplicar preset, Toast de debug eliminado, estado real del Watchdog, validación de PIN trivial en cambio de PIN.
+mdm/PolicyManager.kt
+setHideSuspendedApps() ahora sí oculta/muestra el ícono retroactivamente.
+service/LockSuiteAccessibilityService.kt
+Corregida palabra clave en ídish con error de tipeo.
+security/SessionManager.kt
+Campo lastAuthAt marcado @Volatile.
+mdm/WebViewPolicy.kt
+Coincidencia de dominios por etiqueta completa en vez de substring.
+service/AIFaceDetector.kt / AIPersonDetector.kt
+recycle() defensivo del bitmap convertido tras la inferencia.
+ui/auth/SetupPinActivity.kt
+Usa PinManager.isTrivialPin() centralizado en sus dos flujos de entrada.
+security/PinManager.kt
+Nueva función pública isTrivialPin(), centralizada.
+util/ApkInstaller.kt
+Sesión de PackageInstaller con use{} + try/finally garantizado.
+util/SelfUpdater.kt
+Mismo patrón aplicado a autoactualización y descarga de Tienda administrada.
+10. Próximos pasos recomendados, en orden
+1) Compilar y probar un build de release real siguiendo la sección 8 — es el paso obligatorio antes de instalar esta versión en cualquier equipo.
+2) Desplegar database.rules.json y confirmar que el panel y un dispositivo de prueba siguen funcionando de punta a punta.
+3) Decidir sobre el aislamiento de escritura por dispositivo en Firebase (sección 3.2) — es el hallazgo abierto de mayor impacto potencial de todo este informe.
+4) Revisar la lista de la sección 7 y decidir cuáles de esos trade-offs de producto querés resolver, y en qué orden — ninguno es urgente por sí solo, pero varios (integridad del APK de la Tienda, DoH/DoT) valen la pena como proyectos aparte.
+5) Por prolijidad, cuando tengas tiempo: borrar los dos archivos de test huérfanos y decidir si el plugin de kotlin.serialization sigue haciendo falta.
+
+Fin del informe.

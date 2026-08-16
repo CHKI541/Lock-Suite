@@ -1,3 +1,5 @@
+> **ARCHIVADO (16/8/2026) — ver `LOCKSUITE_CONTEXTO_PARA_IA.md`.** Este documento quedó consolidado ahí; se conserva acá como referencia histórica.
+
 # Auditoría general — versión 0.5.0
 
 ## Cambios verificados

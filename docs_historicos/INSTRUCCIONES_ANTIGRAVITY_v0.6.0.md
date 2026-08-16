@@ -1,3 +1,5 @@
+> **ARCHIVADO (16/8/2026) — ver `LOCKSUITE_CONTEXTO_PARA_IA.md`.** Este documento quedó consolidado ahí; se conserva acá como referencia histórica.
+
 # Instrucciones para Antigravity — Subir LockSuite a v0.6.0
 
 Este documento lo escribió Claude tras una sesión trabajando sobre `C:\Users\israe\OneDrive\Documentos\Lock Suite segunda version` vía el puente al dispositivo. Ese entorno **no tiene Android SDK, Gradle ni acceso a Firebase**, así que nada de lo de abajo se compiló ni se probó en un equipo real todavía — esa parte queda para vos.

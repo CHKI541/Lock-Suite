@@ -304,7 +304,23 @@ object FirebaseDeviceSync {
                     // está en true, para que no se olvide un equipo suspendido.
                     "locksuiteSuspended" to policyManager.isLockSuiteSuspended(),
                     "locksuiteSuspendedAt" to policyManager.getLockSuiteSuspendedAt(),
-                    "accessibilityProtected" to policyManager.isAccessibilityProtectionEnabled()
+                    "accessibilityProtected" to policyManager.isAccessibilityProtectionEnabled(),
+
+                    // Sub-interruptores de Protecciones de Accesibilidad (17/8/2026).
+                    // El panel los muestra como una sección propia; sin esto los switches
+                    // del panel arrancarían siempre apagados aunque en el equipo estén
+                    // encendidos.
+                    "accBounceSettings" to policyManager.isAccBounceSettingsEnabled(),
+                    "accNag" to policyManager.isAccNagEnabled(),
+                    "accSuspendAll" to policyManager.isAccSuspendAllEnabled(),
+
+                    // Arranque protegido
+                    "bootGateEnabled" to policyManager.isBootGateEnabled(),
+                    "bootGateWaitAccessibility" to policyManager.isBootGateWaitAccessibilityEnabled(),
+                    "bootGateLastResult" to com.ejemplo.locksuite.util.BootGate.lastResult(context),
+
+                    // Bloqueo de imágenes
+                    "imageStrictScroll" to policyManager.isImageBlockStrictScrollEnabled()
                 )
             )
             syncAppsListInternal(context)

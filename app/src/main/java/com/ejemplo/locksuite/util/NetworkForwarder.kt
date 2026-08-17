@@ -14,34 +14,104 @@ object NetworkForwarder {
     private const val UPSTREAM_DNS_PORT = 53
     private const val TIMEOUT_MS = 3500
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // EL RESOLUTOR DE SALIDA  (reescrito el 17/8/2026)
+    //
+    // ⚠️ ACÁ ESTABA LA CAUSA MÁS PROBABLE DEL SÍNTOMA "SE CAE INTERNET ENTERO Y
+    //    VUELVE APAGANDO Y PRENDIENDO LA VPN".
+    //
+    // La versión anterior preguntaba `cm.activeNetwork` y se quedaba con el primer
+    // DNS de esa red que no fuera loopback ni `10.0.0.1`. El problema: `10.0.0.1` es
+    // el DNS virtual IPv4 del propio túnel, pero el túnel TAMBIÉN publica uno IPv6,
+    // `fd00::1`, y ESE no estaba en la lista de exclusiones. Alcanzaba con que en
+    // algún momento `activeNetwork` devolviera la red del propio VPN (pasa según el
+    // fabricante, al reconectar, y en el instante posterior a establecer el túnel)
+    // para que el bucle IPv6 de reserva devolviera `fd00::1`.
+    //
+    // A partir de ahí, cada consulta DNS se mandaba al DNS virtual del túnel desde un
+    // socket protegido, o sea hacia afuera del túnel, o sea a ninguna parte. Nadie
+    // contesta: 3,5 segundos de timeout por consulta, TODAS las consultas, todas las
+    // apps. Para el usuario eso es exactamente "se cayó internet", aunque la red
+    // estuviera perfecta — y como el valor se recalculaba igual en cada consulta, no
+    // se arreglaba solo; apagar y prender la VPN lo arreglaba porque volvía a
+    // consultar en un momento en que `activeNetwork` sí era la red física.
+    //
+    // Ahora:
+    //   • Se elige explícitamente una red SIN `TRANSPORT_VPN`, en vez de confiar en
+    //     cuál es "la activa".
+    //   • Ninguna dirección del propio túnel puede salir elegida, ni v4 ni v6.
+    //   • El resultado se cachea: antes cada consulta hacía tres llamadas al sistema
+    //     (getSystemService + activeNetwork + getLinkProperties). Con 40 consultas por
+    //     segundo abriendo una app, eso era CPU y batería tirada.
+    //   • KosherVpnService invalida el cache cuando cambia la red.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /** Direcciones del propio túnel: nunca pueden ser el resolutor de salida. */
+    private val TUNNEL_ADDRESSES = setOf("10.0.0.1", "10.0.0.2", "fd00::1", "fd00::2")
+
+    /** Red de seguridad por si algo cambia sin avisar por el callback. */
+    private const val UPSTREAM_TTL_MS = 30_000L
+
+    @Volatile private var cachedUpstream: InetAddress? = null
+    @Volatile private var cachedUpstreamAt = 0L
+
+    /** La llama KosherVpnService ante cualquier cambio de red o al (re)establecer el túnel. */
+    fun invalidateUpstreamCache() {
+        cachedUpstreamAt = 0L
+        cachedUpstream = null
+    }
+
+    private fun isUsableResolver(dns: InetAddress): Boolean =
+        !dns.isLoopbackAddress &&
+        !dns.isAnyLocalAddress &&
+        (dns.hostAddress ?: "") !in TUNNEL_ADDRESSES
+
     private fun getUpstreamDnsAddress(vpnService: VpnService): InetAddress {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val cached = cachedUpstream
+        if (cached != null && now - cachedUpstreamAt < UPSTREAM_TTL_MS) return cached
+
+        val resolved = resolveUpstreamDns(vpnService)
+        cachedUpstream = resolved
+        cachedUpstreamAt = now
+        return resolved
+    }
+
+    private fun resolveUpstreamDns(vpnService: VpnService): InetAddress {
         try {
             val cm = vpnService.getSystemService(android.net.ConnectivityManager::class.java)
-            val activeNetwork = cm?.activeNetwork
-            if (activeNetwork != null) {
-                val linkProps = cm.getLinkProperties(activeNetwork)
-                val dnsList = linkProps?.dnsServers
-                if (!dnsList.isNullOrEmpty()) {
-                    // Preferencia a DNS IPv4
+            if (cm != null) {
+                @Suppress("DEPRECATION")
+                val networks = cm.allNetworks
+                var ipv6Fallback: InetAddress? = null
+
+                for (network in networks) {
+                    val caps = cm.getNetworkCapabilities(network) ?: continue
+                    // Saltear el propio túnel: sus DNS son virtuales y no responden
+                    // desde afuera. Este es el chequeo que faltaba.
+                    if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue
+                    if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
+
+                    val dnsList = cm.getLinkProperties(network)?.dnsServers ?: continue
                     for (dns in dnsList) {
-                        if (dns is Inet4Address && !dns.isLoopbackAddress && dns.hostAddress != "10.0.0.1") {
-                            return dns
-                        }
-                    }
-                    // Soporte para redes IPv6 puras / DNS64
-                    for (dns in dnsList) {
-                        if (!dns.isLoopbackAddress && dns.hostAddress != "10.0.0.1" && dns.hostAddress != "::1") {
-                            return dns
-                        }
+                        if (!isUsableResolver(dns)) continue
+                        // Preferencia a IPv4: es el que existe en prácticamente todas
+                        // las redes y el que menos sorpresas da.
+                        if (dns is Inet4Address) return dns
+                        if (ipv6Fallback == null) ipv6Fallback = dns
                     }
                 }
+                // Redes IPv6 puras / DNS64.
+                ipv6Fallback?.let { return it }
             }
         } catch (e: Exception) {
-            // Fallback
+            android.util.Log.w("KosherVPN", "No se pudo resolver el DNS de salida: ${e.message}")
         }
+
         val customIp = PrefsHelper.getMdmPrefs(vpnService).getString("upstream_dns_ip", "8.8.8.8") ?: "8.8.8.8"
         return try {
-            InetAddress.getByName(customIp)
+            val fallback = InetAddress.getByName(customIp)
+            if (isUsableResolver(fallback)) fallback else InetAddress.getByName("8.8.8.8")
         } catch (e: Exception) {
             InetAddress.getByName("8.8.8.8")
         }

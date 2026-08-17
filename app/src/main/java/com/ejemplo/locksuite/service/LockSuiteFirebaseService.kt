@@ -357,6 +357,27 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "UNPROTECT_ACCESSIBILITY" -> {
                     policyManager.setAccessibilityProtection(false)
                 }
+
+                // ── Sub-interruptores de Protecciones de Accesibilidad (17/8/2026) ──
+                // Todos exigen PIN del dispositivo (no están en la excepción de
+                // sendCommandV8) y quedan fuera de allowedWhileSuspended: mientras
+                // LockSuite esté suspendido no se cambian políticas a medias.
+                "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)
+                "DISABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(false)
+                "ENABLE_ACC_NAG" -> policyManager.setAccNag(true)
+                "DISABLE_ACC_NAG" -> policyManager.setAccNag(false)
+                "ENABLE_ACC_SUSPEND_ALL" -> policyManager.setAccSuspendAll(true)
+                "DISABLE_ACC_SUSPEND_ALL" -> policyManager.setAccSuspendAll(false)
+                "ENABLE_BOOT_GATE_ACCESSIBILITY" -> policyManager.setBootGateWaitAccessibility(true)
+                "DISABLE_BOOT_GATE_ACCESSIBILITY" -> policyManager.setBootGateWaitAccessibility(false)
+
+                // ── Arranque protegido (ver util/BootGate.kt) ──
+                "ENABLE_BOOT_GATE" -> policyManager.setBootGateEnabled(true)
+                "DISABLE_BOOT_GATE" -> policyManager.setBootGateEnabled(false)
+
+                // ── Bloqueo de imágenes: tapado estricto al desplazar ──
+                "ENABLE_IMAGE_STRICT_SCROLL" -> policyManager.setImageBlockStrictScroll(true)
+                "DISABLE_IMAGE_STRICT_SCROLL" -> policyManager.setImageBlockStrictScroll(false)
                 "UPDATE_LOCKSUITE" -> {
                     val idToAck = commandId
                     commandId = null

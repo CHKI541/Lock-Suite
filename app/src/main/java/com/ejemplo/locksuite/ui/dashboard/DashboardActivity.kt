@@ -839,6 +839,69 @@ fun PoliciesTabContent(context: Context) {
             }
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // Grupo 3-bis: PROTECCIONES DE ACCESIBILIDAD  (17/8/2026)
+        //
+        // La Capa 3 (filtro visual: imágenes, Estados/Canales de WhatsApp, ofertas
+        // de Mercado Pago) depende del servicio de Accesibilidad, y ese servicio se
+        // puede apagar desde Ajustes del sistema. Android NO ofrece ninguna API para
+        // impedirlo — no existe `DISALLOW_CONFIG_ACCESSIBILITY` y un Device Owner no
+        // puede escribir `ENABLED_ACCESSIBILITY_SERVICES`. Es deliberado de Google.
+        //
+        // Estos cuatro interruptores son las cuatro barreras posibles. Van apagados
+        // por defecto porque cada uno tiene un costo de comodidad distinto; el
+        // administrador elige cuánto pagar. El interruptor maestro es "Protección de
+        // Accesibilidad" (`accessibility_protection_enabled`, encendido por defecto):
+        // con ese apagado, ninguno de estos hace nada.
+        // ─────────────────────────────────────────────────────────────────────
+        item {
+            PolicyGroupCard(title = "Protecciones de Accesibilidad") {
+                PolicySwitchRow(
+                    label = "Protección de Accesibilidad (maestro)",
+                    isChecked = remember(refreshKey) { policyManager.isAccessibilityProtectionEnabled() },
+                    onCheckedChange = { policyManager.setAccessibilityProtection(it).also { refreshKey++ } }
+                )
+                PolicySwitchRow(
+                    label = "Rebotar el menú de Accesibilidad de Ajustes",
+                    isChecked = remember(refreshKey) { policyManager.isAccBounceSettingsEnabled() },
+                    onCheckedChange = { policyManager.setAccBounceSettings(it).also { refreshKey++ } }
+                )
+                PolicySwitchRow(
+                    label = "Aviso insistente si la Accesibilidad está apagada",
+                    isChecked = remember(refreshKey) { policyManager.isAccNagEnabled() },
+                    onCheckedChange = { policyManager.setAccNag(it).also { refreshKey++ } }
+                )
+                PolicySwitchRow(
+                    label = "Suspender TODAS las apps mientras esté apagada",
+                    isChecked = remember(refreshKey) { policyManager.isAccSuspendAllEnabled() },
+                    onCheckedChange = { policyManager.setAccSuspendAll(it).also { refreshKey++ } }
+                )
+                PolicySwitchRow(
+                    label = "Arranque protegido: esperar también a la Accesibilidad",
+                    isChecked = remember(refreshKey) { policyManager.isBootGateWaitAccessibilityEnabled() },
+                    onCheckedChange = { policyManager.setBootGateWaitAccessibility(it).also { refreshKey++ } }
+                )
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Grupo 3-ter: ARRANQUE PROTEGIDO Y FILTRO VISUAL  (17/8/2026)
+        // ─────────────────────────────────────────────────────────────────────
+        item {
+            PolicyGroupCard(title = "Arranque protegido y filtro visual") {
+                PolicySwitchRow(
+                    label = "Arranque protegido (cerrar la red hasta que el filtro esté listo)",
+                    isChecked = remember(refreshKey) { policyManager.isBootGateEnabled() },
+                    onCheckedChange = { policyManager.setBootGateEnabled(it).also { refreshKey++ } }
+                )
+                PolicySwitchRow(
+                    label = "Imágenes: tapado estricto al desplazar",
+                    isChecked = remember(refreshKey) { policyManager.isImageBlockStrictScrollEnabled() },
+                    onCheckedChange = { policyManager.setImageBlockStrictScroll(it).also { refreshKey++ } }
+                )
+            }
+        }
+
         // Grupo 4: Opciones Avanzadas de Aplicaciones y Mercado Pago
         item {
             PolicyGroupCard(title = "Opciones Avanzadas de Aplicaciones y Mercado Pago") {

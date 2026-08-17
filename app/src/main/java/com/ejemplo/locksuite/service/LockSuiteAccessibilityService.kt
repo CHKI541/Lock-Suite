@@ -67,13 +67,26 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         private const val LOCKSUITE_PKG = "com.ejemplo.locksuite"
         private const val DEBOUNCE_MS = 300L
         /**
-         * Debounce del reposicionamiento de los recuadros de imágenes durante el scroll.
-         * Los eventos TYPE_VIEW_SCROLLED llegan hasta ~60 veces por segundo; con esto los
-         * recuadros se reubican ~20 veces por segundo (se ven "pegados" al contenido) sin
-         * re-escanear el árbol en cada uno. Subilo si en algún equipo el scroll se siente
-         * pesado; bajalo si el recuadro todavía se ve retrasado respecto de la imagen.
+         * Debounce del RE-ESCANEO del árbol durante el scroll.
+         *
+         * Ojo con este número: desde el 17/8 los recuadros ya no dependen de él para
+         * seguir al contenido. El evento de scroll trae su propio delta en píxeles
+         * (`getScrollDeltaX/Y`), así que los recuadros se corren ese delta al instante,
+         * en cada evento, gratis — sin tocar el árbol de nodos. Este debounce solo
+         * gobierna cada cuánto se hace el recorrido REAL que corrige la posición.
+         *
+         * Antes era 50 ms (20 recorridos por segundo) porque el recorrido era la única
+         * forma de mover un recuadro. Ahora 90 ms alcanza y sobra: se ve igual de pegado
+         * y se recorre el árbol la mitad de veces. Subilo si el scroll se siente pesado
+         * en algún equipo; no hace falta bajarlo para ganar fluidez.
          */
-        private const val IMAGE_SCROLL_DEBOUNCE_MS = 50L
+        private const val IMAGE_SCROLL_DEBOUNCE_MS = 90L
+
+        /**
+         * Cuánto silencio de eventos de scroll se espera para dar el desplazamiento por
+         * terminado y quitar el tapado estricto del contenedor (modo estricto opcional).
+         */
+        private const val STRICT_SCROLL_SETTLE_MS = 220L
         private const val PKG_WHATSAPP = "com.whatsapp"
         private const val PKG_WHATSAPP_BUSINESS = "com.whatsapp.w4b"
         private const val PKG_PLAY_STORE = "com.android.vending"
@@ -93,6 +106,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         /** Pausa tras un rebote fallido en Mercado Pago, para no encadenar "atrás". */
         private const val MP_BACKOFF_MS = 4_000L
+
+        /** Pausa tras tener que forzar HOME desde el menú de Accesibilidad de Ajustes. */
+        private const val ACC_BOUNCE_BACKOFF_MS = 3_000L
 
         // ── Flujo de actualización por Play Store ──
         /** Mínimo entre dos relanzamientos de Play Store si el usuario se va a otra app. */
@@ -269,6 +285,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val vendingSuspended: Boolean,
         val updateInProgress: Boolean,
         val updatingPkg: String?,
+        /** "Tapado estricto al desplazar": tapa el contenedor entero mientras dura el fling. */
+        val strictScroll: Boolean,
+        /** Rebotar al usuario si entra al menú de Accesibilidad de Ajustes. */
+        val accSettingsBounce: Boolean,
         val takenAt: Long
     )
 
@@ -298,6 +318,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             vendingSuspended = p.getBoolean("suspend_$PKG_PLAY_STORE", false),
             updateInProgress = p.getBoolean("mdm_install_in_progress", false),
             updatingPkg = p.getString("updating_package", null),
+            strictScroll = p.getBoolean("image_block_strict_scroll", false),
+            accSettingsBounce = p.getBoolean("acc_protect_bounce_settings", false),
             takenAt = SystemClock.elapsedRealtime()
         )
         cachedFlags = fresh
@@ -514,18 +536,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // ── Scroll: mantener los recuadros de imágenes pegados al contenido ──
         // TYPE_VIEW_SCROLLED se emite muchísimas veces durante un desplazamiento y no
         // dispara los demás bloqueos (WhatsApp/MP/WebView/Ajustes), así que se maneja
-        // aparte y barato. Si NO hay recuadros de imágenes en pantalla, el evento se
-        // descarta con un chequeo O(1). Si los hay, se los reubica con un debounce corto
-        // para que sigan al scroll. Antes esto no existía: los recuadros solo se movían en
-        // cada CONTENT_CHANGED (debounce de 300 ms) y por eso se veían "trabados" y
-        // quedaban en el lugar al bajar. Ver LOCKSUITE_CONTEXTO §B.13.
+        // aparte y barato. Detalle en handleScrollEvent().
         if (eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-            if (f.updateInProgress) return
-            if (!overlayManager.hasRegions("layer1:") && !overlayManager.hasRegions("layer2:")) return
-            val nowScroll = SystemClock.elapsedRealtime()
-            if (nowScroll - lastImageScrollAt < IMAGE_SCROLL_DEBOUNCE_MS) return
-            lastImageScrollAt = nowScroll
-            handleImageBlocking(packageName)
+            handleScrollEvent(ev, packageName, f)
             return
         }
 
@@ -570,6 +583,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // ── Bloqueo de WebView ──
         handleWebViewBlocking(packageName, eventType)
 
+        // ── Rebote del menú de Accesibilidad de Ajustes ──
+        // Va ANTES de la anti-evasión genérica porque es más específico y más barato:
+        // en el caso normal (95 % de las pantallas de Ajustes) se resuelve mirando el
+        // nombre de la clase de la ventana, sin tocar el árbol.
+        if (f.accSettingsBounce && isSettingsPackage(packageName)) {
+            if (handleAccessibilitySettingsBounce(ev, eventType)) return
+        }
+
         // ── Anti-evasión en Ajustes ──
         if (f.settingsEvasion && packageName == SETTINGS_PKG) {
             handleSettingsAntiEvasion()
@@ -583,6 +604,78 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         // ── Bloqueo de Imágenes por App (Capa 1 y Capa 2) ──
+        handleImageBlocking(packageName)
+    }
+
+    // ──────────────────────────────────────────────
+    // Camino rápido de scroll
+    //
+    // El problema que resuelve (reportado por el dueño con captura): el recuadro negro
+    // "tarda en enganchar y queda en su lugar cuando bajás". Antes la ÚNICA forma de
+    // mover un recuadro era volver a recorrer el árbol de nodos y volver a pedirle al
+    // sistema que reubicara la ventana. Recorrer el árbol cuesta milisegundos, así que
+    // solo se podía hacer unas pocas veces por segundo — y mientras tanto el contenido
+    // ya se había movido. Por definición el recuadro llegaba tarde.
+    //
+    // Ahora hay dos velocidades:
+    //
+    //   RÁPIDA (cada evento, microsegundos): el propio evento de scroll trae cuántos
+    //   píxeles se desplazó el contenido (`getScrollDeltaX/Y`, API 28+). Con ese número
+    //   se corren TODOS los recuadros de una, en memoria, y se repinta la capa. No hay
+    //   recorrido de árbol ni llamada al WindowManager.
+    //
+    //   LENTA (cada IMAGE_SCROLL_DEBOUNCE_MS): el recorrido real, que corrige la
+    //   posición y descubre imágenes nuevas que entraron a pantalla.
+    //
+    // En equipos con Android 8 (sin `getScrollDelta*`) no hay camino rápido y queda solo
+    // el recorrido con debounce, que es exactamente el comportamiento anterior.
+    // ──────────────────────────────────────────────
+    private var lastScrollPkg: String? = null
+
+    private val strictScrollSettleRunnable = Runnable {
+        overlayManager.setStrictCover(null)
+        lastScrollPkg?.let { handleImageBlocking(it) }
+    }
+
+    private fun handleScrollEvent(ev: AccessibilityEvent, packageName: String, f: Flags) {
+        if (f.updateInProgress) return
+        // Chequeo O(1): si no hay nada tapado, este evento no nos interesa.
+        if (overlayManager.regionCount() == 0 && !overlayManager.hasStrictCover()) return
+        lastScrollPkg = packageName
+
+        // 1. Adelanto por delta del propio evento.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val dx = ev.scrollDeltaX
+            val dy = ev.scrollDeltaY
+            // -1 es el valor centinela de "el emisor no informó el delta".
+            if (dx != -1 || dy != -1) {
+                overlayManager.translateRegions(
+                    if (dx == -1) 0 else dx,
+                    if (dy == -1) 0 else dy
+                )
+            }
+        }
+
+        // 2. Tapado estricto opcional mientras dura el desplazamiento.
+        if (f.strictScroll) {
+            val src = ev.source
+            if (src != null) {
+                try {
+                    val bounds = Rect()
+                    src.getBoundsInScreen(bounds)
+                    if (!bounds.isEmpty) overlayManager.setStrictCover(bounds)
+                } finally {
+                    src.recycle()
+                }
+            }
+            mainHandler.removeCallbacks(strictScrollSettleRunnable)
+            mainHandler.postDelayed(strictScrollSettleRunnable, STRICT_SCROLL_SETTLE_MS)
+        }
+
+        // 3. Corrección real, con debounce.
+        val nowScroll = SystemClock.elapsedRealtime()
+        if (nowScroll - lastImageScrollAt < IMAGE_SCROLL_DEBOUNCE_MS) return
+        lastImageScrollAt = nowScroll
         handleImageBlocking(packageName)
     }
 
@@ -1029,6 +1122,134 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val done: Boolean get() = inLockSuite && dangerous
     }
 
+    // ──────────────────────────────────────────────
+    // Rebote del menú de Accesibilidad de Ajustes  (switch: acc_protect_bounce_settings)
+    //
+    // Qué es y qué NO es. Esto NO impide desactivar la Accesibilidad: es la primera
+    // barrera, no la última. Alguien que reinicie el equipo y corra a Ajustes tiene
+    // una ventana en la que este servicio todavía no está levantado y por lo tanto no
+    // puede rebotar nada. Por eso va acompañado de las otras tres protecciones (aviso
+    // insistente, suspensión de apps y arranque protegido), que sí cubren esa ventana.
+    // Lo que sí logra: que el usuario común no llegue nunca a la pantalla del
+    // interruptor, y que llegar ahí sea molesto a propósito.
+    //
+    // Detección, en orden de costo:
+    //   1. Nombre de clase de la ventana con "accessibilit" — gratis. Cubre a los
+    //      fabricantes que usan una actividad dedicada (Samsung, Xiaomi, etc.).
+    //   2. Título de pantalla contra una lista de palabras en 10 idiomas, con tildes
+    //      normalizadas y coincidencia por palabra completa. Hace falta porque el
+    //      Android puro mete casi todas las sub-pantallas de Ajustes dentro de una
+    //      única clase genérica (`com.android.settings.SubSettings`), así que el
+    //      nombre de clase no alcanza. El recorrido está topeado a 12 niveles y 400
+    //      nodos: los títulos están arriba de todo, no hace falta bajar más.
+    //
+    // Con sesión de administrador abierta (PIN ingresado hace menos de 5 minutos) no
+    // rebota: si no, el propio administrador no podría apagar el servicio a propósito.
+    // ──────────────────────────────────────────────
+    private val ACCESSIBILITY_TITLE_WORDS = listOf(
+        "accesibilidad",      // es
+        "accessibility",      // en
+        "acessibilidade",     // pt
+        "accessibilite",      // fr (sin tildes: el texto se normaliza antes)
+        "accessibilita",      // it
+        "barrierefreiheit",   // de
+        "toegankelijkheid",   // nl
+        "נגישות",             // he
+        "צוגענגלעכקייט",       // yi
+        "ulaşılabilirlik"     // tr
+    )
+
+    private var accBounceInProgress = false
+    private var accBounceBackoffUntil = 0L
+    private var lastAccBounceScanAt = 0L
+
+    private fun isSettingsPackage(pkg: String): Boolean =
+        pkg == SETTINGS_PKG || pkg.endsWith(".settings")
+
+    /** Devuelve true si rebotó (y por lo tanto el evento ya está atendido). */
+    private fun handleAccessibilitySettingsBounce(ev: AccessibilityEvent, eventType: Int): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (accBounceInProgress || now < accBounceBackoffUntil) return false
+        // El administrador con sesión abierta puede entrar a propósito.
+        if (com.ejemplo.locksuite.security.SessionManager.isActive()) return false
+
+        // 1. Nombre de clase (gratis).
+        val cls = ev.className?.toString()
+        var isAccessibilityScreen = cls != null && cls.contains("accessibilit", ignoreCase = true)
+
+        // 2. Título de pantalla. Solo al cambiar de ventana, o como mucho una vez por
+        //    segundo: sin este freno el recorrido se repetiría con cada CONTENT_CHANGED.
+        if (!isAccessibilityScreen) {
+            val windowChanged = eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            if (!windowChanged && now - lastAccBounceScanAt < 1_000L) return false
+            lastAccBounceScanAt = now
+
+            val root = rootInActiveWindow ?: return false
+            try {
+                nodeBudget = 400
+                isAccessibilityScreen = hasAccessibilityTitle(root, 0)
+            } finally {
+                root.recycle()
+            }
+        }
+
+        if (!isAccessibilityScreen) return false
+
+        accBounceInProgress = true
+        Log.w(TAG, "🚫 Menú de Accesibilidad de Ajustes: rebotando al usuario.")
+        performGlobalAction(GLOBAL_ACTION_BACK)
+
+        mainHandler.postDelayed({
+            var stillThere = false
+            val current = rootInActiveWindow
+            if (current != null) {
+                val pkg = current.packageName?.toString() ?: ""
+                if (isSettingsPackage(pkg)) {
+                    nodeBudget = 400
+                    stillThere = hasAccessibilityTitle(current, 0)
+                }
+                current.recycle()
+            }
+            if (stillThere) {
+                // Un "atrás" no alcanzó (pasa cuando la pantalla es la raíz de su tarea).
+                // Se sale del todo y se deja un descanso para no encadenar acciones.
+                Log.w(TAG, "🏠 El menú de Accesibilidad persiste: forzando HOME.")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                accBounceBackoffUntil = SystemClock.elapsedRealtime() + ACC_BOUNCE_BACKOFF_MS
+            }
+            accBounceInProgress = false
+        }, 600)
+
+        return true
+    }
+
+    private fun hasAccessibilityTitle(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (depth > 12) return false
+        if (nodeBudget-- <= 0) return false
+
+        val text = node.text
+        if (text != null && text.isNotEmpty()) {
+            val folded = foldAccents(text)
+            if (ACCESSIBILITY_TITLE_WORDS.any { containsWholeWord(folded, it) }) return true
+        }
+        val desc = node.contentDescription
+        if (desc != null && desc.isNotEmpty()) {
+            val folded = foldAccents(desc)
+            if (ACCESSIBILITY_TITLE_WORDS.any { containsWholeWord(folded, it) }) return true
+        }
+
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
+            val child = node.getChild(i) ?: continue
+            try {
+                if (hasAccessibilityTitle(child, depth + 1)) return true
+            } finally {
+                child.recycle()
+            }
+        }
+        return false
+    }
+
     private fun handleSettingsAntiEvasion() {
         val root = rootInActiveWindow ?: return
         val result = SettingsScanResult()
@@ -1134,11 +1355,43 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private enum class WhatsAppRestrictedContent { STATUS, CHANNEL, NONE }
 
-    private val STATUS_ACTIVITY_HINTS = listOf("status", "stories", "mediaview")
+    // ──────────────────────────────────────────────────────────────
+    // Detección de contenido restringido de WhatsApp
+    //
+    // ⚠️ "mediaview" ESTABA ACÁ Y TAPABA DE MÁS (corregido el 17/8/2026).
+    // `com.whatsapp.MediaView` es el visor de fotos y videos de las CONVERSACIONES
+    // NORMALES, no el de Estados. Con "mediaview" en esta lista, activar "bloquear
+    // Estados" también impedía abrir una foto que te manda un contacto en un chat
+    // común — que es justamente el uso legítimo de la app. El visor de Estados real
+    // es `com.whatsapp.status.playback.StatusPlaybackActivity`, que ya queda cubierto
+    // por "status".
+    //
+    // Los Canales de WhatsApp se llaman "newsletter" internamente; ese es el nombre
+    // que aparece en las clases de actividad, en cualquier idioma.
+    // ──────────────────────────────────────────────────────────────
+    private val STATUS_ACTIVITY_HINTS = listOf("status", "stories")
     private val CHANNEL_ACTIVITY_HINTS = listOf("newsletter", "channel")
 
-    private val UPDATES_TAB_LABELS = listOf("Novedades", "Updates", "Estados", "Status", "Canales", "Channels")
-    private val CHATS_TAB_LABELS = listOf("Chats", "Conversaciones")
+    // Etiquetas de pestaña, en minúscula y SIN tildes: el texto de pantalla se
+    // normaliza con foldAccents() antes de comparar (igual que en Mercado Pago).
+    // Antes solo estaban en español e inglés, así que en un equipo en hebreo, ídish o
+    // portugués el bloqueo de la pestaña no funcionaba en absoluto.
+    private val UPDATES_TAB_LABELS = listOf(
+        "novedades", "actualizaciones", "estados",          // es
+        "updates", "status",                                // en
+        "novidades", "atualizacoes",                        // pt
+        "actualites", "mises a jour",                       // fr
+        "aktuelles", "neuigkeiten",                         // de
+        "aggiornamenti",                                    // it
+        "canales", "channels", "canais", "chaines", "kanale",
+        "עדכונים", "סטטוס", "ערוצים",                        // he
+        "דערהייַנטיקונגען"                                    // yi
+    )
+
+    private val CHATS_TAB_LABELS = listOf(
+        "Chats", "Conversaciones", "Conversas", "Unterhaltungen",
+        "Discussions", "Chat", "צ'אטים", "שמועסן"
+    )
 
     private fun classifyWhatsAppContent(className: String?): WhatsAppRestrictedContent {
         val c = className?.lowercase() ?: return WhatsAppRestrictedContent.NONE
@@ -1180,12 +1433,23 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun isNodeOrParentSelected(node: AccessibilityNodeInfo?): Boolean {
-        var current = node
+    /**
+     * ¿Este nodo, o alguno de sus ancestros cercanos, está marcado como seleccionado?
+     *
+     * Es como se reconoce la pestaña activa: WhatsApp pone `isSelected` sobre el
+     * contenedor de la pestaña, no sobre la etiqueta de texto.
+     *
+     * A diferencia de la versión anterior (`isNodeOrParentSelected`), esta NO recicla
+     * el nodo que recibe: durante un recorrido, ese nodo es propiedad de quien llama y
+     * reciclarlo dejaba un puntero muerto en manos del recorrido.
+     */
+    private fun isSelectedNodeOrAncestor(node: AccessibilityNodeInfo): Boolean {
+        if (node.isSelected) return true
+        var current = node.parent
         var depth = 0
-        while (current != null && depth < 5) {
-            val parent = current.parent
+        while (current != null && depth < 4) {
             val selected = current.isSelected
+            val parent = current.parent
             current.recycle()
             if (selected) return true
             current = parent
@@ -1211,36 +1475,85 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun scanForUpdatesTab(blockStatus: Boolean, blockChannels: Boolean) {
-        val root = rootInActiveWindow ?: return
-        val rootPkg = root.packageName?.toString() ?: ""
-        if (rootPkg != PKG_WHATSAPP && rootPkg != PKG_WHATSAPP_BUSINESS) {
-            root.recycle()
-            return
-        }
+    private class WaTabScanState {
+        var onUpdatesTab = false
+    }
 
+    /**
+     * Rebote de la pestaña "Novedades" completa.
+     *
+     * DOS CORRECCIONES DEL 17/8/2026 — las dos eran de las que el dueño pidió mirar
+     * ("que no tape de más ni de menos"):
+     *
+     *  1. TAPABA DE MÁS. En WhatsApp moderno, Estados y Canales viven JUNTOS en la
+     *     misma pestaña "Novedades". Esta función recibía `blockStatus` y
+     *     `blockChannels` y NO LOS USABA NUNCA: bastaba con tener uno de los dos
+     *     interruptores encendido para que al usuario lo sacaran de la pestaña
+     *     entera, o sea también de la mitad que sí tenía permitida. Ahora la pestaña
+     *     completa solo se rebota si están bloqueadas LAS DOS cosas. Si el
+     *     administrador bloqueó una sola, la pestaña se puede abrir y el bloqueo
+     *     actúa recién al abrir el estado o el canal concreto, por el nombre de la
+     *     actividad (`classifyWhatsAppContent`), que sí distingue una cosa de la otra.
+     *
+     *  2. TAPABA DE MENOS Y COSTABA CARO. Se hacía un `findAccessibilityNodeInfosByText`
+     *     por cada etiqueta: seis búsquedas completas del árbol en el caso normal
+     *     (el negativo, que es el 99 % de las veces), y solo en español e inglés — en
+     *     un equipo en hebreo, ídish o portugués no bloqueaba nada. Ahora es UN solo
+     *     recorrido, con tope de profundidad y de nodos, que compara contra la lista
+     *     de etiquetas en diez idiomas ya normalizada.
+     */
+    private fun scanForUpdatesTab(blockStatus: Boolean, blockChannels: Boolean) {
+        if (!blockStatus || !blockChannels) return
+
+        val root = rootInActiveWindow ?: return
         try {
-            var enTabRestringida = false
-            // Cada findAccessibilityNodeInfosByText es una búsqueda completa del árbol.
-            // Antes se hacían las seis siempre; ahora se corta apenas una da positivo.
-            outer@ for (label in UPDATES_TAB_LABELS) {
-                val matches = root.findAccessibilityNodeInfosByText(label) ?: continue
-                for (node in matches) {
-                    if (enTabRestringida) {
-                        node.recycle()
-                        continue
-                    }
-                    if (isNodeOrParentSelected(node)) {
-                        enTabRestringida = true
-                    }
-                }
-                if (enTabRestringida) break@outer
-            }
-            if (enTabRestringida) {
+            val rootPkg = root.packageName?.toString() ?: ""
+            if (rootPkg != PKG_WHATSAPP && rootPkg != PKG_WHATSAPP_BUSINESS) return
+
+            val state = WaTabScanState()
+            nodeBudget = MAX_NODES_PER_SCAN
+            scanWhatsAppTabNode(root, 0, state)
+            if (state.onUpdatesTab) {
                 redirectAwayFromUpdatesTab(root)
             }
         } finally {
             root.recycle()
+        }
+    }
+
+    private fun scanWhatsAppTabNode(node: AccessibilityNodeInfo, depth: Int, state: WaTabScanState) {
+        if (state.onUpdatesTab || depth > MAX_TREE_DEPTH) return
+        if (nodeBudget-- <= 0) return
+
+        var matched = false
+        val text = node.text
+        if (text != null && text.isNotEmpty()) {
+            val folded = foldAccents(text)
+            matched = UPDATES_TAB_LABELS.any { containsWholeWord(folded, it) }
+        }
+        if (!matched) {
+            val desc = node.contentDescription
+            if (desc != null && desc.isNotEmpty()) {
+                val folded = foldAccents(desc)
+                matched = UPDATES_TAB_LABELS.any { containsWholeWord(folded, it) }
+            }
+        }
+        // La coincidencia sola no alcanza: la palabra "Estados" también aparece en el
+        // cuerpo de un mensaje. Lo que identifica la pestaña ACTIVA es `isSelected`.
+        if (matched && isSelectedNodeOrAncestor(node)) {
+            state.onUpdatesTab = true
+            return
+        }
+
+        val childCount = node.childCount
+        for (i in 0 until childCount) {
+            val child = node.getChild(i) ?: continue
+            try {
+                scanWhatsAppTabNode(child, depth + 1, state)
+            } finally {
+                child.recycle()
+            }
+            if (state.onUpdatesTab) return
         }
     }
 
@@ -1787,6 +2100,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         mainHandler.removeCallbacks(whatsappScanRunnable)
         mainHandler.removeCallbacks(mercadoPagoScanRunnable)
         mainHandler.removeCallbacks(updateTickRunnable)
+        mainHandler.removeCallbacks(strictScrollSettleRunnable)
         webViewRetryRunnables.forEach { mainHandler.removeCallbacks(it) }
         webViewRetryRunnables.clear()
         releaseUpdateWakeLock()

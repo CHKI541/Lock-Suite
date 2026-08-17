@@ -24,16 +24,60 @@ class WatchdogForegroundService : Service() {
         const val NOTIFICATION_ID = 9001
         const val CHANNEL_ID = "locksuite_watchdog_channel"
         @Volatile var temporaryPauseUntil: Long = 0L
+
+        /** Notificación del aviso insistente de accesibilidad. Canal aparte, de alta prioridad. */
+        const val NAG_NOTIFICATION_ID = 9003
+        const val NAG_CHANNEL_ID = "locksuite_accessibility_nag"
+
+        /** Cada cuánto vuelve a aparecer el aviso. El dueño pidió 15-20 s. */
+        private const val NAG_INTERVAL_MS = 18_000L
+
+        // ── Claves de los interruptores de "Protecciones de Accesibilidad" ──
+        const val KEY_ACC_BOUNCE_SETTINGS = "acc_protect_bounce_settings"
+        const val KEY_ACC_NAG = "acc_protect_nag"
+        const val KEY_ACC_SUSPEND_ALL = "acc_protect_suspend_all"
     }
 
     private var lastBlockLaunchTime = 0L
     private var lastSyncTime = 0L
     private var lastPrivateDnsEnforceTime = 0L
+    private var lastNagAt = 0L
+    private var emergencySuspendApplied = false
     private var accessibilityObserver: android.database.ContentObserver? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * Aviso insistente de accesibilidad apagada (interruptor `acc_protect_nag`).
+     *
+     * Va en su propio ciclo de 18 s y NO dentro del ciclo de 20 s del Watchdog: el
+     * pedido del dueño era "cada 15-20 segundos", y engancharlo al ciclo grande
+     * significaría rehacer todo el resto del trabajo del Watchdog solo para mostrar
+     * una notificación. Este runnable solo se encola mientras el aviso hace falta y se
+     * desencola apenas la accesibilidad vuelve, así que en el caso normal (todo bien)
+     * no corre nunca.
+     */
+    private val nagRunnable = object : Runnable {
+        override fun run() {
+            if (!shouldNag()) {
+                cancelNag()
+                return
+            }
+            showAccessibilityNag()
+            handler.postDelayed(this, NAG_INTERVAL_MS)
+        }
+    }
+
     private val checkRunnable = object : Runnable {
         override fun run() {
             checkAccessibilityStatus()
+
+            // Arranque protegido: liberar la red si el filtro ya está listo, o si venció
+            // la ventana de seguridad. Ver util/BootGate.kt.
+            try {
+                com.ejemplo.locksuite.util.BootGate.tick(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
 
             // Garantizar que la VPN Kosher siga ejecutándose si alguna política la requiere
             com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(applicationContext)
@@ -122,47 +166,168 @@ class WatchdogForegroundService : Service() {
         }
     }
 
+    /**
+     * ¿Corresponde exigir la Accesibilidad ahora mismo? Devuelve null si no hay que
+     * hacer nada (suspensión, protección apagada, sin PIN configurado, sesión de
+     * administrador abierta); si corresponde, devuelve si el servicio está activo.
+     */
+    private fun accessibilityRequirementState(context: android.content.Context): Boolean? {
+        if (android.os.SystemClock.elapsedRealtime() < temporaryPauseUntil) return null
+        val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+        // Con LockSuite suspendido no se exige Accesibilidad ni se suspende nada: si no,
+        // la pantalla de bloqueo aparecería justo cuando el administrador acaba de
+        // liberar el equipo.
+        if (policyManager.isLockSuiteSuspended()) return null
+        if (!policyManager.isAccessibilityProtectionEnabled()) return null
+        if (!com.ejemplo.locksuite.security.PinManager.isPinConfigured(context)) return null
+        if (com.ejemplo.locksuite.security.SessionManager.isActive()) return null
+        return com.ejemplo.locksuite.util.BootGate.isAccessibilityServiceActive(context)
+    }
+
     private fun checkAccessibilityStatus() {
         val context = applicationContext
         val now = android.os.SystemClock.elapsedRealtime()
-        if (now < temporaryPauseUntil) return
-        // Con LockSuite suspendido no se exige Accesibilidad ni se suspenden
-        // navegadores: si no, la pantalla de bloqueo de accesibilidad aparecería
-        // justo cuando el administrador acaba de liberar el equipo.
+        val active = accessibilityRequirementState(context) ?: run {
+            // Si dejó de corresponder exigirla, hay que desarmar lo que se aplicó.
+            cancelNag()
+            liftEmergencySuspendIfNeeded(context)
+            return
+        }
         val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-        if (policyManager.isLockSuiteSuspended()) return
-        if (!policyManager.isAccessibilityProtectionEnabled()) return
-        if (!com.ejemplo.locksuite.security.PinManager.isPinConfigured(context)) return
-        if (com.ejemplo.locksuite.security.SessionManager.isActive()) return
+        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
 
-        val enabledServices = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: ""
+        if (active) {
+            cancelNag()
+            liftEmergencySuspendIfNeeded(context)
+            return
+        }
 
-        val shortId = "com.ejemplo.locksuite/.service.LockSuiteAccessibilityService"
-        val longId = "com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService"
-        val isAccessibilityActive = enabledServices.contains(shortId) || enabledServices.contains(longId)
+        // ── La accesibilidad está APAGADA ──
 
-        if (!isAccessibilityActive) {
-            // Suspender navegadores
-            if (!policyManager.areBrowsersSuspended()) {
-                com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
-                    .edit()
-                    .putBoolean("browsers_suspended_by_watchdog", true)
-                    .apply()
-                policyManager.setBrowsersSuspended(true)
+        // Suspender navegadores (comportamiento histórico, siempre activo).
+        if (!policyManager.areBrowsersSuspended()) {
+            prefs.edit().putBoolean("browsers_suspended_by_watchdog", true).apply()
+            policyManager.setBrowsersSuspended(true)
+        }
+
+        // Interruptor: suspender TODAS las apps no críticas, no solo los navegadores.
+        // Es lo que convierte "el equipo es incómodo" en "el equipo no sirve para nada
+        // hasta que la reactives".
+        if (prefs.getBoolean(KEY_ACC_SUSPEND_ALL, false) && !emergencySuspendApplied) {
+            emergencySuspendApplied = true
+            try {
+                com.ejemplo.locksuite.mdm.AppController(context).setEmergencySuspendAll(true)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
+        }
 
-            // Evitar relanzar la actividad repetidamente si ya se lanzó hace menos de 3 segundos
-            if (now - lastBlockLaunchTime > 3000) {
-                lastBlockLaunchTime = now
-                // Abrir pantalla de bloqueo de accesibilidad
-                val blockIntent = Intent(context, com.ejemplo.locksuite.ui.emergency.BlockAccessibilityActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        // Interruptor: aviso insistente cada ~18 s.
+        if (prefs.getBoolean(KEY_ACC_NAG, false)) {
+            startNagIfNeeded()
+        } else {
+            cancelNag()
+        }
+
+        // Evitar relanzar la actividad repetidamente si ya se lanzó hace menos de 3 segundos
+        if (now - lastBlockLaunchTime > 3000) {
+            lastBlockLaunchTime = now
+            // Abrir pantalla de bloqueo de accesibilidad
+            val blockIntent = Intent(context, com.ejemplo.locksuite.ui.emergency.BlockAccessibilityActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            }
+            context.startActivity(blockIntent)
+        }
+    }
+
+    private fun liftEmergencySuspendIfNeeded(context: android.content.Context) {
+        if (!emergencySuspendApplied) return
+        emergencySuspendApplied = false
+        try {
+            com.ejemplo.locksuite.mdm.AppController(context).setEmergencySuspendAll(false)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // Aviso insistente de accesibilidad apagada
+    // ──────────────────────────────────────────────
+
+    private fun shouldNag(): Boolean {
+        val context = applicationContext
+        if (!com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
+                .getBoolean(KEY_ACC_NAG, false)
+        ) return false
+        // null = no corresponde exigirla; true = ya está activa.
+        return accessibilityRequirementState(context) == false
+    }
+
+    private fun startNagIfNeeded() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        // Si ya está en marcha, no re-encolar: duplicaría el ritmo del aviso.
+        if (now - lastNagAt < NAG_INTERVAL_MS) return
+        handler.removeCallbacks(nagRunnable)
+        handler.post(nagRunnable)
+    }
+
+    private fun cancelNag() {
+        handler.removeCallbacks(nagRunnable)
+        lastNagAt = 0L
+        try {
+            getSystemService(NotificationManager::class.java)?.cancel(NAG_NOTIFICATION_ID)
+        } catch (e: Exception) {
+            // ignorado
+        }
+    }
+
+    private fun showAccessibilityNag() {
+        lastNagAt = android.os.SystemClock.elapsedRealtime()
+        val context = applicationContext
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    NAG_CHANNEL_ID,
+                    "Protección de Accesibilidad",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Avisa cuando el servicio de Accesibilidad de LockSuite está desactivado"
+                    enableVibration(true)
+                    setShowBadge(true)
                 }
-                context.startActivity(blockIntent)
+                getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
             }
+
+            val openIntent = Intent(context, com.ejemplo.locksuite.ui.emergency.BlockAccessibilityActivity::class.java)
+                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK) }
+            val pending = android.app.PendingIntent.getActivity(
+                context, 0, openIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notification = NotificationCompat.Builder(context, NAG_CHANNEL_ID)
+                .setContentTitle("Protección desactivada")
+                .setContentText("El servicio de Accesibilidad de LockSuite está apagado. Tocá para reactivarlo.")
+                .setStyle(
+                    NotificationCompat.BigTextStyle().bigText(
+                        "El filtro de contenido no está funcionando porque el servicio de " +
+                            "Accesibilidad de LockSuite fue desactivado. El equipo permanecerá " +
+                            "restringido hasta que se vuelva a activar."
+                    )
+                )
+                .setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setContentIntent(pending)
+                .setAutoCancel(false)
+                .setOngoing(true)
+                .setOnlyAlertOnce(false)
+                .build()
+
+            androidx.core.app.NotificationManagerCompat.from(context)
+                .notify(NAG_NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            android.util.Log.w("LockSuite_Watchdog", "No se pudo mostrar el aviso de accesibilidad: ${e.message}")
         }
     }
 
@@ -213,6 +378,7 @@ class WatchdogForegroundService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(checkRunnable)
+        handler.removeCallbacks(nagRunnable)
         accessibilityObserver?.let {
             try { contentResolver.unregisterContentObserver(it) } catch (e: Exception) { }
         }

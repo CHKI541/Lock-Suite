@@ -20,6 +20,24 @@ class BootReceiver : BroadcastReceiver() {
 
         android.util.Log.i("BootReceiver", "Recibido broadcast de sistema: $action")
 
+        // 0. ARRANQUE PROTEGIDO — lo PRIMERO de todo, antes que cualquier otra cosa.
+        //
+        // Las restricciones de red las aplica nuestra VPN de filtrado, y esa VPN tarda
+        // unos segundos en levantar después del arranque. En ese hueco el equipo tiene
+        // internet sin filtrar. Acá se cierra la red con una sola llamada al sistema
+        // (proxy global a un puerto muerto) y se vuelve a abrir recién cuando el túnel
+        // está leyendo paquetes de verdad. El porqué completo, y qué cubre y qué no,
+        // está en el comentario de cabecera de util/BootGate.kt.
+        //
+        // Va antes de reaplicar restricciones a propósito: reapplyAllRestrictions() hace
+        // decenas de llamadas al DevicePolicyManager y puede tardar cientos de ms, que es
+        // justo el tiempo que estamos tratando de cubrir.
+        try {
+            com.ejemplo.locksuite.util.BootGate.engage(context)
+        } catch (e: Exception) {
+            android.util.Log.e("BootReceiver", "Error activando el arranque protegido: ${e.message}")
+        }
+
         // 1. Re-aplicar restricciones MDM de inmediato
         try {
             val policyManager = PolicyManager(context)

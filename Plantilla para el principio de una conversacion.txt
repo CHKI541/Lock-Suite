@@ -4,7 +4,6 @@ Leé primero LOCKSUITE_CONTEXTO_PARA_IA.md completo. Hoy quiero: [tarea puntual]
 Si toca alguno de los puntos B.2 a B.9, leé también el documento de detalle
 que se menciona ahí antes de tocar código.
 
-Plantilla para el final (esto responde también tu pregunta de los commits, van juntas a propósito):
 
 Antes de cerrar: 1) actualizá LOCKSUITE_CONTEXTO_PARA_IA.md — en la sección B
 tachá lo que resolviste y confirmaste en equipo real, agregá lo nuevo que

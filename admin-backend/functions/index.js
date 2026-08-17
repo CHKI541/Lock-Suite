@@ -58,6 +58,19 @@ const ALLOWED_COMMANDS = new Set([
   // esta en la excepcion de UPDATE_*), porque deja el equipo sin proteccion.
   "SUSPEND_LOCKSUITE", "RESUME_LOCKSUITE",
   "PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY",
+  // Sub-interruptores de "Protecciones de Accesibilidad" (17/8/2026). Todos
+  // exigen PIN del dispositivo: NO estan en la excepcion de UPDATE_* de mas
+  // abajo. Cambian el comportamiento del filtro visual, asi que un operador del
+  // panel no deberia poder aflojarlos sin conocer el PIN del equipo.
+  "ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS",
+  "ENABLE_ACC_NAG", "DISABLE_ACC_NAG",
+  "ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL",
+  "ENABLE_BOOT_GATE_ACCESSIBILITY", "DISABLE_BOOT_GATE_ACCESSIBILITY",
+  // Arranque protegido: cierra la red al bootear hasta que el filtro DNS esta
+  // realmente funcionando (ver app/util/BootGate.kt).
+  "ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE",
+  // Bloqueo de imagenes: tapado estricto del contenedor mientras se desplaza.
+  "ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL",
 ]);
 
 function canonicalCommandPayload(payload) {

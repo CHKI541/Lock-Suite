@@ -275,6 +275,30 @@ function updateSidebarUI(e, t) {
         e.checked = field(t, n, false) === true;
     });
 
+    // ── Arranque protegido: mostrar cómo terminó el último arranque ──
+    // Sin esto no hay forma de saber si el bloqueo preventivo se liberó porque el
+    // filtro levantó bien o porque venció la ventana de seguridad, que es
+    // justamente el caso que hay que ir a mirar.
+    const bootGateStatus = document.getElementById("boot-gate-status");
+    if (bootGateStatus) {
+        const last = field(t, "bootGateLastResult", "");
+        if (!last) {
+            bootGateStatus.textContent = "";
+        } else if (last === "filtro listo") {
+            bootGateStatus.textContent = "Último arranque: la red se reabrió cuando el filtro estuvo listo. ✓";
+            bootGateStatus.style.color = "";
+        } else if (last === "en curso") {
+            bootGateStatus.textContent = "Arranque protegido EN CURSO: la red está cerrada esperando al filtro.";
+            bootGateStatus.style.color = "#f0b429";
+        } else if (last.indexOf("vencido") === 0) {
+            bootGateStatus.textContent = "⚠ Último arranque: venció la ventana sin confirmar el filtro. La red se reabrió igual. Revisar la VPN de este equipo.";
+            bootGateStatus.style.color = "#e0574b";
+        } else {
+            bootGateStatus.textContent = "Último arranque: " + last;
+            bootGateStatus.style.color = "";
+        }
+    }
+
     // ── Suspensión de LockSuite: resaltar la tarjeta cuando está activa ──
     const isSuspended = field(t, "locksuiteSuspended", false) === true;
     const suspendCard = document.getElementById("suspend-card");
@@ -973,7 +997,15 @@ saveNameBtn.addEventListener("click", async () => {
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
-            accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"]
+            accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
+            // Protecciones de Accesibilidad (17/8/2026)
+            accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
+            accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
+            accSuspendAll: ["ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL"],
+            bootGateWaitAccessibility: ["ENABLE_BOOT_GATE_ACCESSIBILITY", "DISABLE_BOOT_GATE_ACCESSIBILITY"],
+            // Arranque protegido y filtro visual
+            bootGateEnabled: ["ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE"],
+            imageStrictScroll: ["ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL"]
         } [n];
     if (!i) return;
     const d = a ? i[0] : i[1];
@@ -2084,6 +2116,13 @@ if (groupSidebar) {
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
+            // Protecciones de Accesibilidad (17/8/2026) — tambien por grupo
+            accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
+            accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
+            accSuspendAll: ["ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL"],
+            bootGateWaitAccessibility: ["ENABLE_BOOT_GATE_ACCESSIBILITY", "DISABLE_BOOT_GATE_ACCESSIBILITY"],
+            bootGateEnabled: ["ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE"],
+            imageStrictScroll: ["ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
         } [policyKey];
         

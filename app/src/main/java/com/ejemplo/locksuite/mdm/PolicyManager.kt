@@ -655,6 +655,34 @@ class PolicyManager(private val context: Context) {
         return PrefsHelper.getMdmPrefs(context).getBoolean("internet_blocked", false)
     }
 
+    /**
+     * Igual que [setInternetBlocked] pero SIN escribir la preferencia `internet_blocked`.
+     *
+     * Lo usa el Arranque Protegido (`util/BootGate.kt`), que cierra la red unos segundos
+     * mientras la VPN de filtrado termina de levantar. La diferencia importa: la
+     * preferencia representa la INTENCIÓN del administrador ("este equipo tiene que estar
+     * sin internet"), y `reapplyAllRestrictions()` la usa para reconstruir el estado. Si
+     * el arranque protegido la escribiera, un equipo cuyo bloqueo preventivo no llegara a
+     * limpiarse quedaría marcado como "sin internet a propósito" para siempre.
+     *
+     * Por el mismo motivo, BootGate no llama a esto si `isInternetBlocked()` ya es true:
+     * ahí no hay nada que agregar, y al liberar no hay que tocar nada.
+     */
+    fun setNetworkGateBlocked(block: Boolean): Boolean {
+        return try {
+            if (block) {
+                val proxyInfo = android.net.ProxyInfo.buildDirectProxy("127.0.0.1", 9999)
+                dpm.setRecommendedGlobalProxy(adminComponent, proxyInfo)
+            } else {
+                dpm.setRecommendedGlobalProxy(adminComponent, null)
+            }
+            true
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "setNetworkGateBlocked($block) falló: ${e.message}")
+            false
+        }
+    }
+
     fun setWhatsAppBlockStatus(enabled: Boolean) {
         PrefsHelper.getMdmPrefs(context).edit().putBoolean("whatsapp_block_status", enabled).apply()
     }
@@ -952,6 +980,107 @@ class PolicyManager(private val context: Context) {
         val ok = applyAccessibilityProtection(enable)
         PrefsHelper.getMdmPrefs(context).edit().putBoolean("accessibility_protection_enabled", enable).apply()
         return ok
+    }
+
+    // ──────────────────────────────────────────────
+    // Sub-interruptores de "Protecciones de Accesibilidad"  (17/8/2026)
+    //
+    // Todos cuelgan del interruptor maestro `accessibility_protection_enabled`: si el
+    // maestro está apagado, ninguno de estos hace nada. Van APAGADOS por defecto a
+    // propósito — cada uno tiene un costo de comodidad para el usuario final, y quién
+    // lo paga lo decide el administrador, no el código.
+    //
+    // Aclaración que hay que repetir cada vez que se toca esto: Android NO tiene
+    // ninguna API para impedir que se desactive un servicio de accesibilidad. No existe
+    // `DISALLOW_CONFIG_ACCESSIBILITY`, `setSecureSetting()` de Device Owner no acepta
+    // `ENABLED_ACCESSIBILITY_SERVICES`, y volver a encenderlo por código necesita
+    // `WRITE_SECURE_SETTINGS`, que un Device Owner no tiene. Es deliberado de Google:
+    // si un MDM pudiera clavar un servicio de accesibilidad, cualquier spyware con
+    // Device Owner también podría. Lo que sigue no cierra esa puerta — la hace lo
+    // bastante molesta como para que no valga la pena cruzarla.
+    // ──────────────────────────────────────────────
+
+    /** Rebotar al usuario si entra al menú de Accesibilidad de Ajustes. */
+    fun isAccBounceSettingsEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("acc_protect_bounce_settings", false)
+
+    fun setAccBounceSettings(enable: Boolean): Boolean {
+        if (deferIfSuspended("acc_protect_bounce_settings", enable)) return true
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("acc_protect_bounce_settings", enable).apply()
+        return true
+    }
+
+    /** Aviso insistente cada ~18 s mientras la accesibilidad esté apagada. */
+    fun isAccNagEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("acc_protect_nag", false)
+
+    fun setAccNag(enable: Boolean): Boolean {
+        if (deferIfSuspended("acc_protect_nag", enable)) return true
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("acc_protect_nag", enable).apply()
+        return true
+    }
+
+    /** Suspender TODAS las apps no críticas (no solo navegadores) mientras esté apagada. */
+    fun isAccSuspendAllEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("acc_protect_suspend_all", false)
+
+    fun setAccSuspendAll(enable: Boolean): Boolean {
+        if (deferIfSuspended("acc_protect_suspend_all", enable)) return true
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("acc_protect_suspend_all", enable).apply()
+        // Si se apaga con la suspensión de emergencia puesta, hay que levantarla ya
+        // mismo: si no, el equipo se queda con todas las apps suspendidas hasta el
+        // próximo ciclo del Watchdog.
+        if (!enable) {
+            try {
+                AppController(context).setEmergencySuspendAll(false)
+            } catch (e: Exception) {
+                android.util.Log.w("PolicyManager", "No se pudo levantar la suspensión de emergencia: ${e.message}")
+            }
+        }
+        return true
+    }
+
+    // ──────────────────────────────────────────────
+    // Arranque protegido  (ver util/BootGate.kt)
+    // ──────────────────────────────────────────────
+
+    /** Encendido por defecto: es el que tapa el hueco del reinicio. */
+    fun isBootGateEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("boot_gate_enabled", true)
+
+    fun setBootGateEnabled(enable: Boolean): Boolean {
+        if (deferIfSuspended("boot_gate_enabled", enable)) return true
+        com.ejemplo.locksuite.util.BootGate.setEnabled(context, enable)
+        return true
+    }
+
+    /** Además del filtro de red, esperar a que la Accesibilidad esté activa. */
+    fun isBootGateWaitAccessibilityEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("boot_gate_wait_accessibility", false)
+
+    fun setBootGateWaitAccessibility(enable: Boolean): Boolean {
+        if (deferIfSuspended("boot_gate_wait_accessibility", enable)) return true
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("boot_gate_wait_accessibility", enable).apply()
+        return true
+    }
+
+    // ──────────────────────────────────────────────
+    // Bloqueo de imágenes: tapado estricto al desplazar
+    // ──────────────────────────────────────────────
+
+    /**
+     * Con esto encendido, mientras el usuario desplaza rápido se tapa el contenedor
+     * ENTERO y al frenar vuelven los recuadros exactos: cero riesgo de que se vea una
+     * imagen un par de frames, a cambio de tapar de más durante el movimiento.
+     * Apagado = solo seguimiento rápido, nunca tapa de más.
+     */
+    fun isImageBlockStrictScrollEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("image_block_strict_scroll", false)
+
+    fun setImageBlockStrictScroll(enable: Boolean): Boolean {
+        if (deferIfSuspended("image_block_strict_scroll", enable)) return true
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("image_block_strict_scroll", enable).apply()
+        return true
     }
 
     /**

@@ -54,6 +54,60 @@ class AppController(private val context: Context) {
         return packageName in partialBlockOnly
     }
 
+    /**
+     * Suspende (o des-suspende) DE UNA SOLA VEZ todas las apps de usuario que no sean
+     * críticas para el sistema.
+     *
+     * Lo usa la Protección de Accesibilidad cuando detecta que el servicio quedó
+     * apagado (interruptor `acc_protect_suspend_all`). Hasta ahora en ese caso solo se
+     * suspendían los navegadores, así que el equipo seguía siendo usable: se podía
+     * abrir WhatsApp, la galería o cualquier otra cosa con el filtro visual caído.
+     *
+     * Tres decisiones de implementación que importan:
+     *
+     *  • Una sola llamada a `setPackagesSuspended` con TODO el arreglo, en vez de una
+     *    por app. Cada llamada es un IPC al sistema; en un equipo con 80 apps la
+     *    diferencia es entre una llamada y ochenta.
+     *  • NO escribe las preferencias `suspend_<paquete>`. Esas preferencias representan
+     *    lo que el administrador decidió; esto es un estado de emergencia temporal. Si
+     *    lo escribiera, al reactivar la accesibilidad las apps quedarían suspendidas
+     *    "a propósito" para siempre.
+     *  • Al levantar la emergencia se respeta lo que el administrador SÍ había
+     *    suspendido: esas apps no se reactivan.
+     */
+    fun setEmergencySuspendAll(suspend: Boolean): Boolean {
+        return try {
+            val prefs = PrefsHelper.getMdmPrefs(context)
+            val installed = pm.getInstalledApplications(0)
+            val targets = ArrayList<String>(installed.size)
+
+            for (app in installed) {
+                val pkg = app.packageName
+                if (isCritical(pkg) || isPartialBlockOnly(pkg)) continue
+                // Las apps del sistema sin lanzador no aportan nada al suspenderlas y
+                // sí pueden romper cosas.
+                if ((app.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                    pm.getLaunchIntentForPackage(pkg) == null
+                ) continue
+                // Al levantar la emergencia, dejar suspendido lo que el administrador
+                // había suspendido a propósito.
+                if (!suspend && prefs.getBoolean("suspend_$pkg", false)) continue
+                targets.add(pkg)
+            }
+
+            if (targets.isEmpty()) return true
+            dpm.setPackagesSuspended(adminComponent, targets.toTypedArray(), suspend)
+            android.util.Log.i(
+                "AppController",
+                "Suspensión de emergencia ${if (suspend) "APLICADA" else "LEVANTADA"} sobre ${targets.size} apps"
+            )
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("AppController", "setEmergencySuspendAll($suspend) falló: ${e.message}")
+            false
+        }
+    }
+
     fun hideApp(packageName: String, hide: Boolean): Boolean {
         // Ver la nota de PolicyManager.setRestriction: mientras LockSuite está
         // suspendido se registra la intención sin tocar el sistema.

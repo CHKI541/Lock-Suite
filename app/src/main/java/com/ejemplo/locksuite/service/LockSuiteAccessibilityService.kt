@@ -66,6 +66,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         private const val SETTINGS_PKG = "com.android.settings"
         private const val LOCKSUITE_PKG = "com.ejemplo.locksuite"
         private const val DEBOUNCE_MS = 300L
+        /**
+         * Debounce del reposicionamiento de los recuadros de imágenes durante el scroll.
+         * Los eventos TYPE_VIEW_SCROLLED llegan hasta ~60 veces por segundo; con esto los
+         * recuadros se reubican ~20 veces por segundo (se ven "pegados" al contenido) sin
+         * re-escanear el árbol en cada uno. Subilo si en algún equipo el scroll se siente
+         * pesado; bajalo si el recuadro todavía se ve retrasado respecto de la imagen.
+         */
+        private const val IMAGE_SCROLL_DEBOUNCE_MS = 50L
         private const val PKG_WHATSAPP = "com.whatsapp"
         private const val PKG_WHATSAPP_BUSINESS = "com.whatsapp.w4b"
         private const val PKG_PLAY_STORE = "com.android.vending"
@@ -186,6 +194,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastCheckedAt = 0L
+    /** Último reposicionamiento de recuadros de imágenes por scroll (elapsedRealtime). */
+    private var lastImageScrollAt = 0L
 
     private val whatsappScanRunnable = Runnable {
         val f = flags()
@@ -374,7 +384,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                           AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                          AccessibilityEvent.TYPE_VIEW_SELECTED
+                          AccessibilityEvent.TYPE_VIEW_SELECTED or
+                          // Necesario para que los recuadros de imágenes sigan al
+                          // contenido durante el scroll en vez de quedarse en el lugar.
+                          AccessibilityEvent.TYPE_VIEW_SCROLLED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.flags = info.flags or
                      AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
@@ -423,7 +436,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val eventType = ev.eventType
         if (eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
-            eventType != AccessibilityEvent.TYPE_VIEW_SELECTED) return
+            eventType != AccessibilityEvent.TYPE_VIEW_SELECTED &&
+            eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED) return
 
         val f = flags()
 
@@ -496,6 +510,24 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // Garantizar que no consuma batería si la pantalla está inactiva (apagada)
         // Esto va DESPUÉS del check de UPDATE_APP, que sí necesita funcionar con pantalla apagada
         if (!powerManager.isInteractive) {
+            return
+        }
+
+        // ── Scroll: mantener los recuadros de imágenes pegados al contenido ──
+        // TYPE_VIEW_SCROLLED se emite muchísimas veces durante un desplazamiento y no
+        // dispara los demás bloqueos (WhatsApp/MP/WebView/Ajustes), así que se maneja
+        // aparte y barato. Si NO hay recuadros de imágenes en pantalla, el evento se
+        // descarta con un chequeo O(1). Si los hay, se los reubica con un debounce corto
+        // para que sigan al scroll. Antes esto no existía: los recuadros solo se movían en
+        // cada CONTENT_CHANGED (debounce de 300 ms) y por eso se veían "trabados" y
+        // quedaban en el lugar al bajar. Ver LOCKSUITE_CONTEXTO §B.13.
+        if (eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            if (f.updateInProgress) return
+            if (!overlayManager.hasRegions("layer1:") && !overlayManager.hasRegions("layer2:")) return
+            val nowScroll = SystemClock.elapsedRealtime()
+            if (nowScroll - lastImageScrollAt < IMAGE_SCROLL_DEBOUNCE_MS) return
+            lastImageScrollAt = nowScroll
+            handleImageBlocking(packageName)
             return
         }
 
@@ -1095,6 +1127,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun Int.toEventName(): String = when (this) {
         AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED   -> "STATE_CHANGED"
         AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "CONTENT_CHANGED"
+        AccessibilityEvent.TYPE_VIEW_SCROLLED          -> "SCROLLED"
+        AccessibilityEvent.TYPE_VIEW_SELECTED          -> "VIEW_SELECTED"
         else -> "OTHER($this)"
     }
 

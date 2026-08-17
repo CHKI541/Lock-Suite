@@ -114,6 +114,9 @@ object UpdateFlowManager {
     fun currentStage(context: Context): String =
         PrefsHelper.getMdmPrefs(context).getString(KEY_STAGE, STAGE_IDLE) ?: STAGE_IDLE
 
+    fun currentDetail(context: Context): String? =
+        PrefsHelper.getMdmPrefs(context).getString(KEY_DETAIL, null)
+
     fun isCancelable(context: Context): Boolean =
         PrefsHelper.getMdmPrefs(context).getBoolean(KEY_CANCELABLE, true)
 
@@ -151,14 +154,14 @@ object UpdateFlowManager {
     fun stageLabel(stage: String?, detail: String?): String {
         if (!detail.isNullOrBlank()) return detail
         return when (stage) {
-            STAGE_PREPARING -> "Preparando la actualizacion..."
+            STAGE_PREPARING -> "Preparando la actualización..."
             STAGE_OPENING_STORE -> "Abriendo Google Play..."
             STAGE_WAITING_STORE -> "Esperando a Google Play..."
-            STAGE_LOOKING_BUTTON -> "Buscando el boton Actualizar..."
-            STAGE_CONFIRMING -> "Confirmando..."
-            STAGE_DOWNLOADING -> "Descargando la actualizacion..."
+            STAGE_LOOKING_BUTTON -> "Buscando actualización..."
+            STAGE_CONFIRMING -> "Confirmando descarga..."
+            STAGE_DOWNLOADING -> "Descargando actualización..."
             STAGE_INSTALLING -> "Instalando..."
-            STAGE_FINISHING -> "Terminando y volviendo a bloquear..."
+            STAGE_FINISHING -> "Finalizando y asegurando dispositivo..."
             else -> "Por favor, no toque la pantalla..."
         }
     }
@@ -331,14 +334,16 @@ object UpdateFlowManager {
         val prefs = PrefsHelper.getMdmPrefs(ctx)
         val prevStage = prefs.getString(KEY_STAGE, STAGE_IDLE)
         val prevDetail = prefs.getString(KEY_DETAIL, null)
-        if (prevStage == stage && prevDetail == detail) return
+        val effectiveDetail = detail ?: if (stage == prevStage) prevDetail else null
+
+        if (prevStage == stage && prevDetail == effectiveDetail) return
 
         val editor = prefs.edit().putString(KEY_STAGE, stage)
-        if (detail == null) editor.remove(KEY_DETAIL) else editor.putString(KEY_DETAIL, detail)
+        if (effectiveDetail == null) editor.remove(KEY_DETAIL) else editor.putString(KEY_DETAIL, effectiveDetail)
         editor.apply()
 
         LockSuiteAccessibilityService.instance?.overlayManager
-            ?.updateBlockingMessage(null, stageLabel(stage, detail))
+            ?.updateBlockingMessage(null, stageLabel(stage, effectiveDetail))
 
         syncToPanel(ctx, force = false)
     }
@@ -347,14 +352,15 @@ object UpdateFlowManager {
         context: Context,
         packageName: String,
         stage: String,
-        detail: String?,
-        cancelable: Boolean
+        detail: String? = null,
+        cancelable: Boolean = isCancelable(context)
     ) {
         val service = LockSuiteAccessibilityService.instance ?: return
         val ctx = context.applicationContext
+        val effectiveDetail = detail ?: currentDetail(ctx)
         service.overlayManager.showBlockingMessageOverlay(
             title = "Actualizando ${appLabel(ctx, packageName)}",
-            subtitle = stageLabel(stage, detail),
+            subtitle = stageLabel(stage, effectiveDetail),
             cancelable = cancelable,
             onCancel = { requestCancel(ctx) }
         )
@@ -367,7 +373,7 @@ object UpdateFlowManager {
     fun requestCancel(context: Context) {
         val ctx = context.applicationContext
         Log.i(TAG, "Cancelacion pedida por el usuario/panel")
-        finish(ctx, RESULT_CANCELLED, "Actualizacion cancelada.")
+        finish(ctx, RESULT_CANCELLED, "Actualización cancelada.")
     }
 
     fun finish(context: Context, result: String, message: String? = null) {
@@ -402,49 +408,72 @@ object UpdateFlowManager {
         service?.invalidateFlagsCache()
         service?.resetUpdateSession()
 
-        service?.overlayManager?.hideBlockingMessageOverlay()
-
-        try {
-            if (service != null) {
-                service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
-            } else {
-                val home = Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_HOME)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                ctx.startActivity(home)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "No se pudo volver al inicio: ${e.message}")
+        val label = if (!pkg.isNullOrBlank()) appLabel(ctx, pkg) else "App"
+        val finalNotice = when (result) {
+            RESULT_UP_TO_DATE -> message ?: "$label ya está actualizada."
+            RESULT_UPDATED -> message ?: "✓ Actualización completada con éxito."
+            RESULT_CANCELLED -> message ?: "Actualización cancelada."
+            RESULT_ERROR -> message ?: "No se pudo completar la actualización."
+            else -> message
         }
 
+        val showNoticeOnOverlay = !finalNotice.isNullOrBlank() &&
+            service?.overlayManager?.isBlockingMessageVisible() == true
+
+        if (showNoticeOnOverlay) {
+            service?.overlayManager?.updateBlockingMessage(
+                title = label,
+                subtitle = finalNotice
+            )
+        }
+
+        val delayMs = if (showNoticeOnOverlay) 1800L else 0L
+
         mainHandler.postDelayed({
+            service?.overlayManager?.hideBlockingMessageOverlay()
+
             try {
-                PolicyManager(ctx).restoreInstallRestrictions()
+                if (service != null) {
+                    service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                } else {
+                    val home = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    ctx.startActivity(home)
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Error restaurando restricciones: ${e.message}")
+                Log.w(TAG, "No se pudo volver al inicio: ${e.message}")
             }
-            if (!pkg.isNullOrBlank()) {
+
+            mainHandler.postDelayed({
                 try {
-                    val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-                    val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
-                    dpm.setUninstallBlocked(admin, pkg,
-                        prefs.getBoolean("update_flow_prev_uninstall_blocked", false))
-                } catch (e: Exception) { e.printStackTrace() }
-            }
-            prefs.edit().remove("update_flow_prev_uninstall_blocked").apply()
+                    PolicyManager(ctx).restoreInstallRestrictions()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error restaurando restricciones: ${e.message}")
+                }
+                if (!pkg.isNullOrBlank()) {
+                    try {
+                        val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                        val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
+                        dpm.setUninstallBlocked(admin, pkg,
+                            prefs.getBoolean("update_flow_prev_uninstall_blocked", false))
+                    } catch (e: Exception) { e.printStackTrace() }
+                }
+                prefs.edit().remove("update_flow_prev_uninstall_blocked").apply()
 
-            cancelWatchdog(ctx)
-            releaseWake()
-            finishing = false
-            LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
-            syncToPanel(ctx, force = true)
-        }, RESTORE_DELAY_MS)
+                cancelWatchdog(ctx)
+                releaseWake()
+                finishing = false
+                LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
+                syncToPanel(ctx, force = true)
+            }, RESTORE_DELAY_MS)
+        }, delayMs)
 
-        if (!message.isNullOrBlank() && result != RESULT_UPDATED) {
+        if (!finalNotice.isNullOrBlank() && result != RESULT_UPDATED) {
             try {
                 mainHandler.post {
-                    android.widget.Toast.makeText(ctx, message, android.widget.Toast.LENGTH_LONG).show()
+                    android.widget.Toast.makeText(ctx, finalNotice, android.widget.Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 // Toast desde un contexto sin UI: no es critico.

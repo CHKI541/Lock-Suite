@@ -494,9 +494,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 UpdateFlowManager.showOverlay(
                     applicationContext,
                     updatingPkg,
-                    UpdateFlowManager.currentStage(applicationContext),
-                    null,
-                    UpdateFlowManager.isCancelable(applicationContext)
+                    UpdateFlowManager.currentStage(applicationContext)
                 )
                 val nowRelaunch = SystemClock.elapsedRealtime()
                 if (nowRelaunch - lastStoreRelaunchAt > STORE_RELAUNCH_MIN_MS) {
@@ -1592,35 +1590,32 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         UpdateFlowManager.showOverlay(
             ctx, updatingPkg,
-            UpdateFlowManager.currentStage(ctx),
-            null,
-            UpdateFlowManager.isCancelable(ctx)
+            UpdateFlowManager.currentStage(ctx)
         )
 
         // ── 1. ¿Ya se instaló? Señal concluyente, no depende de la pantalla ──
         if (UpdateFlowManager.targetAlreadyUpdated(ctx)) {
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING,
+                "✓ Actualización completada.")
             UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UPDATED, null)
             return
         }
 
-        // ── 2. ¿Play Store ya está descargando? Entonces NO tocar nada ──
-        val pct = PlayUpdateSessionWatcher.currentProgressFor(ctx, updatingPkg)
+        // ── 2. ¿Play Store ya está descargando? (por PackageInstaller) ──
+        val livePct = PlayUpdateSessionWatcher.currentProgressFor(ctx, updatingPkg)
+        val pct = if (livePct >= 0) livePct else PlayUpdateSessionWatcher.lastProgress
         if (pct >= 0 || PlayUpdateSessionWatcher.sawSession) {
-            UpdateFlowManager.setStage(
-                ctx,
-                UpdateFlowManager.STAGE_DOWNLOADING,
-                if (pct >= 0) "Descargando... $pct%" else null
-            )
+            val progressText = if (pct >= 0) "Descargando... $pct%" else
+                (UpdateFlowManager.currentDetail(ctx) ?: "Descargando actualización...")
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING, progressText)
             return
         }
 
         // ── 3. Árbol de Play Store ──
         val root = findPlayStoreRoot()
         if (root == null) {
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE)
-            // Si a los 6 s todavía no hay árbol, la ficha probablemente nunca abrió:
-            // reintentar el intent (con el mismo freno de 1,5 s de siempre).
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE,
+                "Esperando a Google Play...")
             if (now - updateSessionStartTime > 6_000L &&
                 now - lastStoreRelaunchAt > STORE_RELAUNCH_MIN_MS
             ) {
@@ -1631,17 +1626,25 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
         if (updateSessionTreeSeenAt == 0L) updateSessionTreeSeenAt = now
 
+        // Escanear el árbol de nodos de Play Store
         val dm = resources.displayMetrics
         val scan = PlayButtonFinder.scan(root, dm.widthPixels, dm.heightPixels)
         UpdateFlowManager.reportDebugLabels(ctx, scan.debugLabels)
 
+        // Si Play Store muestra una barra de progreso, ya está descargando
+        if (scan.sawProgressBar) {
+            val progressText = UpdateFlowManager.currentDetail(ctx) ?: "Descargando actualización..."
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING, progressText)
+            return
+        }
+
         val cooledDown = now - updateSessionLastClickAt > CANDIDATE_WAIT_MS
 
-        // ── 4. Diálogo de confirmación, solo después de haber apretado algo ──
-        //     (antes de eso, un texto suelto que coincida se llevaría todos los ciclos)
+        // ── 4. Diálogo de confirmación ──
         if (updateSessionCandidatesTried > 0 && scan.dialogs.isNotEmpty() && cooledDown) {
             val d = scan.dialogs.first()
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_CONFIRMING)
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_CONFIRMING,
+                "Confirmando descarga...")
             if (performClickOnNode(d.node)) {
                 updateSessionLastClickAt = now
                 Log.i(TAG, "Clic en diálogo: ${d.reason}")
@@ -1649,51 +1652,60 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
-        // ── 5. Probar el próximo candidato a "Actualizar" ──
-        //     Se aprieta UNO y se espera: si a CANDIDATE_WAIT_MS no apareció sesión de
-        //     instalación ni cambió el versionCode, se prueba el siguiente. Esa
-        //     verificación es lo que hace que funcione en un idioma no previsto.
+        // ── 5. ¿Ya estaba al día? ──
+        val hasDefiniteUpdate = scan.actions.any { it.score >= 80 }
+        val hasOpenButton = scan.opens.isNotEmpty()
+
+        // Caso A: Hay botón "Abrir" y no hay botón "Actualizar" con score alto
+        if (!hasDefiniteUpdate && hasOpenButton && updateSessionTreeSeenAt > 0L &&
+            now - updateSessionTreeSeenAt > 1500L
+        ) {
+            val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+            Log.i(TAG, "App $updatingPkg ya está al día (botón Abrir visible, sin Actualizar)")
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+            UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UP_TO_DATE,
+                "$label ya está actualizada.")
+            return
+        }
+
+        // Caso B: No hay ningún botón reconocible tras 3.5s
+        if (!hasDefiniteUpdate && scan.actions.isEmpty() && !hasOpenButton &&
+            updateSessionTreeSeenAt > 0L && now - updateSessionTreeSeenAt > 3500L
+        ) {
+            val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+            Log.i(TAG, "App $updatingPkg: no se encontró botón de actualización tras 3.5s")
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+            UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UP_TO_DATE,
+                "$label ya está actualizada.")
+            return
+        }
+
+        // ── 6. Probar el próximo candidato a "Actualizar" ──
         if (cooledDown && updateSessionCandidatesTried < MAX_CANDIDATES) {
             val next = scan.actions.firstOrNull { candidateKey(it) !in updateSessionTriedKeys }
             if (next != null) {
                 updateSessionTriedKeys.add(candidateKey(next))
                 updateSessionCandidatesTried++
-                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON)
+                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
+                    "Iniciando descarga...")
                 if (performClickOnNode(next.node)) {
                     updateSessionLastClickAt = now
-                    Log.i(TAG, "Candidato ${updateSessionCandidatesTried}/${MAX_CANDIDATES} apretado: ${next.reason}")
+                    Log.i(TAG, "Candidato ${updateSessionCandidatesTried}/${MAX_CANDIDATES}: ${next.reason}")
                 }
                 return
             }
         }
 
-        // ── 6. Ya estaba al día ──
-        //     Sin candidatos de actualización, con un "Abrir" a la vista, y sin que
-        //     haya arrancado ninguna sesión.
-        if (scan.actions.none { it.score >= 80 } && scan.opens.isNotEmpty() &&
-            updateSessionTreeSeenAt > 0L && now - updateSessionTreeSeenAt > UPDATE_UP_TO_DATE_GRACE_MS
-        ) {
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
-            UpdateFlowManager.finish(
-                ctx,
-                UpdateFlowManager.RESULT_UP_TO_DATE,
-                "${UpdateFlowManager.appLabel(ctx, updatingPkg)} ya estaba actualizada."
-            )
-            return
-        }
-
         // ── 7. Freno por estancamiento ──
         if (now - updateSessionStartTime > UPDATE_STALL_MS) {
-            Log.w(TAG, "Actualización estancada para $updatingPkg. Etiquetas vistas: ${scan.debugLabels}")
-            UpdateFlowManager.finish(
-                ctx,
-                UpdateFlowManager.RESULT_ERROR,
-                "No se pudo actualizar ${UpdateFlowManager.appLabel(ctx, updatingPkg)}. Probá de nuevo más tarde."
-            )
+            Log.w(TAG, "Actualización estancada para $updatingPkg. Labels: ${scan.debugLabels}")
+            UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_ERROR,
+                "No se pudo actualizar ${UpdateFlowManager.appLabel(ctx, updatingPkg)}.")
             return
         }
 
-        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON)
+        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
+            "Buscando actualización...")
     }
 
     private fun handlePlayStoreAutoUpdate(event: AccessibilityEvent, updatingPkg: String) {

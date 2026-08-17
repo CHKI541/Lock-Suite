@@ -85,12 +85,13 @@ object PlayButtonFinder {
 
     private val OPEN_WORDS = setOf(
         "abrir", "open", "ouvrir", "aprire", "offnen", "oeffnen",
-        "открыть", "פתח", "פתיחה", "فتح"
+        "открыть", "פתח", "פתיחה", "فتح", "iniciar", "launch"
     )
 
     private val DIALOG_WORDS = setOf(
         "continuar", "continue", "aceptar", "ok", "proceder", "descargar",
         "download", "si", "yes", "reintentar", "retry", "entendido",
+        "usar datos", "datos moviles", "descargar ahora", "cualquier red",
         "continuer", "accepter", "telecharger",
         "continua", "accetta", "scarica",
         "weiter", "akzeptieren", "herunterladen",
@@ -238,7 +239,8 @@ object PlayButtonFinder {
             //    Cualquier botón ancho de la franja es candidato; el orden y la
             //    verificación posterior deciden cuál es.
             if (inBand && clickable && width >= state.minWidth &&
-                actions.none { it.node == node }
+                actions.none { it.node == node } &&
+                opens.none { it.node == node }
             ) {
                 actions.add(Candidate(node, SCORE_POSITION, "posicion top=$top", top, left))
             }

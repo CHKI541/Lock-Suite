@@ -91,15 +91,37 @@ object BootGate {
     /** Momento (elapsedRealtime) en que se activó la ventana. */
     private const val KEY_SINCE = "boot_gate_since"
 
+    /** El túnel de filtrado ya confirmó que está leyendo paquetes en esta ventana. */
+    private const val KEY_FILTER_READY = "boot_gate_filter_ready"
+
     /** Último resultado, para mostrarlo en el panel. */
     const val KEY_LAST_RESULT = "boot_gate_last_result"
 
     /**
-     * Techo duro de la ventana. Pasado esto se libera aunque el filtro no haya
-     * levantado: es preferible un equipo sin filtrar unos minutos a un equipo sin
-     * internet y sin forma de recibir un comando de rescate del panel.
+     * Techo duro de la ventana cuando se espera al FILTRO DE RED. Pasado esto se libera
+     * aunque el filtro no haya levantado: es preferible un equipo sin filtrar unos
+     * minutos a un equipo sin internet y sin forma de recibir un comando de rescate.
+     *
+     * Levantar el túnel VPN es cuestión de segundos; dos minutos es holgadísimo.
      */
     private const val MAX_WINDOW_MS = 120_000L
+
+    /**
+     * Techo cuando se espera a la ACCESIBILIDAD (`boot_gate_wait_accessibility`).
+     *
+     * ⚠️ ARREGLO DEL 18/8/2026 — antes se usaba el mismo techo de 2 minutos para las
+     * dos cosas, y estaba mal: son esperas de naturaleza distinta. Esperar al filtro es
+     * esperar a que arranque un servicio (segundos). Esperar a la accesibilidad es
+     * esperar a que UNA PERSONA vaya a Ajustes y la active, que puede tardar lo que
+     * tarde. Con 2 minutos, quien probaba reiniciaba el equipo, se demoraba un poco en
+     * mirar, y para cuando miraba el bloqueo ya se había liberado solo: parecía que el
+     * interruptor no hacía nada. Reporte textual del dueño: *"no funciona"*.
+     *
+     * Sigue habiendo techo, y a propósito: un equipo sin internet no puede recibir un
+     * comando de rescate del panel. 30 minutos es tiempo de sobra para activarla y
+     * poco para quedarse tirado.
+     */
+    private const val MAX_ACCESSIBILITY_WINDOW_MS = 30 * 60 * 1000L
 
     fun isEnabled(context: Context): Boolean =
         PrefsHelper.getMdmPrefs(context).getBoolean(KEY_ENABLED, true)
@@ -153,20 +175,46 @@ object BootGate {
             prefs.edit()
                 .putBoolean(KEY_ACTIVE, true)
                 .putLong(KEY_SINCE, SystemClock.elapsedRealtime())
+                .putBoolean(KEY_FILTER_READY, false)   // ventana nueva, marca en cero
                 .putString(KEY_LAST_RESULT, "en curso")
                 .apply()
 
             policy.setNetworkGateBlocked(true)
 
-            if (prefs.getBoolean(KEY_SUSPEND_APPS, false)) {
+            // ⚠️ CAMBIO DEL 18/8/2026 — por qué acá se suspenden apps.
+            //
+            // El proxy global solo, cuando lo que se espera es la ACCESIBILIDAD, no se
+            // nota: el usuario reinicia, abre WhatsApp, y WhatsApp abre igual (el proxy
+            // frena tráfico HTTP de las bibliotecas estándar, no impide que una app
+            // arranque ni cubre sockets crudos). Desde afuera, el interruptor "esperar
+            // también a la Accesibilidad" parecía no hacer nada — que es justo lo que
+            // reportó el dueño.
+            //
+            // Cuando lo que se espera es que UNA PERSONA vaya a activar la accesibilidad,
+            // el bloqueo tiene que ser algo que se vea. Suspender las apps es
+            // instantáneo, gratis en batería (lo hace el sistema, no nosotros) y
+            // totalmente reversible.
+            //
+            // Para la espera del filtro de red, en cambio, se mantiene solo el proxy:
+            // dura segundos y el dueño eligió explícitamente el 17/8 que alcanzaba.
+            val suspendApps = prefs.getBoolean(KEY_SUSPEND_APPS, false) || waitAccessibility
+            if (suspendApps) {
                 try {
                     policy.setBrowsersSuspended(true)
+                    if (waitAccessibility) {
+                        com.ejemplo.locksuite.mdm.AppController(context).setEmergencySuspendAll(true)
+                        prefs.edit().putBoolean("acc_emergency_suspend_active", true).apply()
+                    }
                 } catch (e: Exception) {
                     android.util.Log.w(TAG, "No se pudieron suspender apps en el arranque: ${e.message}")
                 }
             }
 
-            android.util.Log.i(TAG, "Arranque protegido ACTIVO: red cerrada hasta que el filtro esté listo.")
+            android.util.Log.i(
+                TAG,
+                "Arranque protegido ACTIVO (esperaFiltro=${BootReceiver.shouldVpnBeRunning(context)} " +
+                    "esperaAccesibilidad=$waitAccessibility)."
+            )
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Fallo activando el arranque protegido: ${e.message}")
             // Ante cualquier duda, no dejar el equipo cerrado.
@@ -182,6 +230,17 @@ object BootGate {
     fun onFilterReady(context: Context) {
         try {
             if (!isActive(context)) return
+            // Se ANOTA que el filtro ya levantó, no solo se libera.
+            //
+            // Sin esta marca había un agujero real: con `boot_gate_wait_accessibility`
+            // encendido y la VPN haciendo falta, el filtro levantaba, esta función
+            // salía sin liberar (falta la accesibilidad), y cuando después el usuario
+            // activaba la accesibilidad el `tick()` no tenía forma de saber que el
+            // filtro ya estaba listo. Terminaba liberando por vencimiento y con el
+            // mensaje equivocado ("vencido sin confirmar el filtro"), varios segundos
+            // tarde y mintiéndole al panel.
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean(KEY_FILTER_READY, true).apply()
+
             if (stillWaitingForAccessibility(context)) {
                 android.util.Log.i(TAG, "Filtro de red listo, pero falta la Accesibilidad: se mantiene cerrado.")
                 return
@@ -203,18 +262,31 @@ object BootGate {
 
             val since = PrefsHelper.getMdmPrefs(context).getLong(KEY_SINCE, 0L)
             val elapsed = SystemClock.elapsedRealtime() - since
-            if (since <= 0L || elapsed > MAX_WINDOW_MS) {
-                android.util.Log.w(TAG, "Venció la ventana del arranque protegido sin confirmar el filtro; liberando.")
-                release(context, "vencido sin confirmar el filtro")
+            val waitingAccessibility = stillWaitingForAccessibility(context)
+            // Dos techos distintos porque son dos esperas distintas. Ver el comentario
+            // de MAX_ACCESSIBILITY_WINDOW_MS.
+            val techo = if (waitingAccessibility) MAX_ACCESSIBILITY_WINDOW_MS else MAX_WINDOW_MS
+
+            if (since <= 0L || elapsed > techo) {
+                val motivo = if (waitingAccessibility) {
+                    "vencido sin que se activara la Accesibilidad"
+                } else {
+                    "vencido sin confirmar el filtro"
+                }
+                android.util.Log.w(TAG, "Venció la ventana del arranque protegido ($motivo); liberando.")
+                release(context, motivo)
                 return
             }
 
-            if (stillWaitingForAccessibility(context)) return
+            if (waitingAccessibility) return
 
-            // ¿El filtro ya está arriba? Si la VPN ni siquiera hace falta, alcanza con
-            // que la Accesibilidad esté lista (el caso de arriba ya lo verificó).
+            // Llegados acá, la accesibilidad ya no es un impedimento. Se libera si el
+            // filtro de red no hace falta, o si ya confirmó que está funcionando.
+            val filterReady = PrefsHelper.getMdmPrefs(context).getBoolean(KEY_FILTER_READY, false)
             if (!BootReceiver.shouldVpnBeRunning(context)) {
                 release(context, "sin filtro de red pendiente")
+            } else if (filterReady) {
+                release(context, "filtro listo")
             }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "tick: ${e.message}")
@@ -242,6 +314,20 @@ object BootGate {
             // No pisar un bloqueo de internet puesto por el administrador a propósito.
             if (!policy.isInternetBlocked()) {
                 policy.setNetworkGateBlocked(false)
+            }
+            // Levantar la suspensión de emergencia si la puso el arranque protegido.
+            // Se consulta la preferencia, no un campo en memoria: quien libera puede ser
+            // un proceso distinto del que suspendió (el Watchdog tras un reinicio).
+            // Si el interruptor "suspender TODAS las apps" está encendido y la
+            // accesibilidad sigue apagada, el Watchdog la va a volver a poner en el
+            // próximo ciclo: no tiene sentido levantarla acá y que parpadee.
+            val watchdogLaSostiene = prefs.getBoolean(
+                com.ejemplo.locksuite.service.WatchdogForegroundService.KEY_ACC_SUSPEND_ALL, false
+            ) && !isAccessibilityServiceActive(context)
+
+            if (prefs.getBoolean("acc_emergency_suspend_active", false) && !watchdogLaSostiene) {
+                com.ejemplo.locksuite.mdm.AppController(context).setEmergencySuspendAll(false)
+                prefs.edit().putBoolean("acc_emergency_suspend_active", false).apply()
             }
             if (prefs.getBoolean(KEY_SUSPEND_APPS, false) &&
                 !prefs.getBoolean("browsers_suspended_by_watchdog", false)

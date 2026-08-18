@@ -313,6 +313,13 @@ object FirebaseDeviceSync {
                     "accBounceSettings" to policyManager.isAccBounceSettingsEnabled(),
                     "accNag" to policyManager.isAccNagEnabled(),
                     "accSuspendAll" to policyManager.isAccSuspendAllEnabled(),
+                    // Estado REAL, no la intención: dice si la suspensión de emergencia
+                    // está aplicada ahora mismo. Sin esto, la única forma de saber si el
+                    // interruptor hizo algo era mirar el equipo y adivinar.
+                    "accEmergencySuspendActive" to prefs.getBoolean("acc_emergency_suspend_active", false),
+                    // Bloqueo de cambio de idioma: la defensa más barata contra la
+                    // evasión por cambio de idioma del sistema.
+                    "localeChangeBlocked" to policyManager.isLocaleChangeBlocked(),
 
                     // Arranque protegido
                     "bootGateEnabled" to policyManager.isBootGateEnabled(),

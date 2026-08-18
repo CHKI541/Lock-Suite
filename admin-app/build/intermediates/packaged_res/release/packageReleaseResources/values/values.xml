@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="accent_orange">#F1C40F</color>
+    <color name="alert_red">#C0392B</color>
+    <color name="navy_dark">#0B192C</color>
+    <color name="navy_light">#2C5282</color>
+    <color name="navy_medium">#1E3E62</color>
+    <color name="text_gray">#B0BEC5</color>
+    <color name="text_light">#FFFFFF</color>
+    <string name="app_name">LockSuite Admin</string>
+    <string name="offline_msg">No se pudo cargar el panel de administración. Verifique su conexión Wi-Fi o datos móviles.</string>
+    <string name="offline_retry">Reintentar conexión</string>
+    <string name="offline_title">Sin conexión a internet</string>
+    <style name="Theme.LockSuiteAdmin" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/navy_dark</item>
+        <item name="android:statusBarColor">@color/navy_dark</item>
+        <item name="android:navigationBarColor">@color/navy_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="colorPrimary">@color/accent_orange</item>
+        <item name="colorPrimaryVariant">@color/navy_light</item>
+        <item name="colorOnPrimary">@color/navy_dark</item>
+        <item name="colorSecondary">@color/navy_light</item>
+        <item name="colorOnSecondary">@color/text_light</item>
+    </style>
+</resources>

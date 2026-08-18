@@ -30,4 +30,4 @@ plugins {
 }
 
 rootProject.name = "LockSuite"
-include(":app")
+include(":app", ":admin-app")

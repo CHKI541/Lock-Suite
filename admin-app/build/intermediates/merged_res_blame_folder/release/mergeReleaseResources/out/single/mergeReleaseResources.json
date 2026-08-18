@@ -1,0 +1,30 @@
+[
+    {
+        "merged": "com.ejemplo.locksuite.admin.admin-app-release-33:/drawable_bg_btn_accent.xml.flat",
+        "source": "com.ejemplo.locksuite.admin.admin-app-main-34:/drawable/bg_btn_accent.xml"
+    },
+    {
+        "merged": "com.ejemplo.locksuite.admin.admin-app-release-33:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.ejemplo.locksuite.admin.admin-app-main-34:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.ejemplo.locksuite.admin.admin-app-release-33:/layout_activity_main.xml.flat",
+        "source": "com.ejemplo.locksuite.admin.admin-app-main-34:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.ejemplo.locksuite.admin.admin-app-release-33:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.ejemplo.locksuite.admin.admin-app-main-34:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "com.ejemplo.locksuite.admin.admin-app-release-33:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "com.ejemplo.locksuite.admin.admin-app-main-34:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    },
+    {
+        "merged": "com.ejemplo.locksuite.admin.admin-app-release-33:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.ejemplo.locksuite.admin.admin-app-main-34:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.ejemplo.locksuite.admin.admin-app-release-33:/drawable_progress_bar_custom.xml.flat",
+        "source": "com.ejemplo.locksuite.admin.admin-app-main-34:/drawable/progress_bar_custom.xml"
+    }
+]

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="navy_dark">#0B192C</color>
+    <color name="navy_medium">#1E3E62</color>
+    <color name="navy_light">#2C5282</color>
+    <color name="accent_orange">#F1C40F</color>
+    <color name="text_light">#FFFFFF</color>
+    <color name="text_gray">#B0BEC5</color>
+    <color name="alert_red">#C0392B</color>
+</resources>

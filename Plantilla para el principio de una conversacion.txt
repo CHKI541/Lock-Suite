@@ -11,3 +11,5 @@ encontraste; en la sección C reemplazá el resumen por el de esta sesión.
 2) Si dejaste algo funcionando, hacé un commit con un mensaje que diga qué
 cambiaste y por qué.
 
+Luego dame instrucciones para antigravity, que el hará lo que te falya hacer como compilar y demas
+

@@ -1,0 +1,25 @@
+com.ejemplo.locksuite.admin
+color accent_orange
+color alert_red
+color navy_dark
+color navy_light
+color navy_medium
+color text_gray
+color text_light
+drawable bg_btn_accent
+drawable ic_launcher_background
+drawable ic_launcher_foreground
+drawable progress_bar_custom
+id btnRetry
+id layoutOffline
+id progressBar
+id swipeRefreshLayout
+id webView
+layout activity_main
+mipmap ic_launcher
+mipmap ic_launcher_round
+string app_name
+string offline_msg
+string offline_retry
+string offline_title
+style Theme_LockSuiteAdmin

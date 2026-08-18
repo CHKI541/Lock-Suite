@@ -362,6 +362,13 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 // Todos exigen PIN del dispositivo (no están en la excepción de
                 // sendCommandV8) y quedan fuera de allowedWhileSuspended: mientras
                 // LockSuite esté suspendido no se cambian políticas a medias.
+                // Bloquear el cambio de idioma del sistema. Es la defensa más barata
+                // contra la evasión por cambio de idioma: cualquier filtro que compare
+                // texto de pantalla queda mudo si el equipo cambia a un idioma que no
+                // está en las listas. Ver PolicyManager.setLocaleChangeBlocked().
+                "BLOCK_LOCALE_CHANGE" -> policyManager.setLocaleChangeBlocked(true)
+                "UNBLOCK_LOCALE_CHANGE" -> policyManager.setLocaleChangeBlocked(false)
+
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)
                 "DISABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(false)
                 "ENABLE_ACC_NAG" -> policyManager.setAccNag(true)

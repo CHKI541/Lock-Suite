@@ -999,6 +999,7 @@ saveNameBtn.addEventListener("click", async () => {
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
             // Protecciones de Accesibilidad (17/8/2026)
+            localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
             accSuspendAll: ["ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL"],
@@ -2117,6 +2118,7 @@ if (groupSidebar) {
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
             // Protecciones de Accesibilidad (17/8/2026) — tambien por grupo
+            localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
             accSuspendAll: ["ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL"],

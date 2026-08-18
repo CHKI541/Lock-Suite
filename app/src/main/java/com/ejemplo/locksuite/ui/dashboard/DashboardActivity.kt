@@ -856,6 +856,14 @@ fun PoliciesTabContent(context: Context) {
         // ─────────────────────────────────────────────────────────────────────
         item {
             PolicyGroupCard(title = "Protecciones de Accesibilidad") {
+                // Va PRIMERO porque es la más importante de la sección: sin esto,
+                // cambiar el idioma del equipo deja mudo a cualquier filtro que compare
+                // texto de pantalla (ofertas de Mercado Pago, anti-evasión de Ajustes).
+                PolicySwitchRow(
+                    label = "Bloquear cambio de idioma del sistema",
+                    isChecked = remember(refreshKey) { policyManager.isLocaleChangeBlocked() },
+                    onCheckedChange = { policyManager.setLocaleChangeBlocked(it).also { refreshKey++ } }
+                )
                 PolicySwitchRow(
                     label = "Protección de Accesibilidad (maestro)",
                     isChecked = remember(refreshKey) { policyManager.isAccessibilityProtectionEnabled() },

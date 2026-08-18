@@ -1,4 +1,10 @@
-# Instrucciones para Antigravity — sesión del 17/8/2026
+# Instrucciones para Antigravity — sesiones del 17 y 18/8/2026
+
+> **AGREGADO EL 18/8.** El dueño probó lo del 17/8 en el equipo: **los cuatro
+> interruptores de Protecciones de Accesibilidad funcionaban mal**. Están corregidos y
+> hay un tema nuevo y más importante (evasión por cambio de idioma). Todo eso está en
+> la **sección 5 al final de este documento** — leela antes de probar la sección 3.D.
+
 
 **Leé primero `LOCKSUITE_CONTEXTO_PARA_IA.md` completo.** Este documento no lo reemplaza: solo dice qué dejó escrito la sesión de Claude del 17/8, qué falta hacer y en qué orden.
 
@@ -239,4 +245,70 @@ Van acá porque cada una parece un rulo innecesario y no lo es:
 - **El scroll se siente pesado** → subir `IMAGE_SCROLL_DEBOUNCE_MS` (90 → 150). La fluidez ya no depende de ese número, así que subirlo casi no se nota.
 - **La VPN no levanta después de bootear** → mirar si `establish()` está fallando con MTU 4000 y el reintento a 1500 tampoco funciona. Bajar `TUNNEL_MTU` a 1500 desactiva la mejora pero deja el filtro andando.
 - **El equipo queda sin internet y no vuelve** → `BootGate.release(context, "manual")`, o directamente `dpm.setRecommendedGlobalProxy(admin, null)` por ADB. Y revisar por qué no se liberó solo: el techo de 120 s debería haberlo hecho.
-- **El rebote de Ajustes saca al usuario de pantallas que no son Accesibilidad** → agregar el caso a la lista, NO ampliar `ACCESSIBILITY_TITLE_WORDS` con palabras genéricas (es el mismo error que se corrigió en Mercado Pago el 16/8).
+- **El rebote de Ajustes saca al usuario de pantallas que no son Accesibilidad** → NO agregar ni ampliar listas de palabras. La detección va por componente resuelto y por título localizado (ver sección 5.1); si falla, el lugar a mirar es `refreshAccessibilitySignals()`, no una lista.
+
+---
+
+# 5. AGREGADO DEL 18/8 — los cuatro interruptores estaban rotos
+
+El dueño probó lo del 17/8 y reportó, textual: *"Los switches de protección de accesibilidad funcionan todos mal"*. Tenía razón en los cuatro. Tres de las cuatro causas eran errores de razonamiento, no de tipeo, y ninguna la habría agarrado un type-check.
+
+## 5.1 Rebote del menú de Ajustes — *"rebota mucho más cosas, casi no se puede abrir la app de ajustes"*
+
+**Causa:** la detección recorría **todo el árbol** de la ventana buscando la palabra "Accesibilidad" contra una lista en diez idiomas. Pero la pantalla **principal** de Ajustes tiene "Accesibilidad" como una fila más de su menú — igual que la búsqueda y varias sub-pantallas. O sea que rebotaba de casi cualquier pantalla de Ajustes.
+
+**Además la lista de palabras era inútil justo en el caso que importa** (ver 5.5): diez idiomas de los 100+ que soporta Android.
+
+**Cómo quedó** (`LockSuiteAccessibilityService.kt`, `refreshAccessibilitySignals()` + `isAccessibilitySettingsScreen()`), tres señales, ninguna con palabras nuestras:
+
+1. **Componente exacto.** Se le pregunta al sistema qué actividad atiende `Settings.ACTION_ACCESSIBILITY_SETTINGS` y se compara `ev.className` contra eso. Exacto, gratis, independiente del idioma y del fabricante.
+2. **Título localizado pedido a la propia app de Ajustes.** `getResourcesForApplication("com.android.settings")` + `getIdentifier("accessibility_settings", "string", …)` devuelve el título en el idioma que el equipo tenga puesto **ahora**. Y se compara **solo contra el título de la ventana** (`ev.text`), nunca contra el árbol — ese fue el bug.
+3. **Nuestra propia etiqueta junto a un `Switch`.** Identifica la pantalla donde realmente se apaga el servicio, en cualquier idioma, porque nuestro nombre no se traduce.
+
+También: solo corre en `TYPE_WINDOW_STATE_CHANGED` (antes también en `CONTENT_CHANGED`), y se re-resuelve todo en `onConfigurationChanged`, que es lo que dispara un cambio de idioma.
+
+## 5.2 Aviso insistente — *"avisa una sola vez y listo"*
+
+**Causa:** el ciclo de 18 s sí corría. Lo que no volvía a pasar era el **aviso**, por tres razones acumuladas:
+
+1. Se re-publicaba **la misma notificación, mismo id, mismo texto**. Android lo trata como una actualización de la que ya está en la bandeja: la refresca en silencio, sin cartel flotante y sin sonido.
+2. Estaba como `setOngoing(true)`, que se comporta como notificación de estado y no de alerta.
+3. No tenía `setFullScreenIntent`.
+
+**Cómo quedó:** `cancel()` antes de cada publicación, el texto **cambia en cada aviso** (lleva el número y hace cuánto que está apagada), sin `ongoing`, con full-screen intent, `PRIORITY_MAX`, vibración y `setBypassDnd`.
+
+⚠️ **Ojo con el canal:** en Android 8+ un canal de notificación **no se puede reconfigurar por código una vez creado**. Por eso el id pasó a `locksuite_accessibility_nag_v2`. Si probás sobre una instalación que ya tenía la versión anterior y el aviso sigue sin sonar, **borrá datos de la app o reinstalá** antes de dar el arreglo por fallido.
+
+## 5.3 y 5.4 Suspender todas / Arranque protegido por accesibilidad — *"no funcionan"*
+
+**Causa: no estaban rotas, estaban calladas.** `accessibilityRequirementState()` devolvía "no hacer nada" cuando había **sesión de administrador abierta**. La sesión dura **5 minutos** desde que ingresás el PIN… que es exactamente lo que hay que hacer para tocar los interruptores en la app. Se apagaban solas justo mientras alguien las probaba.
+
+**Cómo quedó:**
+
+- La sesión de administrador ahora silencia **únicamente la pantalla roja a pantalla completa** (para que el administrador pueda trabajar). Ni la suspensión de apps ni el aviso dependen de ella. Es recuperable: al reactivar la accesibilidad vuelve todo solo.
+- Los interruptores hacen efecto **al instante**: `PolicyManager` llama a `WatchdogForegroundService.requestImmediateCheck()`. Antes había que esperar hasta 20 s al próximo ciclo, lo que por sí solo ya hacía parecer que no funcionaban.
+- El **arranque protegido por accesibilidad ahora suspende apps** además del proxy. Solo con el proxy no se notaba nada: el usuario reiniciaba, abría WhatsApp y WhatsApp abría igual. Cuando lo que se espera es que **una persona** vaya a activar la accesibilidad, el bloqueo tiene que verse.
+- **Dos techos distintos:** 2 minutos para esperar al filtro de red (levantar un servicio es cuestión de segundos) y **30 minutos** para esperar a la accesibilidad. Antes eran los mismos 2 minutos, así que quien reiniciaba y se demoraba en mirar ya encontraba el bloqueo liberado solo.
+- La suspensión de emergencia ahora se anota en preferencias (`acc_emergency_suspend_active`) además de en memoria, para que sobreviva a que el proceso muera, y se publica en el panel como `accEmergencySuspendActive` — **así se puede ver si se aplicó en vez de adivinarlo.**
+
+## 5.5 Evasión por cambio de idioma — el hallazgo del dueño
+
+Textual: *"si el usuario cambia el idioma a uno raro se evade todo, porque ya lee distinto la pantalla"*. **Es correcto y es el agujero más grande de la Capa 3**, porque no requiere ninguna habilidad: Ajustes → Idioma → cualquiera de los 100+ que soporta Android, y todos los filtros que comparan texto quedan mudos. Detalle completo en **B.19**.
+
+Tres respuestas, ya en código:
+
+1. **Interruptor "Bloquear cambio de idioma del sistema"** (`DISALLOW_CONFIG_LOCALE`), primero en la sección de Protecciones de Accesibilidad, en app y panel. Comandos `BLOCK_LOCALE_CHANGE` / `UNBLOCK_LOCALE_CHANGE`. Se reaplica en `reapplyAllRestrictions()`. **Es una línea y cierra la puerta entera.**
+2. **Pedirle las palabras a la app que las muestra** en vez de traducirlas nosotros (ver 5.1, señal 2). Cubre los 100+ idiomas sin escribir ninguno. **Se puede extender a Mercado Pago** — queda pendiente y es la continuación natural.
+3. **No leer texto donde hay señal estructural.** Regla para el futuro: si hay clase de actividad, view-id o componente resuelto, usar eso antes que una palabra.
+
+**No cubre** el idioma **por app** de Android 13+ (Ajustes → Apps → X → Idioma). Contra eso sirven 2 y 3. Probar si `DISALLOW_CONFIG_LOCALE` además esconde esa entrada.
+
+## 5.6 Cómo probar esto (reemplaza al bloque 3.D)
+
+Antes que nada: **si venís de una instalación con la versión del 17/8, borrá datos o reinstalá** (por el canal de notificación, ver 5.2).
+
+1. **Idioma primero.** Encender "Bloquear cambio de idioma" y confirmar que la entrada de Idioma de Ajustes queda deshabilitada. Después apagarlo, poner el equipo en hebreo (o cualquier idioma raro) y confirmar que **el rebote del menú de Accesibilidad sigue funcionando** — esa es la prueba de que la señal del título localizado sirve. Volver a español.
+2. **Rebote de Ajustes.** Recorrer Ajustes normalmente: pantalla principal, red, sonido, apps, batería, buscador. **No debe rebotar de ninguna.** Después entrar a Accesibilidad: ahí sí. Y entrar a Ajustes → Apps → LockSuite: también debe rebotar. Confirmar que con el PIN recién ingresado **no** rebota.
+3. **Aviso insistente.** Apagar la accesibilidad y **cronometrar**: tiene que sonar/vibrar cada ~18 s, no una sola vez. Reactivarla y confirmar que la notificación desaparece.
+4. **Suspender todas.** Encender el interruptor **sin cerrar la sesión de administrador** (esa era la trampa) y apagar la accesibilidad: las apps tienen que dejar de abrir **en el acto**, no a los 20 s. El panel debe mostrar `accEmergencySuspendActive` en true. Reactivar la accesibilidad y confirmar que vuelven **todas**, y que las que el administrador tenía suspendidas a propósito siguen suspendidas.
+5. **Arranque protegido por accesibilidad.** Apagar la accesibilidad, reiniciar, y confirmar que el equipo queda cerrado (sin internet y sin apps) hasta activarla — con techo de 30 minutos. Al activarla se tiene que liberar **al instante**, no en el próximo ciclo.

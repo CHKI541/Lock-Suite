@@ -62,6 +62,10 @@ const ALLOWED_COMMANDS = new Set([
   // exigen PIN del dispositivo: NO estan en la excepcion de UPDATE_* de mas
   // abajo. Cambian el comportamiento del filtro visual, asi que un operador del
   // panel no deberia poder aflojarlos sin conocer el PIN del equipo.
+  // Bloquear el cambio de idioma del sistema (DISALLOW_CONFIG_LOCALE). Es la
+  // defensa mas barata contra la evasion por idioma: cualquier filtro que compare
+  // texto de pantalla queda mudo si el equipo cambia a un idioma no previsto.
+  "BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE",
   "ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS",
   "ENABLE_ACC_NAG", "DISABLE_ACC_NAG",
   "ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL",

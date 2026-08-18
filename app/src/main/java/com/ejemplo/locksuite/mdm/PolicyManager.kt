@@ -464,6 +464,41 @@ class PolicyManager(private val context: Context) {
     fun setTetheringBlocked(block: Boolean) =
         setRestriction(UserManager.DISALLOW_CONFIG_TETHERING, block)
 
+    /**
+     * BLOQUEAR CAMBIO DE IDIOMA  (18/8/2026)
+     *
+     * Es la respuesta directa a un hallazgo del dueño que vale más que cualquier
+     * ajuste fino del filtro visual: **"si el usuario cambia el idioma a uno raro se
+     * evade todo, porque ya lee distinto la pantalla"**. Tiene razón, y aplica a TODA
+     * la Capa 3 que compara texto: ofertas de Mercado Pago, pestañas de WhatsApp, el
+     * menú de Accesibilidad de Ajustes, la anti-evasión de Ajustes. Cambiar el idioma
+     * a uno que no está en las listas las deja mudas de golpe, sin tocar nada más.
+     *
+     * `DISALLOW_CONFIG_LOCALE` es una restricción real de Android (API 21+) que un
+     * Device Owner puede imponer: el usuario no puede cambiar el idioma del sistema.
+     * Es una línea de código y cierra la puerta de par en par, así que es de lejos la
+     * defensa más barata de toda la lista.
+     *
+     * Dos cosas que hay que decir igual:
+     *
+     *  • **No cubre el idioma POR APP de Android 13+.** Desde Android 13 se puede
+     *    ponerle a una sola app un idioma distinto (Ajustes → Apps → X → Idioma), y eso
+     *    no pasa por `DISALLOW_CONFIG_LOCALE`. Contra eso, lo que sirve es no depender
+     *    de texto: los bloqueos de Estados y Canales de WhatsApp van por nombre de
+     *    ACTIVIDAD, y la detección del menú de Accesibilidad se reescribió el 18/8 para
+     *    ir por componente resuelto y por título pedido a los recursos de la propia app
+     *    de Ajustes. Los que siguen dependiendo de texto son Mercado Pago y la
+     *    anti-evasión de Ajustes.
+     *  • **Tiene un costo de usabilidad real:** si el equipo se entrega en el idioma
+     *    equivocado, el usuario final ya no lo puede corregir solo. Por eso es un
+     *    interruptor y no algo forzado.
+     */
+    fun setLocaleChangeBlocked(block: Boolean) =
+        setRestriction(UserManager.DISALLOW_CONFIG_LOCALE, block)
+
+    fun isLocaleChangeBlocked(): Boolean =
+        isRestrictionEnabled(UserManager.DISALLOW_CONFIG_LOCALE)
+
     fun disablePrivateDns() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -1010,6 +1045,21 @@ class PolicyManager(private val context: Context) {
         return true
     }
 
+    /**
+     * Pide al Watchdog una revisión inmediata del estado de accesibilidad.
+     *
+     * Sin esto, los interruptores de abajo tardaban hasta 20 segundos en hacer efecto
+     * (el ciclo del Watchdog). Quien los prueba toca el interruptor, mira el equipo, no
+     * ve nada, y concluye que están rotos — que fue exactamente lo que pasó el 17/8.
+     */
+    private fun kickWatchdog() {
+        try {
+            com.ejemplo.locksuite.service.WatchdogForegroundService.requestImmediateCheck()
+        } catch (e: Exception) {
+            // El Watchdog puede no estar corriendo todavía; no es un error.
+        }
+    }
+
     /** Aviso insistente cada ~18 s mientras la accesibilidad esté apagada. */
     fun isAccNagEnabled(): Boolean =
         PrefsHelper.getMdmPrefs(context).getBoolean("acc_protect_nag", false)
@@ -1017,6 +1067,7 @@ class PolicyManager(private val context: Context) {
     fun setAccNag(enable: Boolean): Boolean {
         if (deferIfSuspended("acc_protect_nag", enable)) return true
         PrefsHelper.getMdmPrefs(context).edit().putBoolean("acc_protect_nag", enable).apply()
+        kickWatchdog()
         return true
     }
 
@@ -1027,16 +1078,18 @@ class PolicyManager(private val context: Context) {
     fun setAccSuspendAll(enable: Boolean): Boolean {
         if (deferIfSuspended("acc_protect_suspend_all", enable)) return true
         PrefsHelper.getMdmPrefs(context).edit().putBoolean("acc_protect_suspend_all", enable).apply()
-        // Si se apaga con la suspensión de emergencia puesta, hay que levantarla ya
-        // mismo: si no, el equipo se queda con todas las apps suspendidas hasta el
-        // próximo ciclo del Watchdog.
         if (!enable) {
+            // Levantar YA la suspensión de emergencia si estaba puesta: si no, el equipo
+            // se queda con todas las apps suspendidas hasta el próximo ciclo del Watchdog.
             try {
                 AppController(context).setEmergencySuspendAll(false)
+                PrefsHelper.getMdmPrefs(context).edit()
+                    .putBoolean("acc_emergency_suspend_active", false).apply()
             } catch (e: Exception) {
                 android.util.Log.w("PolicyManager", "No se pudo levantar la suspensión de emergencia: ${e.message}")
             }
         }
+        kickWatchdog()
         return true
     }
 
@@ -1135,7 +1188,10 @@ class PolicyManager(private val context: Context) {
             UserManager.DISALLOW_BLUETOOTH_SHARING,
             UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
             UserManager.DISALLOW_CONFIG_TETHERING,
-            UserManager.DISALLOW_CONFIG_VPN
+            UserManager.DISALLOW_CONFIG_VPN,
+            // 18/8/2026: sin esto, cambiar el idioma del equipo evade cualquier filtro
+            // que dependa de leer texto de la pantalla. Ver setLocaleChangeBlocked().
+            UserManager.DISALLOW_CONFIG_LOCALE
         )
 
         val isInstallInProgress = PrefsHelper.getMdmPrefs(context).getBoolean("mdm_install_in_progress", false)

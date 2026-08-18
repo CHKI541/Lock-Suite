@@ -2,9 +2,9 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>LockSuite Kosher — Panel de administración</title>
-  <link rel="stylesheet" href="styles.css?v=4" />
+  <link rel="stylesheet" href="styles.css?v=5" />
 </head>
 <body>
 
@@ -218,8 +218,11 @@
               <p class="muted" style="font-size: 11px; margin: -4px 0 10px;">
                 Android no permite impedir por API que se desactive un servicio de accesibilidad.
                 Estas opciones no la clavan: hacen que apagarla no sirva de nada.
+                <br /><strong>Bloquear cambio de idioma</strong> es la más importante de todas: sin eso, cambiar
+                el idioma del equipo deja mudo a cualquier filtro que compare texto de pantalla.
               </p>
               <div class="toggle-list">
+                <label class="toggle-row"><span>Bloquear cambio de idioma del sistema</span><input type="checkbox" class="policy-switch" data-policy="localeChangeBlocked" /></label>
                 <label class="toggle-row"><span>Rebotar el menú de Accesibilidad de Ajustes</span><input type="checkbox" class="policy-switch" data-policy="accBounceSettings" /></label>
                 <label class="toggle-row"><span>Aviso insistente cada ~18 s si está apagada</span><input type="checkbox" class="policy-switch" data-policy="accNag" /></label>
                 <label class="toggle-row"><span>Suspender TODAS las apps mientras esté apagada</span><input type="checkbox" class="policy-switch" data-policy="accSuspendAll" /></label>
@@ -440,6 +443,7 @@
             <div class="sidebar-card" style="background: var(--navy-medium); border-radius: 16px; padding: 20px;">
               <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Protecciones de Accesibilidad</h3>
               <div class="toggle-list">
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear cambio de idioma del sistema</span><input type="checkbox" class="group-policy-switch" data-policy="localeChangeBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Rebotar el menú de Accesibilidad de Ajustes</span><input type="checkbox" class="group-policy-switch" data-policy="accBounceSettings" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Aviso insistente cada ~18 s si está apagada</span><input type="checkbox" class="group-policy-switch" data-policy="accNag" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Suspender TODAS las apps mientras esté apagada</span><input type="checkbox" class="group-policy-switch" data-policy="accSuspendAll" /></label>

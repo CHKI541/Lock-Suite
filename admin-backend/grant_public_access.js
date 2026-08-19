@@ -1,8 +1,7 @@
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const { GoogleAuth } = require('./functions/node_modules/google-auth-library');
-const https = require('https');
-
-const keyPath = "C:\\Users\\israe\\OneDrive\\Documentos\\Lock Suite segunda version\\admin-backend\\locksuite-nueva-firebase-adminsdk-fbsvc-dac7996bff.json";
+const path = require('path');
+const keyPath = path.join(__dirname, "locksuite-nueva-firebase-adminsdk-fbsvc-dac7996bff.json");
 process.env.GOOGLE_APPLICATION_CREDENTIALS = keyPath;
 
 async function setIamPolicyForService(serviceName) {

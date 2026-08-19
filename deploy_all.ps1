@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Get-Location
 $gradleFile = Join-Path $projectRoot "app/build.gradle.kts"
 $versionJsonFile = Join-Path $projectRoot "admin-backend/public/version.json"
-$serviceAccountKey = "C:\Users\israe\OneDrive\Documentos\Lock Suite segunda version\admin-backend\locksuite-nueva-firebase-adminsdk-fbsvc-dac7996bff.json"
+$serviceAccountKey = Join-Path $projectRoot "admin-backend\locksuite-nueva-firebase-adminsdk-fbsvc-dac7996bff.json"
 
 Write-Host "=== Iniciando automatizacion de despliegue para Lock Suite ===" -ForegroundColor Cyan
 

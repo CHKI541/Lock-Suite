@@ -303,6 +303,22 @@ Tres respuestas, ya en código:
 
 **No cubre** el idioma **por app** de Android 13+ (Ajustes → Apps → X → Idioma). Contra eso sirven 2 y 3. Probar si `DISALLOW_CONFIG_LOCALE` además esconde esa entrada.
 
+## 5.7 SEGUNDA ronda del 18/8 — el vaivén
+
+El dueño probó la corrección de 5.3/5.4 y volvió con: *"a veces las apps se suspenden y a veces no, o se suspenden y vuelven a aparecer. Lo mismo con el aviso."*
+
+**Que las apps y el aviso fallaran igual y al mismo tiempo era la pista:** no eran dos bugs, era uno solo aguas arriba. Los dos colgaban de la misma pregunta —*¿está activa la accesibilidad?*— y esa pregunta se respondía mal. Archivo nuevo: **`util/AccessibilityEnforcer.kt`**; leé su comentario de cabecera antes de tocar nada de esto.
+
+Tres defectos que se sumaban:
+
+1. **La detección leía `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES` como texto.** Esa cadena lista los servicios *habilitados*, no los que están *funcionando*: no refleja el interruptor maestro de accesibilidad y el sistema la reescribe en pasos durante una transición. Ahora se pregunta al `AccessibilityManager`. Es **la única fuente de verdad del proyecto** — `BootGate.isAccessibilityServiceActive()` delega ahí.
+2. **No había antirrebote.** Ahora una lectura tiene que sostenerse 1,2 s antes de que se le crea; mientras tanto no se toca nada.
+3. **Se recordaba "ya lo apliqué" en una variable en memoria.** Cualquier otro mecanismo que des-suspendiera apps (el `reapplyAllRestrictions()` del Watchdog de 15 min, el flujo de Play Store, un comando del panel) dejaba esa variable mintiendo. Ahora `AppController.reconcileEmergencySuspend()` **compara y corrige** contra el estado real (`ApplicationInfo.FLAG_SUSPENDED`, que viene gratis en la misma llamada que enumera las apps) en vez de ordenar y olvidarse.
+
+**Ritmo:** ciclo propio separado del ciclo grande del Watchdog — 20 s con todo bien, 5 s mientras la accesibilidad está caída — más tres avisos instantáneos (ContentObserver, `onServiceConnected`, `onDestroy` con 800 ms de gracia). Esa gracia importa: `onDestroy` también se llama cuando el sistema re-vincula el servicio, y sin ella cada re-vinculación suspendía todas las apps para liberarlas enseguida.
+
+**Lo que NO hay que "simplificar" acá:** el antirrebote, la gracia de 800 ms de `onDestroy`, y sobre todo el hecho de que el reconciliador **no recuerde nada**. Las tres cosas parecen rulos y las tres son el arreglo.
+
 ## 5.6 Cómo probar esto (reemplaza al bloque 3.D)
 
 Antes que nada: **si venís de una instalación con la versión del 17/8, borrá datos o reinstalá** (por el canal de notificación, ver 5.2).
@@ -311,4 +327,5 @@ Antes que nada: **si venís de una instalación con la versión del 17/8, borrá
 2. **Rebote de Ajustes.** Recorrer Ajustes normalmente: pantalla principal, red, sonido, apps, batería, buscador. **No debe rebotar de ninguna.** Después entrar a Accesibilidad: ahí sí. Y entrar a Ajustes → Apps → LockSuite: también debe rebotar. Confirmar que con el PIN recién ingresado **no** rebota.
 3. **Aviso insistente.** Apagar la accesibilidad y **cronometrar**: tiene que sonar/vibrar cada ~18 s, no una sola vez. Reactivarla y confirmar que la notificación desaparece.
 4. **Suspender todas.** Encender el interruptor **sin cerrar la sesión de administrador** (esa era la trampa) y apagar la accesibilidad: las apps tienen que dejar de abrir **en el acto**, no a los 20 s. El panel debe mostrar `accEmergencySuspendActive` en true. Reactivar la accesibilidad y confirmar que vuelven **todas**, y que las que el administrador tenía suspendidas a propósito siguen suspendidas.
+   **Y la prueba del vaivén, que es la que importa ahora:** dejar la accesibilidad apagada y **esperar 10 minutos mirando el equipo**. Las apps tienen que quedarse suspendidas todo el tiempo, sin volver a aparecer ni una vez — ahí adentro entra un ciclo del `WatchdogWorker` de 15 min, que era uno de los que las liberaba por atrás. Repetir el prender/apagar de la accesibilidad cinco o seis veces seguidas y confirmar que no queda "trabado" en el estado equivocado. Lo mismo con el aviso: tiene que sonar cada ~18 s **sin cortarse**.
 5. **Arranque protegido por accesibilidad.** Apagar la accesibilidad, reiniciar, y confirmar que el equipo queda cerrado (sin internet y sin apps) hasta activarla — con techo de 30 minutos. Al activarla se tiene que liberar **al instante**, no en el próximo ciclo.

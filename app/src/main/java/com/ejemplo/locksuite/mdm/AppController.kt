@@ -16,6 +16,61 @@ import com.ejemplo.locksuite.util.PrefsHelper
 
 class AppController(private val context: Context) {
 
+    private companion object {
+        /**
+         * `ApplicationInfo.FLAG_SUSPENDED`. Es API pública desde Android 7 (API 24) pero
+         * la constante está marcada como oculta en algunas versiones del SDK, así que se
+         * usa el valor literal. Permite saber si una app está suspendida **sin una
+         * llamada extra por app**: viene en los flags que ya devuelve
+         * `getInstalledApplications()`.
+         */
+        private const val FLAG_SUSPENDED = 1 shl 30
+
+        /**
+         * Qué apps son candidatas a la suspensión de emergencia. Se cachea porque el
+         * reconciliador corre cada 5 segundos mientras la accesibilidad está caída, y
+         * calcular esto implica un `getLaunchIntentForPackage()` —una llamada al
+         * sistema— **por cada app del sistema**. En un equipo con 150 apps de sistema
+         * eso serían 150 llamadas cada 5 segundos: justo el tipo de gasto de batería
+         * que el dueño pidió evitar. La lista solo cambia al instalar o desinstalar,
+         * así que un cache con vencimiento alcanza de sobra.
+         */
+        @Volatile private var eligibleCache: Set<String>? = null
+        @Volatile private var eligibleCacheAt = 0L
+        @Volatile private var eligibleCacheSize = 0
+        private const val ELIGIBLE_TTL_MS = 5 * 60 * 1000L
+    }
+
+    /**
+     * Además del vencimiento por tiempo, el cache se recalcula si cambió la cantidad de
+     * apps instaladas: así una app recién instalada entra a la suspensión de emergencia
+     * en el ciclo siguiente y no dentro de cinco minutos.
+     */
+    private fun eligiblePackages(installed: List<ApplicationInfo>): Set<String> {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val cached = eligibleCache
+        if (cached != null &&
+            now - eligibleCacheAt < ELIGIBLE_TTL_MS &&
+            eligibleCacheSize == installed.size
+        ) return cached
+
+        val fresh = HashSet<String>(installed.size)
+        for (app in installed) {
+            val pkg = app.packageName
+            if (isCritical(pkg) || isPartialBlockOnly(pkg)) continue
+            // Las apps del sistema sin lanzador no aportan nada al suspenderlas y sí
+            // pueden romper cosas.
+            if ((app.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                pm.getLaunchIntentForPackage(pkg) == null
+            ) continue
+            fresh.add(pkg)
+        }
+        eligibleCache = fresh
+        eligibleCacheAt = now
+        eligibleCacheSize = installed.size
+        return fresh
+    }
+
     private val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     private val pm = context.packageManager
     private val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
@@ -75,36 +130,89 @@ class AppController(private val context: Context) {
      *  • Al levantar la emergencia se respeta lo que el administrador SÍ había
      *    suspendido: esas apps no se reactivan.
      */
-    fun setEmergencySuspendAll(suspend: Boolean): Boolean {
+    fun setEmergencySuspendAll(suspend: Boolean): Boolean =
+        reconcileEmergencySuspend(suspend) >= 0
+
+    /**
+     * RECONCILIADOR de la suspensión de emergencia.
+     *
+     * ⚠️ REESCRITO EL 18/8/2026. La versión anterior ordenaba "suspendé todo" o "soltá
+     * todo" de una sola vez y se olvidaba. El problema que causaba, textual del dueño:
+     * *"a veces las apps se suspenden y a veces no, o se suspenden y vuelven a
+     * aparecer"*. Porque hay varios mecanismos que tocan la suspensión de apps
+     * —`reapplyAllRestrictions()` del Watchdog de 15 minutos, el flujo de actualización
+     * de Play Store, los comandos del panel— y cualquiera de ellos podía dejar una app
+     * abierta de nuevo sin que nadie se enterara.
+     *
+     * Ahora esto no ordena: **compara y corrige**. Para cada app calcula cuál debería
+     * ser su estado y lo contrasta con el estado REAL en el sistema; solo toca las que
+     * no coinciden. Consecuencias:
+     *
+     *  • **Se auto-repara.** No importa quién pisó qué ni cuándo: en el próximo ciclo
+     *    vuelve a quedar como corresponde.
+     *  • **Es idempotente.** Llamarla mil veces seguidas cuesta lo mismo que una: si no
+     *    hay nada distinto, no hace ninguna llamada al DevicePolicyManager.
+     *  • **Es barata.** El estado real de suspensión viene en `ApplicationInfo.flags`
+     *    (`FLAG_SUSPENDED`), así que sale de la MISMA llamada que ya enumeraba las
+     *    apps. No hay una consulta por app.
+     *
+     * @return cuántas apps hubo que cambiar (0 = todo estaba bien), o -1 si falló.
+     */
+    fun reconcileEmergencySuspend(emergencyActive: Boolean): Int {
         return try {
             val prefs = PrefsHelper.getMdmPrefs(context)
+            // Con LockSuite suspendido (B.11) el equipo tiene que quedar como si la app
+            // no estuviera instalada: acá solo se LIBERA, nunca se vuelve a suspender
+            // nada, ni siquiera lo que el administrador tenía marcado. Sin esta guarda,
+            // una reconciliación durante la suspensión reimponía `suspend_<paquete>` y
+            // pisaba lo que acababa de hacer liftAllForSuspension().
+            val locksuiteSuspendido = prefs.getBoolean("locksuite_suspended", false)
+
             val installed = pm.getInstalledApplications(0)
-            val targets = ArrayList<String>(installed.size)
+            val elegibles = eligiblePackages(installed)
+            val aSuspender = ArrayList<String>()
+            val aLiberar = ArrayList<String>()
 
             for (app in installed) {
                 val pkg = app.packageName
-                if (isCritical(pkg) || isPartialBlockOnly(pkg)) continue
-                // Las apps del sistema sin lanzador no aportan nada al suspenderlas y
-                // sí pueden romper cosas.
-                if ((app.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
-                    pm.getLaunchIntentForPackage(pkg) == null
-                ) continue
-                // Al levantar la emergencia, dejar suspendido lo que el administrador
-                // había suspendido a propósito.
-                if (!suspend && prefs.getBoolean("suspend_$pkg", false)) continue
-                targets.add(pkg)
+                if (pkg !in elegibles) continue
+
+                // Estado que DEBERÍA tener: durante la emergencia, suspendida; fuera de
+                // la emergencia, lo que el administrador haya decidido para esa app.
+                // Con LockSuite suspendido, nada: ver la guarda de arriba.
+                val deberia = !locksuiteSuspendido &&
+                    (emergencyActive || prefs.getBoolean("suspend_$pkg", false))
+
+                // Estado REAL, sin una llamada extra: viene en los flags.
+                val esta = (app.flags and FLAG_SUSPENDED) != 0
+
+                if (deberia && !esta) aSuspender.add(pkg)
+                else if (!deberia && esta) aLiberar.add(pkg)
             }
 
-            if (targets.isEmpty()) return true
-            dpm.setPackagesSuspended(adminComponent, targets.toTypedArray(), suspend)
-            android.util.Log.i(
-                "AppController",
-                "Suspensión de emergencia ${if (suspend) "APLICADA" else "LEVANTADA"} sobre ${targets.size} apps"
-            )
-            true
+            var cambios = 0
+            // En tandas: `setPackagesSuspended` con listas enormes puede fallar entera
+            // por un solo paquete problemático, y así se acota el daño.
+            aSuspender.chunked(50).forEach { tanda ->
+                try {
+                    dpm.setPackagesSuspended(adminComponent, tanda.toTypedArray(), true)
+                    cambios += tanda.size
+                } catch (e: Exception) {
+                    android.util.Log.w("AppController", "No se pudo suspender una tanda: ${e.message}")
+                }
+            }
+            aLiberar.chunked(50).forEach { tanda ->
+                try {
+                    dpm.setPackagesSuspended(adminComponent, tanda.toTypedArray(), false)
+                    cambios += tanda.size
+                } catch (e: Exception) {
+                    android.util.Log.w("AppController", "No se pudo liberar una tanda: ${e.message}")
+                }
+            }
+            cambios
         } catch (e: Exception) {
-            android.util.Log.e("AppController", "setEmergencySuspendAll($suspend) falló: ${e.message}")
-            false
+            android.util.Log.e("AppController", "reconcileEmergencySuspend($emergencyActive) falló: ${e.message}")
+            -1
         }
     }
 

@@ -316,7 +316,13 @@ object FirebaseDeviceSync {
                     // Estado REAL, no la intención: dice si la suspensión de emergencia
                     // está aplicada ahora mismo. Sin esto, la única forma de saber si el
                     // interruptor hizo algo era mirar el equipo y adivinar.
-                    "accEmergencySuspendActive" to prefs.getBoolean("acc_emergency_suspend_active", false),
+                    "accEmergencySuspendActive" to prefs.getBoolean(
+                        com.ejemplo.locksuite.util.AccessibilityEnforcer.KEY_EMERGENCY_ACTIVE, false
+                    ),
+                    // Estado en vivo del servicio de accesibilidad, medido como lo mide
+                    // el reconciliador (AccessibilityManager, no la cadena de Settings).
+                    "accessibilityRunning" to
+                        com.ejemplo.locksuite.util.AccessibilityEnforcer.isServiceRunning(context),
                     // Bloqueo de cambio de idioma: la defensa más barata contra la
                     // evasión por cambio de idioma del sistema.
                     "localeChangeBlocked" to policyManager.isLocaleChangeBlocked(),

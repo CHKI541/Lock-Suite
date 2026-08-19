@@ -2,7 +2,6 @@ package com.ejemplo.locksuite.util
 
 import android.content.Context
 import android.os.SystemClock
-import android.provider.Settings
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.receiver.BootReceiver
 
@@ -87,6 +86,14 @@ object BootGate {
 
     /** Estamos dentro de la ventana de arranque protegido. */
     private const val KEY_ACTIVE = "boot_gate_active"
+
+    /**
+     * La misma clave que [KEY_ACTIVE], expuesta para que `AccessibilityEnforcer` pueda
+     * combinar los dos motivos por los que las apps pueden tener que estar suspendidas
+     * (el interruptor y esta ventana de arranque) en un solo lugar, en vez de que cada
+     * uno actúe por su cuenta y se pisen.
+     */
+    const val KEY_ACTIVE_PUBLIC = KEY_ACTIVE
 
     /** Momento (elapsedRealtime) en que se activó la ventana. */
     private const val KEY_SINCE = "boot_gate_since"
@@ -202,8 +209,11 @@ object BootGate {
                 try {
                     policy.setBrowsersSuspended(true)
                     if (waitAccessibility) {
-                        com.ejemplo.locksuite.mdm.AppController(context).setEmergencySuspendAll(true)
-                        prefs.edit().putBoolean("acc_emergency_suspend_active", true).apply()
+                        // Se delega en el reconciliador en vez de suspender a mano: él
+                        // sabe combinar este motivo con el del interruptor, y evita que
+                        // los dos se pisen (uno suspendía y el otro liberaba en el ciclo
+                        // siguiente — parte del vaivén que reportó el dueño).
+                        AccessibilityEnforcer.reconcileNow(context)
                     }
                 } catch (e: Exception) {
                     android.util.Log.w(TAG, "No se pudieron suspender apps en el arranque: ${e.message}")
@@ -318,22 +328,16 @@ object BootGate {
             // Levantar la suspensión de emergencia si la puso el arranque protegido.
             // Se consulta la preferencia, no un campo en memoria: quien libera puede ser
             // un proceso distinto del que suspendió (el Watchdog tras un reinicio).
-            // Si el interruptor "suspender TODAS las apps" está encendido y la
-            // accesibilidad sigue apagada, el Watchdog la va a volver a poner en el
-            // próximo ciclo: no tiene sentido levantarla acá y que parpadee.
-            val watchdogLaSostiene = prefs.getBoolean(
-                com.ejemplo.locksuite.service.WatchdogForegroundService.KEY_ACC_SUSPEND_ALL, false
-            ) && !isAccessibilityServiceActive(context)
-
-            if (prefs.getBoolean("acc_emergency_suspend_active", false) && !watchdogLaSostiene) {
-                com.ejemplo.locksuite.mdm.AppController(context).setEmergencySuspendAll(false)
-                prefs.edit().putBoolean("acc_emergency_suspend_active", false).apply()
-            }
             if (prefs.getBoolean(KEY_SUSPEND_APPS, false) &&
                 !prefs.getBoolean("browsers_suspended_by_watchdog", false)
             ) {
                 policy.setBrowsersSuspended(false)
             }
+            // La suspensión de apps la resuelve el reconciliador: ya no hay una ventana
+            // de arranque activa, así que si el interruptor tampoco la pide, las libera
+            // él. Si el interruptor SÍ la pide (accesibilidad todavía apagada), las
+            // mantiene. Un solo lugar decide, y por eso no pueden pelearse.
+            AccessibilityEnforcer.reconcileNow(context)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Fallo liberando el arranque protegido: ${e.message}")
         }
@@ -341,21 +345,15 @@ object BootGate {
     }
 
     /**
-     * ¿Está activo NUESTRO servicio de accesibilidad? Se lee de la misma preferencia
-     * segura del sistema que mira el Watchdog, para que las dos cosas no puedan
-     * desincronizarse.
+     * ¿Está activo NUESTRO servicio de accesibilidad?
+     *
+     * Delega en `AccessibilityEnforcer` a propósito: es EL único lugar del proyecto que
+     * responde esa pregunta. Antes esto leía por su cuenta la cadena
+     * `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES`, que no refleja el interruptor
+     * maestro de accesibilidad y cambia en pasos durante una transición — o sea que el
+     * arranque protegido y el Watchdog podían tener opiniones distintas sobre lo mismo
+     * en el mismo instante. Una sola fuente de verdad.
      */
-    fun isAccessibilityServiceActive(context: Context): Boolean {
-        return try {
-            val enabled = Settings.Secure.getString(
-                context.contentResolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            ) ?: ""
-            val shortId = "com.ejemplo.locksuite/.service.LockSuiteAccessibilityService"
-            val longId = "com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService"
-            enabled.contains(shortId) || enabled.contains(longId)
-        } catch (e: Exception) {
-            false
-        }
-    }
+    fun isAccessibilityServiceActive(context: Context): Boolean =
+        AccessibilityEnforcer.isServiceRunning(context)
 }

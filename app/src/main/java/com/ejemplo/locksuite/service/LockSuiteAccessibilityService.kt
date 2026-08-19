@@ -441,12 +441,18 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // refreshAccessibilitySignals().
         try { refreshAccessibilitySignals(force = true) } catch (e: Exception) { }
 
-        // Si el arranque protegido estaba esperando a que se activara la accesibilidad,
-        // este es el momento exacto en que dejó de faltar.
+        // Aviso INSTANTÁNEO y certero de que la accesibilidad volvió.
+        //
+        // Este es el momento exacto en que el servicio empieza a funcionar, así que no
+        // hace falta esperar a que ningún ciclo lo descubra ni pasar por el antirrebote:
+        // se reconcilia acá mismo y las apps se liberan al toque. Junto con el aviso de
+        // onDestroy() y el ContentObserver del Watchdog, el ciclo periódico queda como
+        // red de seguridad y no como el mecanismo principal.
         try {
+            com.ejemplo.locksuite.util.AccessibilityEnforcer.reconcileNow(applicationContext)
             com.ejemplo.locksuite.util.BootGate.tick(applicationContext)
         } catch (e: Exception) {
-            Log.w(TAG, "BootGate.tick al conectar: ${e.message}")
+            Log.w(TAG, "Reconciliación al conectar: ${e.message}")
         }
 
         Log.i(TAG, "✅ LockSuiteAccessibilityService conectado (Programmatic config + XML capabilities)")
@@ -2267,6 +2273,33 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+
+        // Aviso INSTANTÁNEO de que la accesibilidad se cayó. Es la señal más confiable
+        // que existe —la da el propio servicio que se está muriendo— y llega antes que
+        // cualquier lectura de preferencias del sistema. Se hace en un hilo aparte
+        // porque enumerar y suspender apps no puede correr en el hilo principal de un
+        // servicio que se está destruyendo.
+        val appCtx = applicationContext
+        try {
+            Thread({
+                try {
+                    // Una pausa corta antes de reconciliar. `onDestroy()` también se
+                    // llama cuando el sistema simplemente re-vincula el servicio (por
+                    // ejemplo al actualizar la app), y en ese caso vuelve solo en unos
+                    // cientos de milisegundos. Sin esta pausa, cada re-vinculación
+                    // suspendería todas las apps del equipo para liberarlas enseguida:
+                    // otra fuente del vaivén, y de las peores. Con la pausa,
+                    // `reconcileNow()` vuelve a preguntarle al sistema y, si el servicio
+                    // ya volvió, no hace nada.
+                    Thread.sleep(800)
+                    com.ejemplo.locksuite.util.AccessibilityEnforcer.reconcileNow(appCtx)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Reconciliación al destruir: ${e.message}")
+                }
+            }, "LockSuiteAccOff").start()
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo lanzar la reconciliación de salida: ${e.message}")
+        }
         try {
             mdmPrefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         } catch (e: Exception) {

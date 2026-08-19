@@ -1078,16 +1078,14 @@ class PolicyManager(private val context: Context) {
     fun setAccSuspendAll(enable: Boolean): Boolean {
         if (deferIfSuspended("acc_protect_suspend_all", enable)) return true
         PrefsHelper.getMdmPrefs(context).edit().putBoolean("acc_protect_suspend_all", enable).apply()
-        if (!enable) {
-            // Levantar YA la suspensión de emergencia si estaba puesta: si no, el equipo
-            // se queda con todas las apps suspendidas hasta el próximo ciclo del Watchdog.
-            try {
-                AppController(context).setEmergencySuspendAll(false)
-                PrefsHelper.getMdmPrefs(context).edit()
-                    .putBoolean("acc_emergency_suspend_active", false).apply()
-            } catch (e: Exception) {
-                android.util.Log.w("PolicyManager", "No se pudo levantar la suspensión de emergencia: ${e.message}")
-            }
+        // El reconciliador decide y aplica: sabe combinar este interruptor con el del
+        // arranque protegido y corrige contra el estado real de cada app. Acá no hay que
+        // ordenar nada — ordenar por separado era justamente lo que hacía que los dos
+        // mecanismos se pisaran. Ver util/AccessibilityEnforcer.kt.
+        try {
+            com.ejemplo.locksuite.util.AccessibilityEnforcer.reconcileNow(context)
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "No se pudo reconciliar la suspensión: ${e.message}")
         }
         kickWatchdog()
         return true

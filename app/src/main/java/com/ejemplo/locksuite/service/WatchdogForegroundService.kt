@@ -36,6 +36,15 @@ class WatchdogForegroundService : Service() {
         /** Cada cuánto vuelve a aparecer el aviso. El dueño pidió 15-20 s. */
         private const val NAG_INTERVAL_MS = 18_000L
 
+        /** Ritmo de la vigilancia de accesibilidad cuando todo está bien. */
+        private const val ENFORCER_IDLE_MS = 20_000L
+
+        /**
+         * Ritmo mientras la accesibilidad está caída. Más seguido porque es el momento
+         * en que hay que corregir, y el equipo ya está inutilizado de todas formas.
+         */
+        private const val ENFORCER_FAST_MS = 5_000L
+
         // ── Claves de los interruptores de "Protecciones de Accesibilidad" ──
         const val KEY_ACC_BOUNCE_SETTINGS = "acc_protect_bounce_settings"
         const val KEY_ACC_NAG = "acc_protect_nag"
@@ -56,7 +65,15 @@ class WatchdogForegroundService : Service() {
         @JvmStatic
         fun requestImmediateCheck() {
             val svc = instance ?: return
-            svc.handler.post { svc.checkAccessibilityStatus() }
+            // Se reinicia el antirrebote: quien llama acaba de cambiar algo a propósito,
+            // así que no hay nada que "esperar a confirmar".
+            com.ejemplo.locksuite.util.AccessibilityEnforcer.resetDebounce()
+            svc.handler.post {
+                svc.checkAccessibilityStatus()
+                // Re-armar el ciclo con el ritmo que corresponda al estado nuevo.
+                svc.handler.removeCallbacks(svc.enforcerRunnable)
+                svc.handler.postDelayed(svc.enforcerRunnable, ENFORCER_FAST_MS)
+            }
         }
     }
 
@@ -68,7 +85,6 @@ class WatchdogForegroundService : Service() {
     private var nagArmed = false
     /** Cuántos avisos van en esta racha. Solo para que el texto cambie en cada uno. */
     private var nagCount = 0
-    private var emergencySuspendApplied = false
     private var accessibilityObserver: android.database.ContentObserver? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -96,10 +112,39 @@ class WatchdogForegroundService : Service() {
         }
     }
 
+    /**
+     * Vigilancia de la accesibilidad, en su propio ciclo y a ritmo variable.
+     *
+     * Va SEPARADO del ciclo grande del Watchdog a propósito. El pedido del dueño fue
+     * *"tendría que detectar todo el tiempo si está activada la accesibilidad, y según
+     * eso suspender/desuspender las apps"*, y acelerar el ciclo grande para lograrlo
+     * habría multiplicado por cuatro también el trabajo caro que hace (sincronizar con
+     * Firebase, reimponer DNS privado, revisar la VPN y la marca de agua). Esto en
+     * cambio es barato: con la accesibilidad activa —el 99,9 % del tiempo— es una
+     * consulta al AccessibilityManager y una comparación, y ni siquiera enumera apps.
+     *
+     * El ritmo se adapta solo: 20 s cuando todo está bien, 5 s mientras la accesibilidad
+     * está caída, que es cuando conviene corregir rápido y el equipo está de todas
+     * formas inutilizable. Y además hay dos avisos instantáneos que no cuestan nada: el
+     * ContentObserver de este servicio y el propio servicio de accesibilidad, que avisa
+     * al conectarse y al destruirse. O sea que este ciclo es la red de seguridad, no el
+     * mecanismo principal.
+     */
+    private val enforcerRunnable = object : Runnable {
+        override fun run() {
+            try {
+                checkAccessibilityStatus()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            val violada = com.ejemplo.locksuite.util.AccessibilityEnforcer.lastVerdict ==
+                com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED
+            handler.postDelayed(this, if (violada) ENFORCER_FAST_MS else ENFORCER_IDLE_MS)
+        }
+    }
+
     private val checkRunnable = object : Runnable {
         override fun run() {
-            checkAccessibilityStatus()
-
             // Arranque protegido: liberar la red si el filtro ya está listo, o si venció
             // la ventana de seguridad. Ver util/BootGate.kt.
             try {
@@ -167,12 +212,20 @@ class WatchdogForegroundService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         scheduleWorkManagerWatchdog()
         handler.post(checkRunnable)
+        handler.post(enforcerRunnable)
 
         val uri = Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
         accessibilityObserver = object : android.database.ContentObserver(handler) {
             override fun onChange(selfChange: Boolean) {
                 super.onChange(selfChange)
+                // Este observador dispara con CADA escritura de la lista de servicios de
+                // accesibilidad, incluidas las intermedias de una transición. Por eso NO
+                // se salta el antirrebote: se limita a despertar la revisión, y quien
+                // decide si el estado cambió de verdad es el reconciliador.
                 checkAccessibilityStatus()
+                // Re-armar el ciclo con el ritmo que corresponda al estado nuevo.
+                handler.removeCallbacks(enforcerRunnable)
+                handler.postDelayed(enforcerRunnable, 1_500L)
                 // Si el arranque protegido estaba esperando justamente a que se
                 // activara la accesibilidad, liberar en el acto en vez de esperar
                 // hasta 20 s al próximo ciclo.
@@ -224,56 +277,44 @@ class WatchdogForegroundService : Service() {
      * accesibilidad todo vuelve solo. Para silenciar todo a propósito está
      * `temporaryPauseUntil`, que es explícito y con vencimiento.
      */
-    private class AccGate(val active: Boolean, val adminSession: Boolean)
-
-    private fun accessibilityGate(context: android.content.Context): AccGate? {
-        if (android.os.SystemClock.elapsedRealtime() < temporaryPauseUntil) return null
-        val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-        // Con LockSuite suspendido no se exige Accesibilidad ni se suspende nada: si no,
-        // la pantalla de bloqueo aparecería justo cuando el administrador acaba de
-        // liberar el equipo.
-        if (policyManager.isLockSuiteSuspended()) return null
-        if (!policyManager.isAccessibilityProtectionEnabled()) return null
-        if (!com.ejemplo.locksuite.security.PinManager.isPinConfigured(context)) return null
-        return AccGate(
-            active = com.ejemplo.locksuite.util.BootGate.isAccessibilityServiceActive(context),
-            adminSession = com.ejemplo.locksuite.security.SessionManager.isActive()
-        )
-    }
-
+    /**
+     * ⚠️ REESCRITO EL 18/8/2026 — ahora esto NO decide nada por su cuenta.
+     *
+     * La lógica de "¿está la accesibilidad?" y "¿qué apps deberían estar suspendidas?"
+     * se mudó entera a `util/AccessibilityEnforcer.kt`, que reconcilia contra el estado
+     * REAL del sistema en vez de recordar lo que hizo la última vez. Acá solo queda lo
+     * que necesita el contexto de un servicio: el aviso y la pantalla roja.
+     *
+     * El porqué del cambio está en el comentario de cabecera del Enforcer. Resumen: las
+     * apps y el aviso fallaban igual y al mismo tiempo porque las dos cosas colgaban de
+     * la misma pregunta mal respondida, y encima se recordaba "ya lo hice" en una
+     * variable que otros mecanismos invalidaban por atrás.
+     */
     private fun checkAccessibilityStatus() {
         val context = applicationContext
         val now = android.os.SystemClock.elapsedRealtime()
-        val gate = accessibilityGate(context) ?: run {
-            // Si dejó de corresponder exigirla, hay que desarmar lo que se aplicó.
+
+        // null = lectura todavía sin confirmar (antirrebote). No tocar nada: actuar
+        // sobre estados de transición era exactamente lo que producía el vaivén.
+        val verdict = com.ejemplo.locksuite.util.AccessibilityEnforcer.evaluate(context) ?: return
+
+        // Las apps se reconcilian SIEMPRE, con cualquier veredicto: es lo que hace que
+        // se auto-repare si otro mecanismo las liberó por atrás.
+        com.ejemplo.locksuite.util.AccessibilityEnforcer.reconcileApps(context, verdict)
+
+        if (verdict != com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED) {
             cancelNag()
-            liftEmergencySuspendIfNeeded(context)
             return
         }
+
+        // ── La accesibilidad está APAGADA (confirmado) ──
         val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
         val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
-
-        if (gate.active) {
-            cancelNag()
-            liftEmergencySuspendIfNeeded(context)
-            return
-        }
-
-        // ── La accesibilidad está APAGADA ──
 
         // Suspender navegadores (comportamiento histórico, siempre activo).
         if (!policyManager.areBrowsersSuspended()) {
             prefs.edit().putBoolean("browsers_suspended_by_watchdog", true).apply()
             policyManager.setBrowsersSuspended(true)
-        }
-
-        // Interruptor: suspender TODAS las apps no críticas, no solo los navegadores.
-        // Es lo que convierte "el equipo es incómodo" en "el equipo no sirve para nada
-        // hasta que la reactives". NO depende de la sesión de administrador (ver arriba).
-        if (prefs.getBoolean(KEY_ACC_SUSPEND_ALL, false)) {
-            applyEmergencySuspendIfNeeded(context)
-        } else {
-            liftEmergencySuspendIfNeeded(context)
         }
 
         // Interruptor: aviso insistente cada ~18 s.
@@ -285,44 +326,13 @@ class WatchdogForegroundService : Service() {
 
         // La pantalla roja a pantalla completa SÍ se calla con sesión de administrador
         // abierta: si no, sería imposible trabajar en el equipo con el PIN puesto.
-        if (!gate.adminSession && now - lastBlockLaunchTime > 3000) {
+        val adminSession = com.ejemplo.locksuite.security.SessionManager.isActive()
+        if (!adminSession && now - lastBlockLaunchTime > 3000) {
             lastBlockLaunchTime = now
             val blockIntent = Intent(context, com.ejemplo.locksuite.ui.emergency.BlockAccessibilityActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             }
             context.startActivity(blockIntent)
-        }
-    }
-
-    private fun applyEmergencySuspendIfNeeded(context: android.content.Context) {
-        if (emergencySuspendApplied) return
-        emergencySuspendApplied = true
-        // Se deja anotado en preferencias además de en memoria: el panel lo publica
-        // como `accEmergencySuspendActive`, así se puede VER si se aplicó en vez de
-        // adivinarlo, y sobrevive a que el proceso muera y el Watchdog reinicie.
-        com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
-            .edit().putBoolean("acc_emergency_suspend_active", true).apply()
-        try {
-            val ok = com.ejemplo.locksuite.mdm.AppController(context).setEmergencySuspendAll(true)
-            android.util.Log.w("LockSuite_Watchdog", "Suspensión de emergencia por accesibilidad apagada: ok=$ok")
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    private fun liftEmergencySuspendIfNeeded(context: android.content.Context) {
-        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
-        // Se mira TAMBIÉN la preferencia, no solo el campo en memoria: si el proceso
-        // murió con la suspensión puesta (pasa: los fabricantes matan servicios), al
-        // reiniciar el campo arranca en false y las apps se habrían quedado suspendidas
-        // sin que nadie las levantara nunca.
-        if (!emergencySuspendApplied && !prefs.getBoolean("acc_emergency_suspend_active", false)) return
-        emergencySuspendApplied = false
-        prefs.edit().putBoolean("acc_emergency_suspend_active", false).apply()
-        try {
-            com.ejemplo.locksuite.mdm.AppController(context).setEmergencySuspendAll(false)
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
@@ -335,9 +345,11 @@ class WatchdogForegroundService : Service() {
         if (!com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
                 .getBoolean(KEY_ACC_NAG, false)
         ) return false
-        // null = no corresponde exigirla; active = ya está activa.
-        val gate = accessibilityGate(context) ?: return false
-        return !gate.active
+        // Se usa el ÚLTIMO veredicto confirmado, no una lectura nueva: si el aviso
+        // consultara por su cuenta podría leer un estado de transición y cortarse solo
+        // a mitad de la racha. Eso era, en parte, el "a veces avisa y a veces no".
+        return com.ejemplo.locksuite.util.AccessibilityEnforcer.lastVerdict ==
+            com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED
     }
 
     private fun startNagIfNeeded() {
@@ -506,6 +518,7 @@ class WatchdogForegroundService : Service() {
     override fun onDestroy() {
         if (instance === this) instance = null
         handler.removeCallbacks(checkRunnable)
+        handler.removeCallbacks(enforcerRunnable)
         handler.removeCallbacks(nagRunnable)
         accessibilityObserver?.let {
             try { contentResolver.unregisterContentObserver(it) } catch (e: Exception) { }

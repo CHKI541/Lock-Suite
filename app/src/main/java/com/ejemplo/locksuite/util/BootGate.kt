@@ -70,6 +70,43 @@ import com.ejemplo.locksuite.receiver.BootReceiver
  * quedarse sin internet para siempre: pasados `MAX_WINDOW_MS` el Watchdog libera el
  * bloqueo igual y lo deja anotado. Un equipo sin internet y sin forma de recibir un
  * comando del panel es un equipo que hay que ir a buscar a mano.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ⚠️ ARREGLO DEL 21/8/2026 — EL PROXY SE QUEDABA CLAVADO (ver B.20)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Reporte del dueño: *"a veces se cae el internet cuando tengo LockSuite"*, y volvía
+ * apagando y prendiendo la VPN. Un diagnóstico forense sobre el equipo real encontró
+ * el proxy global puesto en `127.0.0.1:9999` con la red física perfecta (ping y
+ * socket TCP a 443 funcionando por debajo del proxy).
+ *
+ * La causa de fondo era el crash de Arranque Directo de `LockSuiteApplication` (ver
+ * la cabecera de ese archivo): el proceso moría antes de que arrancara el Watchdog,
+ * así que **nadie corría el `tick()` que libera el bloqueo**. Pero la red de
+ * seguridad de este archivo tampoco alcanzaba, por tres defectos propios:
+ *
+ *   1. **`release()` salía antes de tocar el proxy si `KEY_ACTIVE` ya estaba en
+ *      false.** O sea: si la marca se perdía (proceso muerto entre el `apply()` y la
+ *      llamada al DPM, excepción a mitad de `engage()`, ventana de un arranque
+ *      anterior) el proxy quedaba puesto y NINGÚN camino del código lo volvía a
+ *      mirar nunca. No había reconciliación: se recordaba lo que habíamos hecho en
+ *      vez de preguntarle al sistema qué había.
+ *   2. **`KEY_SINCE` guarda `SystemClock.elapsedRealtime()`, que vuelve a cero en
+ *      cada arranque.** Si una ventana sobrevivía a un reinicio, `elapsed` daba
+ *      NEGATIVO, `elapsed > techo` nunca se cumplía y **el techo de 120 s no vencía
+ *      jamás**. Sin internet indefinidamente, con la ventana "abierta" para siempre.
+ *   3. **`WatchdogWorker` (WorkManager, cada 15 min) no llamaba al `tick()`.** Era
+ *      justo el único mecanismo que sobrevive a que el proceso muera, o sea el único
+ *      que podría haber salvado el caso.
+ *
+ * Los tres están arreglados, y la regla que salió de la sesión del 18/8 —
+ * **reconciliar, no recordar**— ahora se aplica también acá: `healStuckProxy()` le
+ * pregunta al sistema si el proxy está puesto (`Settings.Global`) en vez de deducirlo
+ * de una preferencia nuestra, y lo saca si no hay ninguna razón legítima para que
+ * esté. Se la llama desde el arranque del proceso, desde `engage()`, desde el
+ * `tick()` del Watchdog, desde el `WatchdogWorker` de 15 minutos y desde
+ * `onFilterReady()`. Con eso el peor caso pasó de "sin internet hasta que alguien
+ * abra la app y toque la VPN" a "sin internet 15 minutos como mucho, y se arregla
+ * solo".
  */
 object BootGate {
 
@@ -130,6 +167,17 @@ object BootGate {
      */
     private const val MAX_ACCESSIBILITY_WINDOW_MS = 30 * 60 * 1000L
 
+    /**
+     * El proxy a puerto muerto que usa tanto este arranque protegido como el
+     * interruptor "bloquear internet" (`PolicyManager.setInternetBlocked`).
+     *
+     * Están acá para poder RECONOCERLO en la configuración del sistema, no solo para
+     * ponerlo. Es la diferencia entre "creo que lo saqué" y "el sistema dice que no
+     * está".
+     */
+    private const val GATE_PROXY_HOST = "127.0.0.1"
+    private const val GATE_PROXY_PORT = "9999"
+
     fun isEnabled(context: Context): Boolean =
         PrefsHelper.getMdmPrefs(context).getBoolean(KEY_ENABLED, true)
 
@@ -143,6 +191,131 @@ object BootGate {
 
     fun lastResult(context: Context): String =
         PrefsHelper.getMdmPrefs(context).getString(KEY_LAST_RESULT, "") ?: ""
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // RECONCILIACIÓN DEL PROXY (21/8/2026)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * ¿El sistema tiene puesto AHORA MISMO el proxy a puerto muerto?
+     *
+     * Se le pregunta a `Settings.Global`, que es lo que el sistema realmente aplica,
+     * en vez de deducirlo de nuestras preferencias. Ese es el punto: la preferencia
+     * puede mentir (proceso muerto a mitad de camino, ventana de otro arranque), el
+     * ajuste del sistema no.
+     *
+     * Se miran las DOS formas en que Android guarda esto, porque cambian según la
+     * versión y el fabricante: el par `global_http_proxy_host` / `global_http_proxy_port`
+     * y la cadena `http_proxy` ("host:puerto"). En el equipo del dueño (Android 13) el
+     * volcado mostró exactamente esto:
+     *
+     *     http_proxy=null
+     *     global_http_proxy_host=127.0.0.1
+     *     global_http_proxy_port=9999
+     *
+     * O sea que mirar solo `Settings.Global.HTTP_PROXY` —que es lo que parece la clave
+     * "buena" por ser la constante pública— habría dado `false` justo en el caso real
+     * que hay que detectar. Mirar las dos no cuesta nada y no depende de la versión.
+     *
+     * Costo: las lecturas de `Settings.Global` están cacheadas en el proceso por
+     * `NameValueCache` con seguimiento de generación, así que después de la primera son
+     * de memoria salvo que la tabla haya cambiado. Igual se ordenan para cortar cuanto
+     * antes: en el caso normal (sin proxy) son dos lecturas.
+     *
+     * Ante cualquier fallo de lectura devuelve `false` a propósito: este valor solo
+     * habilita a SACAR el proxy, nunca a ponerlo, así que ante la duda no se toca nada.
+     */
+    fun isGateProxyPresent(context: Context): Boolean = try {
+        val cr = context.contentResolver
+        val host = android.provider.Settings.Global
+            .getString(cr, "global_http_proxy_host")?.trim()
+
+        if (host == GATE_PROXY_HOST &&
+            android.provider.Settings.Global.getString(cr, "global_http_proxy_port")?.trim() ==
+            GATE_PROXY_PORT
+        ) {
+            true
+        } else {
+            android.provider.Settings.Global
+                .getString(cr, android.provider.Settings.Global.HTTP_PROXY)?.trim() ==
+                "$GATE_PROXY_HOST:$GATE_PROXY_PORT"
+        }
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * ¿Hay una ventana de arranque protegido abierta Y todavía en plazo?
+     *
+     * Es la única razón legítima por la que este módulo puede tener la red cerrada.
+     * Ojo con el `elapsed < 0`: [KEY_SINCE] guarda `SystemClock.elapsedRealtime()`,
+     * que se reinicia en cada arranque del equipo. Una ventana que sobrevivió a un
+     * reinicio da un `elapsed` negativo — antes eso hacía que el techo no venciera
+     * NUNCA y el equipo se quedaba sin internet para siempre. Un tiempo negativo no
+     * es "recién empezada": es "de otro arranque", o sea vencida.
+     */
+    private fun isWindowLegitimatelyOpen(context: Context): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (!prefs.getBoolean(KEY_ACTIVE, false)) return false
+        val since = prefs.getLong(KEY_SINCE, 0L)
+        if (since <= 0L) return false
+        val elapsed = SystemClock.elapsedRealtime() - since
+        if (elapsed < 0L) return false
+        val techo = if (stillWaitingForAccessibility(context)) {
+            MAX_ACCESSIBILITY_WINDOW_MS
+        } else {
+            MAX_WINDOW_MS
+        }
+        return elapsed <= techo
+    }
+
+    /**
+     * Saca el proxy a puerto muerto si quedó puesto sin ninguna razón legítima.
+     *
+     * Esta es la red de seguridad de último recurso: es la única función del módulo
+     * que NO confía en ninguna marca nuestra para decidir si hay algo que limpiar.
+     * Mira el estado real del sistema y compara. Es idempotente y barata (una lectura
+     * de `Settings.Global`; en el caso normal —que es el 99,99 % de las veces— sale
+     * ahí mismo sin tocar nada más).
+     *
+     * NO toca el proxy si:
+     *  - no está puesto el nuestro (puede haber un proxy corporativo real configurado);
+     *  - el administrador tiene "bloquear internet" encendido a propósito;
+     *  - hay una ventana de arranque protegido abierta y todavía en plazo.
+     *
+     * @return true si efectivamente hubo que limpiar un proxy huérfano.
+     */
+    fun healStuckProxy(context: Context, reason: String): Boolean {
+        return try {
+            if (!isGateProxyPresent(context)) return false
+
+            val policy = PolicyManager(context)
+            if (policy.isInternetBlocked()) return false
+            if (isWindowLegitimatelyOpen(context)) return false
+
+            android.util.Log.w(
+                TAG,
+                "Proxy huérfano detectado ($GATE_PROXY_HOST:$GATE_PROXY_PORT) sin ventana " +
+                    "de arranque protegido válida. Liberando la red ($reason)."
+            )
+            policy.setNetworkGateBlocked(false)
+
+            PrefsHelper.getMdmPrefs(context).edit()
+                .putBoolean(KEY_ACTIVE, false)
+                .putString(KEY_LAST_RESULT, "proxy huerfano liberado ($reason)")
+                .apply()
+
+            // Que no queden apps suspendidas por una ventana que ya no existe.
+            try {
+                AccessibilityEnforcer.reconcileNow(context)
+            } catch (ignored: Exception) {
+            }
+            true
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "healStuckProxy: ${e.message}")
+            false
+        }
+    }
 
     // ──────────────────────────────────────────────────────────────────────────
 
@@ -162,6 +335,14 @@ object BootGate {
                 val um = context.getSystemService(android.os.UserManager::class.java)
                 if (um != null && !um.isUserUnlocked) return
             }
+
+            // ARREGLO 21/8/2026 — antes que nada, limpiar un proxy huérfano de un
+            // arranque anterior. Va ACÁ ARRIBA, antes de todas las salidas tempranas
+            // de abajo, justamente porque el caso peligroso es que alguna de ellas
+            // corte: si `engage()` se va sin abrir ventana pero el arranque anterior
+            // dejó el proxy puesto, no queda nadie mirando y el equipo arranca sin
+            // internet. Ver B.20.
+            healStuckProxy(context, "arranque")
 
             val policy = PolicyManager(context)
 
@@ -239,7 +420,19 @@ object BootGate {
      */
     fun onFilterReady(context: Context) {
         try {
-            if (!isActive(context)) return
+            if (!isActive(context)) {
+                // ARREGLO 21/8/2026 — el túnel está leyendo y no hay ninguna ventana
+                // abierta: si quedó un proxy huérfano, este es el mejor momento posible
+                // para sacarlo (el filtro ya está funcionando, no hay nada que esperar).
+                //
+                // Esto es, además, lo que el dueño venía haciendo A MANO para destrabar
+                // el equipo: apagar y prender la VPN. Antes funcionaba solo cuando la
+                // marca `KEY_ACTIVE` seguía puesta; si se había perdido, ni siquiera eso
+                // servía. Ahora el camino manual funciona siempre — y encima el mismo
+                // camino se dispara solo cada vez que la VPN se reestablece.
+                healStuckProxy(context, "tunel leyendo, sin ventana abierta")
+                return
+            }
             // Se ANOTA que el filtro ya levantó, no solo se libera.
             //
             // Sin esta marca había un agujero real: con `boot_gate_wait_accessibility`
@@ -268,7 +461,20 @@ object BootGate {
      */
     fun tick(context: Context) {
         try {
-            if (!isActive(context)) return
+            if (!isActive(context)) {
+                // ARREGLO 21/8/2026 — antes se salía acá y listo, y ese era el agujero:
+                // con la ventana ya cerrada NADIE volvía a mirar el proxy nunca más. Si
+                // se había perdido el paso de sacarlo (proceso muerto entre el `apply()`
+                // y la llamada al DPM, excepción del DevicePolicyManager, ventana de un
+                // arranque anterior), el equipo quedaba sin internet indefinidamente.
+                // Confirmado en el equipo del dueño: los tres servicios vivos, el
+                // Watchdog corriendo su ciclo… y el proxy puesto igual.
+                //
+                // Cuesta una lectura de Settings.Global cada 20 s, y en el caso normal
+                // (sin proxy puesto) sale ahí mismo.
+                healStuckProxy(context, "ciclo del Watchdog")
+                return
+            }
 
             val since = PrefsHelper.getMdmPrefs(context).getLong(KEY_SINCE, 0L)
             val elapsed = SystemClock.elapsedRealtime() - since
@@ -277,11 +483,16 @@ object BootGate {
             // de MAX_ACCESSIBILITY_WINDOW_MS.
             val techo = if (waitingAccessibility) MAX_ACCESSIBILITY_WINDOW_MS else MAX_WINDOW_MS
 
-            if (since <= 0L || elapsed > techo) {
-                val motivo = if (waitingAccessibility) {
-                    "vencido sin que se activara la Accesibilidad"
-                } else {
-                    "vencido sin confirmar el filtro"
+            // `elapsed < 0` significa que la ventana viene de OTRO arranque del equipo:
+            // KEY_SINCE guarda `elapsedRealtime()`, que vuelve a cero al reiniciar. Antes
+            // ese caso no entraba por ninguna rama —`elapsed > techo` es falso con un
+            // número negativo— así que el techo no vencía NUNCA y el bloqueo quedaba
+            // puesto para siempre. Ver B.20.
+            if (since <= 0L || elapsed < 0L || elapsed > techo) {
+                val motivo = when {
+                    since <= 0L || elapsed < 0L -> "ventana de un arranque anterior"
+                    waitingAccessibility -> "vencido sin que se activara la Accesibilidad"
+                    else -> "vencido sin confirmar el filtro"
                 }
                 android.util.Log.w(TAG, "Venció la ventana del arranque protegido ($motivo); liberando.")
                 release(context, motivo)
@@ -309,10 +520,26 @@ object BootGate {
         return !isAccessibilityServiceActive(context)
     }
 
-    /** Reabre la red. Idempotente. */
+    /**
+     * Reabre la red. Idempotente.
+     *
+     * ⚠️ ARREGLO 21/8/2026 — acá estaba el defecto más caro de todo el módulo.
+     *
+     * Antes la primera línea era `if (!prefs.getBoolean(KEY_ACTIVE, false)) return`:
+     * o sea que si la marca ya figuraba apagada, esta función se iba **sin mirar
+     * siquiera si el proxy seguía puesto**. Y hay varias formas de llegar a esa
+     * combinación (marca apagada + proxy puesto): que el proceso muera entre el
+     * `apply()` de abajo y la llamada al DevicePolicyManager, que el DPM lance, que
+     * la ventana venga de otro arranque. En cualquiera de esos casos el equipo
+     * quedaba sin internet y **ningún camino del código volvía a mirar nunca**.
+     *
+     * Ahora la salida rápida exige las dos cosas: ventana cerrada Y proxy ausente. La
+     * salida rápida sigue siendo barata (una lectura de `Settings.Global`), y el caso
+     * normal —que es "no hay nada puesto"— sale igual de rápido que antes.
+     */
     fun release(context: Context, reason: String) {
         val prefs = PrefsHelper.getMdmPrefs(context)
-        if (!prefs.getBoolean(KEY_ACTIVE, false)) return
+        if (!prefs.getBoolean(KEY_ACTIVE, false) && !isGateProxyPresent(context)) return
 
         prefs.edit()
             .putBoolean(KEY_ACTIVE, false)

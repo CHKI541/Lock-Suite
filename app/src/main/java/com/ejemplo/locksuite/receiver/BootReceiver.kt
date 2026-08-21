@@ -38,6 +38,21 @@ class BootReceiver : BroadcastReceiver() {
             android.util.Log.e("BootReceiver", "Error activando el arranque protegido: ${e.message}")
         }
 
+        // 0b. Reglas DNS — segunda red del arreglo de Arranque Directo (21/8/2026).
+        //
+        // Si el proceso arrancó con LOCKED_BOOT_COMPLETED (antes del primer desbloqueo),
+        // `LockSuiteApplication` no pudo leer las reglas del disco: el almacenamiento
+        // cifrado por credencial todavía no estaba montado. Si ese mismo proceso sigue
+        // vivo cuando llega BOOT_COMPLETED, el motor de reglas seguiría VACÍO y el
+        // filtro DNS correría sin ninguna regla personalizada, en silencio, durante toda
+        // la vida del proceso. Es idempotente: si ya se cargaron, no hace nada.
+        // Ver la cabecera de LockSuiteApplication.kt y B.20.
+        try {
+            com.ejemplo.locksuite.LockSuiteApplication.ensureDomainRulesLoaded(context)
+        } catch (e: Exception) {
+            android.util.Log.w("BootReceiver", "No se pudieron cargar las reglas DNS: ${e.message}")
+        }
+
         // 1. Re-aplicar restricciones MDM de inmediato
         try {
             val policyManager = PolicyManager(context)

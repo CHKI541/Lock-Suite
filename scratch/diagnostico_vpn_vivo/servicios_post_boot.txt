@@ -1,0 +1,84 @@
+﻿ACTIVITY MANAGER SERVICES (dumpsys activity services)
+  User 0 active services:
+  * ServiceRecord{1f29ea9 u0 com.ejemplo.locksuite/.service.LockSuiteAccessibilityService}
+    intent={cmp=com.ejemplo.locksuite/.service.LockSuiteAccessibilityService}
+    packageName=com.ejemplo.locksuite
+    processName=com.ejemplo.locksuite
+    permission=android.permission.BIND_ACCESSIBILITY_SERVICE
+    baseDir=/data/app/~~2aLYNQ1gyE24T8hz2PMMfg==/com.ejemplo.locksuite-alvnmp6JUDU36bNO3HMiSw==/base.apk
+    dataDir=/data/user/0/com.ejemplo.locksuite
+    app=ProcessRecord{f730e4b 2560:com.ejemplo.locksuite/u0a165}
+    mIsAllowedBgActivityStartsByBinding=true
+    allowWhileInUsePermissionInFgs=true
+    recentCallingPackage=android
+    recentCallingUid=1000
+    allowStartForeground=PROC_STATE_PERSISTENT
+    startForegroundCount=0
+    infoAllowStartForeground=[callingPackage: android; callingUid: 1000; uidState: PER ; intent: Intent { cmp=com.ejemplo.locksuite/.service.LockSuiteAccessibilityService }; code:PROC_STATE_PERSISTENT; tempAllowListReason:<broadcast:1000:android.intent.action.LOCKED_BOOT_COMPLETED,reason:,reasonCode:LOCKED_BOOT_COMPLETED,duration:20000,callingUid:1000>; targetSdkVersion:34; callerTargetSdkVersion:33; startForegroundCount:0; bindFromPackage:null]
+    createTime=-2m56s348ms startingBgTimeout=--
+    lastActivity=-2m56s288ms restartTime=-2m56s288ms createdFromFg=true
+    Bindings:
+    * IntentBindRecord{46a6ec2 CREATE}:
+      intent={cmp=com.ejemplo.locksuite/.service.LockSuiteAccessibilityService}
+      binder=android.os.BinderProxy@b1c74d3
+      requested=true received=true hasBound=true doRebind=false
+      * Client AppBindRecord{4e83810 ProcessRecord{22ade8e 1288:system/1000}}
+        Per-process Connections:
+          ConnectionRecord{34d6aa0 u0 CR FGSA CAPS com.ejemplo.locksuite/.service.LockSuiteAccessibilityService:@88397a3}
+    All Connections:
+      ConnectionRecord{34d6aa0 u0 CR FGSA CAPS com.ejemplo.locksuite/.service.LockSuiteAccessibilityService:@88397a3}
+
+  * ServiceRecord{c67d14f u0 com.ejemplo.locksuite/.service.WatchdogForegroundService}
+    intent={cmp=com.ejemplo.locksuite/.service.WatchdogForegroundService}
+    packageName=com.ejemplo.locksuite
+    processName=com.ejemplo.locksuite
+    baseDir=/data/app/~~2aLYNQ1gyE24T8hz2PMMfg==/com.ejemplo.locksuite-alvnmp6JUDU36bNO3HMiSw==/base.apk
+    dataDir=/data/user/0/com.ejemplo.locksuite
+    app=ProcessRecord{f730e4b 2560:com.ejemplo.locksuite/u0a165}
+    allowWhileInUsePermissionInFgs=true
+    recentCallingPackage=com.ejemplo.locksuite
+    recentCallingUid=10165
+    allowStartForeground=ACTIVITY_STARTER
+    startForegroundCount=1
+    infoAllowStartForeground=[callingPackage: com.ejemplo.locksuite; callingUid: 10165; uidState: BFGS; intent: Intent { cmp=com.ejemplo.locksuite/.service.WatchdogForegroundService }; code:ACTIVITY_STARTER; tempAllowListReason:<,reasonCode:SYSTEM_ALLOW_LISTED,duration:9223372036854775807,callingUid:-1>; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:0; bindFromPackage:null]
+    isForeground=true foregroundId=9001 foregroundNoti=Notification(channel=locksuite_watchdog_channel shortcut=null contentView=null vibrate=null sound=null defaults=0x0 flags=0x42 color=0x00000000 vis=PRIVATE)
+    createTime=-2m45s394ms startingBgTimeout=--
+    lastActivity=-2m42s86ms restartTime=-2m45s392ms createdFromFg=true
+    startRequested=true delayedStop=false stopIfKilled=false callStart=true lastStartId=2
+
+  * ServiceRecord{ef66230 u0 com.ejemplo.locksuite/.service.KosherVpnService}
+    intent={act=android.net.VpnService pkg=com.ejemplo.locksuite}
+    packageName=com.ejemplo.locksuite
+    processName=com.ejemplo.locksuite
+    permission=android.permission.BIND_VPN_SERVICE
+    baseDir=/data/app/~~2aLYNQ1gyE24T8hz2PMMfg==/com.ejemplo.locksuite-alvnmp6JUDU36bNO3HMiSw==/base.apk
+    dataDir=/data/user/0/com.ejemplo.locksuite
+    app=ProcessRecord{f730e4b 2560:com.ejemplo.locksuite/u0a165}
+    allowWhileInUsePermissionInFgs=true
+    recentCallingPackage=com.ejemplo.locksuite
+    recentCallingUid=10165
+    allowStartForeground=ACTIVITY_STARTER
+    startForegroundCount=2
+    infoAllowStartForeground=[callingPackage: com.ejemplo.locksuite; callingUid: 10165; uidState: FGS ; intent: Intent { act=android.net.VpnService pkg=com.ejemplo.locksuite }; code:ACTIVITY_STARTER; tempAllowListReason:<,reasonCode:SYSTEM_ALLOW_LISTED,duration:9223372036854775807,callingUid:-1>; targetSdkVersion:34; callerTargetSdkVersion:34; startForegroundCount:1; bindFromPackage:null]
+    isForeground=true foregroundId=9002 foregroundNoti=Notification(channel=locksuite_vpn_channel shortcut=null contentView=null vibrate=null sound=null defaults=0x0 flags=0x42 color=0x00000000 vis=PRIVATE)
+    createTime=-2m56s397ms startingBgTimeout=--
+    lastActivity=-729ms restartTime=-2m56s292ms createdFromFg=true
+    startRequested=true delayedStop=false stopIfKilled=false callStart=true lastStartId=13
+    Bindings:
+    * IntentBindRecord{454ef09 CREATE}:
+      intent={act=android.net.VpnService cmp=com.ejemplo.locksuite/.service.KosherVpnService}
+      binder=android.os.BinderProxy@2f4b50e
+      requested=true received=true hasBound=false doRebind=false
+      * Client AppBindRecord{82f8b2f ProcessRecord{22ade8e 1288:system/1000}}
+        Per-process Connections:
+          ConnectionRecord{a4cb156 u0 CR FGS com.ejemplo.locksuite/.service.KosherVpnService:@ea98f71}
+    All Connections:
+      ConnectionRecord{a4cb156 u0 CR FGS com.ejemplo.locksuite/.service.KosherVpnService:@ea98f71}
+
+  Connection bindings to services:
+  * ConnectionRecord{34d6aa0 u0 CR FGSA CAPS com.ejemplo.locksuite/.service.LockSuiteAccessibilityService:@88397a3}
+    binding=AppBindRecord{4e83810 com.ejemplo.locksuite/.service.LockSuiteAccessibilityService:system}
+    conn=android.app.LoadedApk$ServiceDispatcher$InnerConnection@88397a3 flags=0x2101001
+  * ConnectionRecord{a4cb156 u0 CR FGS com.ejemplo.locksuite/.service.KosherVpnService:@ea98f71}
+    binding=AppBindRecord{82f8b2f com.ejemplo.locksuite/.service.KosherVpnService:system}
+    conn=android.app.LoadedApk$ServiceDispatcher$InnerConnection@ea98f71 flags=0x4000001

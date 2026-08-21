@@ -299,6 +299,25 @@
                 android:resource="@xml/admin_widget_info" />
         </receiver>
 
+        <!-- APP UPDATE ACTIVITY (Menú exclusivo de actualización de aplicaciones) -->
+        <activity
+            android:name=".ui.update.AppUpdateActivity"
+            android:exported="true"
+            android:theme="@style/Theme.LockSuite" />
+
+        <!-- APP UPDATE WIDGET PROVIDER (Acceso directo a Actualizaciones de Apps) -->
+        <receiver
+            android:name=".widget.AppUpdateWidgetProvider"
+            android:label="Actualizar Apps"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/app_update_widget_info" />
+        </receiver>
+
     </application>
 
 </manifest>

@@ -2270,6 +2270,24 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         Log.w(TAG, "⚠️ LockSuiteAccessibilityService interrumpido")
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        instance = null
+        val appCtx = applicationContext
+        try {
+            Thread({
+                try {
+                    Thread.sleep(300)
+                    com.ejemplo.locksuite.util.AccessibilityEnforcer.reconcileNow(appCtx)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Reconciliación al desvincular: ${e.message}")
+                }
+            }, "LockSuiteAccUnbind").start()
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo lanzar la reconciliación de desvinculación: ${e.message}")
+        }
+        return super.onUnbind(intent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         instance = null

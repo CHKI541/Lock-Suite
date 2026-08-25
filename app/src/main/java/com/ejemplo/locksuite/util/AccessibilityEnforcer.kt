@@ -134,8 +134,7 @@ object AccessibilityEnforcer {
             if (am != null) {
                 if (!am.isEnabled) {
                     // Interruptor maestro apagado: ningún servicio corre, punto.
-                    // Ni siquiera hace falta mirar la lista.
-                    return com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance != null
+                    return false
                 }
                 val enabled = am.getEnabledAccessibilityServiceList(
                     AccessibilityServiceInfo.FEEDBACK_ALL_MASK
@@ -144,20 +143,31 @@ object AccessibilityEnforcer {
                     it?.resolveInfo?.serviceInfo?.packageName == context.packageName
                 } ?: false
                 if (mine) return true
+
+                // Si no figura en los servicios habilitados de AccessibilityManager,
+                // consultar Settings.Secure como doble verificación.
+                val secureServices = Settings.Secure.getString(
+                    context.contentResolver,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                ) ?: ""
+                val inSecure = secureServices.contains("com.ejemplo.locksuite/.service.LockSuiteAccessibilityService") ||
+                    secureServices.contains("com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService")
+                if (!inSecure) return false
                 return com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance != null
             }
         } catch (e: Exception) {
             android.util.Log.w(TAG, "AccessibilityManager falló, usando la preferencia: ${e.message}")
         }
 
-        // Último recurso.
+        // Último recurso si AccessibilityManager arrojó excepción.
         return try {
             val enabled = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: ""
-            enabled.contains("com.ejemplo.locksuite/.service.LockSuiteAccessibilityService") ||
+            val inSecure = enabled.contains("com.ejemplo.locksuite/.service.LockSuiteAccessibilityService") ||
                 enabled.contains("com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService")
+            inSecure && com.ejemplo.locksuite.service.LockSuiteAccessibilityService.instance != null
         } catch (e: Exception) {
             false
         }
@@ -193,12 +203,6 @@ object AccessibilityEnforcer {
      */
     fun evaluate(context: Context): Verdict? {
         try {
-            if (SystemClock.elapsedRealtime() <
-                com.ejemplo.locksuite.service.WatchdogForegroundService.temporaryPauseUntil
-            ) {
-                lastVerdict = Verdict.NOT_APPLICABLE
-                return Verdict.NOT_APPLICABLE
-            }
             val policy = PolicyManager(context)
             if (policy.isLockSuiteSuspended() ||
                 !policy.isAccessibilityProtectionEnabled() ||

@@ -325,9 +325,10 @@ class WatchdogForegroundService : Service() {
         }
 
         // La pantalla roja a pantalla completa SÍ se calla con sesión de administrador
-        // abierta: si no, sería imposible trabajar en el equipo con el PIN puesto.
+        // abierta o mientras dure la pausa temporal para ir a Ajustes.
         val adminSession = com.ejemplo.locksuite.security.SessionManager.isActive()
-        if (!adminSession && now - lastBlockLaunchTime > 3000) {
+        val isTemporarilyPaused = now < temporaryPauseUntil
+        if (!adminSession && !isTemporarilyPaused && now - lastBlockLaunchTime > 3000) {
             lastBlockLaunchTime = now
             val blockIntent = Intent(context, com.ejemplo.locksuite.ui.emergency.BlockAccessibilityActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)

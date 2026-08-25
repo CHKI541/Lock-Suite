@@ -113,9 +113,9 @@ fun BlockAccessibilityScreen() {
         
         Button(
             onClick = {
-                // Pausar temporalmente el Watchdog por 60 segundos para permitir la navegación
+                // Pausar temporalmente el re-lanzamiento de la pantalla roja por 60 segundos para permitir la navegación en Ajustes
                 com.ejemplo.locksuite.service.WatchdogForegroundService.temporaryPauseUntil = 
-                    System.currentTimeMillis() + 60 * 1000L
+                    android.os.SystemClock.elapsedRealtime() + 60 * 1000L
                 try {
                     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

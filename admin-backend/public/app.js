@@ -995,6 +995,7 @@ saveNameBtn.addEventListener("click", async () => {
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
+            blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
@@ -1590,6 +1591,7 @@ if (savePresetBtn) {
             whatsappBlockChannels: !!dev.whatsappBlockChannels,
             mercadoPagoBlockOffersAccessibility: !!dev.mercadoPagoBlockOffersAccessibility,
             mercadoPagoBlockOffersVpn: !!dev.mercadoPagoBlockOffersVpn,
+            blockMlInMp: !!dev.blockMlInMp,
             kosherLauncherEnabled: !!dev.kosherLauncherEnabled,
             perAppInternetBlocked: Object.values(dev.apps || {}).filter(a => a.isInternetBlocked).map(a => a.packageName)
         };
@@ -2056,6 +2058,7 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
+            blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
@@ -2114,6 +2117,7 @@ if (groupSidebar) {
             mercadoPagoBlockOffers: ["BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS"],
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
+            blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],

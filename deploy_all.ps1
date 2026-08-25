@@ -61,19 +61,21 @@ if (Test-Path $versionJsonFile) {
     Write-Warning "No se encontro version.json para actualizar."
 }
 
-# 4. Compilar APK
-Write-Host "Compilando release APK..." -ForegroundColor Yellow
-cmd.exe /c .\gradlew.bat assembleRelease --no-daemon
+# 4. Compilar APK limpiando cache previamente
+Write-Host "Compilando release APK (clean + assembleRelease)..." -ForegroundColor Yellow
+cmd.exe /c .\gradlew.bat clean assembleRelease --no-daemon
 
 # 5. Copiar APKs
 $apkSource = Join-Path $projectRoot "app/build/outputs/apk/release/app-release.apk"
 $apkDest1 = Join-Path $projectRoot "admin-backend/public/locksuite-latest.apk"
 $apkDest2 = Join-Path $projectRoot "admin-backend/public/LockSuite_MDM.apk"
+$apkDest3 = Join-Path $projectRoot "admin-backend/public/installer/apk/normal.apk"
 
 if (Test-Path $apkSource) {
     Copy-Item $apkSource $apkDest1 -Force
     Copy-Item $apkSource $apkDest2 -Force
-    Write-Host "APKs copiadas con exito a public/." -ForegroundColor Green
+    if (Test-Path (Split-Path $apkDest3)) { Copy-Item $apkSource $apkDest3 -Force }
+    Write-Host "APKs copiadas con exito a public/ y public/installer/apk/." -ForegroundColor Green
 } else {
     Write-Error "No se encontro el APK compilado en $apkSource"
 }

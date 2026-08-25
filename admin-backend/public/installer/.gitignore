@@ -1,0 +1,9 @@
+# .gitignore
+repomix-output.md
+.impeccable
+product.md    
+design.md
+agents
+agents.md
+hooks
+skills

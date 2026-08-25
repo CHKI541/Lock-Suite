@@ -93,10 +93,12 @@ echo [*] Asignando permisos de Device Owner...
 %ADB% shell dpm set-device-owner com.ejemplo.locksuite/.receiver.DeviceAdminReceiver
 echo.
 
-:: ─── Activar Accesibilidad ────────────────────────────────
-echo [*] Habilitando Servicio de Accesibilidad...
+:: ─── Activar Accesibilidad y Permisos de Sistema ─────────────
+echo [*] Habilitando Servicio de Accesibilidad y permisos...
+%ADB% shell appops set com.ejemplo.locksuite ACCESS_RESTRICTED_SETTINGS allow
 %ADB% shell settings put secure enabled_accessibility_services com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService
 %ADB% shell settings put secure accessibility_enabled 1
+%ADB% shell pm grant com.ejemplo.locksuite android.permission.WRITE_SECURE_SETTINGS
 echo.
 
 :: ─── Limpiar APK temporal ────────────────────────────────

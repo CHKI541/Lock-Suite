@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F1C40F"/>
+      <stop offset="50%" stop-color="#F39C12"/>
+      <stop offset="100%" stop-color="#E67E22"/>
+    </linearGradient>
+    <linearGradient id="shieldInner" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1E3E62"/>
+      <stop offset="100%" stop-color="#0B192C"/>
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F1C40F" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#27AE60" stop-opacity="0.2"/>
+    </linearGradient>
+    <filter id="shieldGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+  
+  <!-- Outer Glow -->
+  <path d="M64 6 L18 24 C18 64 36 100 64 122 C92 100 110 64 110 24 Z" fill="url(#glowGrad)" filter="url(#shieldGlow)" opacity="0.4"/>
+  
+  <!-- Outer Shield Border -->
+  <path d="M64 8 L20 26 C20 65 38 100 64 120 C90 100 108 65 108 26 Z" fill="url(#shieldGrad)"/>
+  
+  <!-- Inner Shield Body -->
+  <path d="M64 15 L27 31 C27 64 42 94 64 111 C86 94 101 64 101 31 Z" fill="url(#shieldInner)"/>
+  
+  <!-- Subtle High-Tech Grid Line in Shield -->
+  <path d="M64 15 V111 M27 31 H101" stroke="#2C5282" stroke-width="1.5" opacity="0.4"/>
+  
+  <!-- Lock Shackle -->
+  <path d="M48 54 V42 C48 33.16 55.16 26 64 26 C72.84 26 80 33.16 80 42 V54" fill="none" stroke="url(#shieldGrad)" stroke-width="9" stroke-linecap="round"/>
+  
+  <!-- Lock Body -->
+  <rect x="40" y="52" width="48" height="38" rx="9" fill="url(#shieldGrad)"/>
+  
+  <!-- Lock Inner Shield Core -->
+  <circle cx="64" cy="67" r="5.5" fill="#0B192C"/>
+  <polygon points="61,67 67,67 69,79 59,79" fill="#0B192C"/>
+</svg>

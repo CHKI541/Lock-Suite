@@ -206,6 +206,14 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     policyManager.setMercadoPagoBlockOffersVpn(false)
                     true
                 }
+                "BLOCK_ML_IN_MP" -> {
+                    policyManager.setMercadoLibreInMpBlocked(true)
+                    true
+                }
+                "UNBLOCK_ML_IN_MP" -> {
+                    policyManager.setMercadoLibreInMpBlocked(false)
+                    true
+                }
 
                 "HIDE_APP" -> {
                     val appController = com.ejemplo.locksuite.mdm.AppController(this)

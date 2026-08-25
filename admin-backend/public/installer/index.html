@@ -1,292 +1,789 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="he" dir="rtl">
+
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Instalador LockSuite MDM</title>
-  <link rel="stylesheet" href="installer.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>מתקין LockSuite MDM</title>
+    <link rel="icon" type="image/svg+xml" href="images/locksuite-logo.svg">
+
+    <!-- Google Fonts & Material Icons -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Heebo:wght@300;400;700&display=swap"
+        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0"
+        rel="stylesheet" />
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/styles.css">
+
+    <!-- Anti-flash Theme Init -->
+    <script>
+        (function () {
+            try {
+                var saved = localStorage.getItem('locksuite-installer-theme') || localStorage.getItem('abloq-installer-theme');
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                var theme = saved || (prefersDark ? 'dark' : 'light');
+                document.documentElement.setAttribute('data-theme', theme);
+                if (theme === 'light') {
+                    document.documentElement.classList.add('light-theme');
+                }
+            } catch (e) { }
+        })();
+    </script>
+
+    <!-- WebADB Library -->
+    <script src="js/webadb.js"></script>
 </head>
-<body>
-  <!-- Top Navigation Header -->
-  <header>
-    <div class="brand">
-      <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-      </svg>
-      <span>Instalador LockSuite</span>
-      <button id="btnShowQrModal" style="margin-left: 12px; padding: 5px 12px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.4); border-radius: 8px; color: #60a5fa; font-size: 0.8rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-        Instalación por QR
-      </button>
-    </div>
-    <div class="stepper-dots" id="stepperDots">
-      <div class="dot active" data-step="1"></div>
-      <div class="dot" data-step="2"></div>
-      <div class="dot" data-step="3"></div>
-      <div class="dot" data-step="4"></div>
-      <div class="dot" data-step="5"></div>
-      <div class="dot" data-step="6"></div>
-    </div>
-  </header>
 
-  <!-- Main Content Layout -->
-  <main>
-    <div class="installer-container">
-      
-      <!-- Phone Mockup Frame (Left) -->
-      <div class="phone-frame">
-        <div class="phone-notch"></div>
-        <div class="phone-screen" id="phoneScreen">
-          <svg id="phoneIllustration" viewBox="0 0 100 100" width="120" height="120" fill="none">
-            <rect x="25" y="15" width="50" height="70" rx="6" stroke="#3b82f6" stroke-width="3"/>
-            <circle cx="50" cy="50" r="15" fill="#3b82f6" opacity="0.2"/>
-            <path d="M45 50l4 4 8-8" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <div class="phone-instruction-caption" id="phoneCaption">Guía interactiva de instalación</div>
+<body class="welcome-mode">
+
+    <header>
+        <div class="app-title" onclick="window.location.reload()">
+            <img src="images/locksuite-logo.svg" alt="LockSuite Logo" class="brand-logo-img">
+            <span>LockSuite <span class="brand-accent-kosher">MDM</span></span>
         </div>
-      </div>
-
-      <!-- Right Panel: Step Views -->
-      <div class="content-panel">
-
-        <!-- STEP 1: WELCOME -->
-        <div class="step-view" id="step1">
-          <div class="step-header">
-            <h1 class="step-title">Bienvenido al Instalador de LockSuite</h1>
-            <p class="step-subtitle">Esta herramienta interactiva te guiará paso a paso para instalar y configurar LockSuite MDM con permisos de Device Owner y Accesibilidad en tu teléfono Android vía USB.</p>
-          </div>
-          <div class="alert-banner">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-            <div>Asegúrate de tener un cable USB para conectar el celular a esta computadora. Usaremos <b>Google Chrome</b>, Microsoft Edge o Brave.</div>
-          </div>
-
-          <div style="margin: 12px 0; padding: 14px 16px; background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.25); border-radius: 10px;">
-            <div style="font-weight: 600; color: #93c5fd; margin-bottom: 8px;">💡 ¿En Windows y el botón no funciona?</div>
-            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 10px;">En Windows, el driver ADB puede bloquear la conexión del navegador. En ese caso usá el script automático:</div>
-            <a href="../instalar_locksuite.bat" download style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.4); border-radius: 8px; color: #60a5fa; text-decoration: none; font-size: 0.85rem; font-weight: 600;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              Descargar instalador_locksuite.bat (Windows)
-            </a>
-          </div>
-
-          <div style="margin: 14px 0;">
-            <button class="btn" id="btnShowQrModalStep1" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px; font-size: 0.88rem; font-weight: 600; background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3); color: #60a5fa; cursor: pointer;">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-              📱 Ver Código QR (para celulares nuevos o formateados)
+        <div class="header-actions">
+            <button id="theme-toggle-btn" class="theme-toggle-btn" onclick="toggleTheme()"
+                title="החלף ערכת נושא (בהיר / כהה)" aria-label="החלף ערכת נושא">
+                <span class="material-symbols-rounded" id="theme-toggle-icon">light_mode</span>
             </button>
-          </div>
-
-          <div class="actions-bar">
-            <div class="device-status-pill">
-              <span class="status-dot"></span>
-              <span id="statusTextStep1">No conectado</span>
+            <div class="stepper">
+                <div class="step-dot active" id="dot-0"></div>
+                <div class="step-dot" id="dot-1"></div>
+                <div class="step-dot" id="dot-2"></div>
+                <div class="step-dot" id="dot-3"></div>
+                <div class="step-dot" id="dot-4"></div>
             </div>
-            <button class="btn btn-primary" id="btnStartStep1">Comenzar proceso (WebUSB) &rarr;</button>
-          </div>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- ... Content Panel ... -->
+        <div class="content-panel">
+
+            <!-- Global Device Disconnected Warning Banner -->
+            <div id="device-disconnect-banner" class="global-rescue-bar disconnect-alert-bar" style="display: none;">
+                <div class="rescue-bar-content">
+                    <span class="material-symbols-rounded rescue-icon" style="color: var(--md-sys-color-error, #F28B82);">link_off</span>
+                    <div class="rescue-text">
+                        <strong id="disconnect-banner-title">המכשיר נותק מהמחשב</strong>
+                        <span id="disconnect-banner-desc">חיבור ה-USB הופסק. ודאו שהכבל מחובר כראוי והמסך אינו נעול.</span>
+                    </div>
+                </div>
+                <div class="rescue-actions">
+                    <button class="btn btn-tonal btn-rescue-action" onclick="connectAdb()">
+                        <span class="material-symbols-rounded">refresh</span> חבר מחדש
+                    </button>
+                </div>
+            </div>
+
+            <!-- Global Contextual Emergency Restore Banner -->
+            <div id="emergency-restore-box" class="global-rescue-bar" style="display: none;">
+                <div class="rescue-bar-content">
+                    <span class="material-symbols-rounded rescue-icon">build_circle</span>
+                    <div class="rescue-text">
+                        <strong id="rescue-banner-title">זוהו רכיבי מערכת מושבתים מהפעלה קודמת</strong>
+                        <span id="rescue-banner-desc">נמצאו חבילות שהושבתו זמנית ולא שוחזרו. מומלץ לשחזרן כדי להחזיר את
+                            המכשיר לתקינות מלאה.</span>
+                    </div>
+                </div>
+                <div class="rescue-actions">
+                    <button class="btn btn-tonal btn-rescue-action" onclick="emergencyRestoreAccounts()">
+                        <span class="material-symbols-rounded">settings_backup_restore</span> שחזר רכיבים כעת
+                    </button>
+                </div>
+            </div>
+
+            <!-- PAGE 0: Welcome -->
+            <div id="page-main" class="page active"
+                style="justify-content: center; align-items: center; text-align: center;">
+                <div id="page-main-content" class="welcome-brand-hero">
+                    <div class="brand-badge-container">
+                        <img src="images/locksuite-logo.svg" alt="LockSuite Logo" class="welcome-brand-logo">
+                    </div>
+                    <h2 class="welcome-title">ברוכים הבאים</h2>
+                    <p class="welcome-subtitle">
+                        כלי זה יסייע לכם להתקין ולהגדיר את LockSuite MDM על מכשיר האנדרואיד שלכם בקלות ובמהירות.
+                    </p>
+                    <button class="btn" onclick="navigateTo('page-adb', 1)">
+                        התחל תהליך
+                        <span class="material-symbols-rounded">arrow_back</span>
+                    </button>
+                </div>
+                <div id="compatibility-notice" class="compat-card" style="display: none;">
+                    <div class="compat-icon-badge">
+                        <span class="material-symbols-rounded">browser_updated</span>
+                    </div>
+                    <h2>דפדפן לא נתמך</h2>
+                    <p class="compat-description">
+                        התקנה זו דורשת תמיכה מלאה בתקן <strong>WebUSB</strong> לצורך תקשורת ישירה ומאובטחת עם המכשיר.
+                    </p>
+                    <div class="compat-browser-grid">
+                        <div class="compat-browser-chip"><span class="material-symbols-rounded">check_circle</span>
+                            Google Chrome</div>
+                        <div class="compat-browser-chip"><span class="material-symbols-rounded">check_circle</span>
+                            Microsoft Edge</div>
+                        <div class="compat-browser-chip"><span class="material-symbols-rounded">check_circle</span>
+                            Brave Browser</div>
+                        <div class="compat-browser-chip"><span class="material-symbols-rounded">check_circle</span>
+                            Opera</div>
+                    </div>
+                    <div class="compat-hint">
+                        <span class="material-symbols-rounded">info</span> אנא פתחו אתר זה באחד מהדפדפנים הנתמכים כדי
+                        להמשיך.
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAGE 1: ADB -->
+            <div id="page-adb" class="page">
+                <h2>חיבור למחשב</h2>
+                <div class="info-card">
+                    <span class="material-symbols-rounded">usb</span>
+                    <div>יש להפעיל "אפשרויות מפתחים" ו"ניפוי באגים ב-USB" כדי לאפשר לתוכנה לתקשר עם המכשיר.</div>
+                </div>
+
+                <div style="flex-grow: 1;">
+                    <div class="list-item">
+                        <div class="icon"><span class="material-symbols-rounded">cable</span></div> חברו את המכשיר למחשב
+                        באמצעות כבל USB
+                    </div>
+                    <div class="list-item">
+                        <div class="icon"><span class="material-symbols-rounded">info</span></div> הכנסו להגדרות -> מידע
+                        על המכשיר
+                    </div>
+                    <div class="list-item">
+                        <div class="icon"><span class="material-symbols-rounded">touch_app</span></div> לחצו 7 פעמים על
+                        "מספר Build"
+                    </div>
+                    <div class="list-item">
+                        <div class="icon"><span class="material-symbols-rounded">developer_mode</span></div> חזרו למערכת
+                        -> אפשרויות מפתחים
+                    </div>
+                    <div class="list-item">
+                        <div class="icon"><span class="material-symbols-rounded">toggle_on</span></div> הפעילו את "ניפוי
+                        באגים ב-USB"
+                    </div>
+                    <div class="list-item" style="color: var(--md-sys-color-primary);">
+                        <div class="icon"
+                            style="background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary);">
+                            <span class="material-symbols-rounded" style="font-size: 16px;">priority_high</span>
+                        </div>
+                        בחלון שיופיע במכשיר, סמנו "אפשר תמיד ממחשב זה" ואשרו.
+                    </div>
+                </div>
+
+                <div class="action-area">
+                    <div id="adb-status" class="status-badge">
+                        <span class="material-symbols-rounded">link_off</span> לא מחובר
+                    </div>
+                    <div>
+                        <button id="btn-connect" class="btn" onclick="connectAdb()">חבר מכשיר</button>
+                        <button id="btn-next-adb" class="btn" onclick="navigateTo('page-accounts', 2)" disabled
+                            style="display:none;">
+                            הבא <span class="material-symbols-rounded">arrow_back</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAGE 2: Accounts -->
+            <div id="page-accounts" class="page">
+                <div class="page-title-row">
+                    <h2>בדיקת חשבונות</h2>
+                </div>
+
+                <!-- Dynamic Account State Hero -->
+                <div id="account-hero-status" class="account-hero-card checking">
+                    <span id="account-hero-icon" class="material-symbols-rounded">sync</span>
+                    <div class="hero-text-content">
+                        <div id="account-hero-title" class="hero-title">סורק חשבונות פעילים במכשיר...</div>
+                        <div id="account-hero-desc" class="hero-desc">מבצע בדיקת עומק של חשבונות המערכת דרך ADB</div>
+                    </div>
+                </div>
+
+                <!-- Account List Container -->
+                <div id="account-list"></div>
+
+                <!-- Action Options Container (Shown when accounts detected) -->
+                <div id="account-action-options" class="account-action-options-group" style="display: none;">
+
+                    <!-- Choice 1: Automated 1-Click Bypass (On Android < 14) -->
+                    <div id="opt-bypass-card" class="action-choice-card recommended-choice"
+                        onclick="handleBypassTriggerClick(event)">
+                        <div class="choice-icon-wrap">
+                            <span class="material-symbols-rounded">auto_fix_high</span>
+                        </div>
+                        <div class="choice-info">
+                            <div class="choice-title-row">
+                                <strong>התקנה מהירה ללא הסרת חשבונות</strong>
+                                <span class="choice-pill-recommended">מומלץ (Beta)</span>
+                            </div>
+                            <div class="choice-desc">השבתה זמנית של שירותי האימות בלחיצה אחת, ללא מחיקת נתונים, ושחזורם
+                                האוטומטי בסיום.</div>
+                        </div>
+                        <button id="btn-bypass-trigger" class="btn btn-choice-btn" type="button"
+                            onclick="event.stopPropagation(); handleBypassTriggerClick(event)">
+                            <span class="material-symbols-rounded">bolt</span> הפעל עקיפה
+                        </button>
+                    </div>
+
+                    <!-- Choice 2: Manual Removal Guide (Accordion / Step Card) -->
+                    <details id="opt-manual-card" class="action-choice-card manual-choice-card">
+                        <summary class="manual-summary">
+                            <div class="manual-summary-left">
+                                <span class="material-symbols-rounded summary-icon">tune</span>
+                                <strong id="manual-choice-heading">או בצע הסרה ידנית בהגדרות המכשיר</strong>
+                            </div>
+                            <span class="material-symbols-rounded expand-arrow">expand_more</span>
+                        </summary>
+                        <div class="manual-steps-body">
+                            <div class="list-item">
+                                <div class="icon"><span class="material-symbols-rounded">manage_accounts</span></div>
+                                הכנסו להגדרות המכשיר -> חשבונות וגיבוי -> ניהול חשבונות
+                            </div>
+                            <div class="list-item">
+                                <div class="icon"><span class="material-symbols-rounded">person_remove</span></div> בחרו
+                                כל חשבון פעיל (Google, Samsung וכו') והקישו "הסר חשבון"
+                            </div>
+                            <div class="manual-action-row">
+                                <button class="btn btn-tonal" onclick="checkAccounts()">
+                                    <span class="material-symbols-rounded">refresh</span> בדוק שוב לאחר ההסרה
+                                </button>
+                            </div>
+                        </div>
+                    </details>
+
+                </div>
+
+                <!-- Fill space -->
+                <div style="flex-grow: 1;"></div>
+
+                <div class="action-area">
+                    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                        <div id="account-status" class="status-badge">
+                            <span class="material-symbols-rounded">pending</span> ממתין לבדיקה
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn btn-tonal" onclick="checkAccounts()">
+                            <span class="material-symbols-rounded">refresh</span> בדוק שוב
+                        </button>
+                        <button id="btn-next-acc" class="btn" onclick="navigateTo('page-update', 3)" disabled>
+                            הבא <span class="material-symbols-rounded">arrow_back</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAGE 3: Update -->
+            <div id="page-update" class="page">
+                <h2>עדכון גרסה</h2>
+                <div class="info-card">
+                    <span class="material-symbols-rounded">cloud_download</span>
+                    <div id="update-info-text">יוצר קשר עם שרתי GitHub...</div>
+                </div>
+
+                <div
+                    style="flex-grow: 1; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+                    <h3 id="dl-status-text" style="font-weight: 300; margin: 0;"></h3>
+                    <div class="progress-wrapper" id="dl-progress-wrapper">
+                        <div class="progress-fill" id="dl-progress-bar"></div>
+                    </div>
+                </div>
+
+                <div class="action-area">
+                    <button class="btn btn-tonal" onclick="navigateTo('page-install', 4)">דלג והשתמש בגרסה
+                        קיימת</button>
+                    <button id="btn-download" class="btn" onclick="startDownload()" disabled>
+                        <span class="material-symbols-rounded">download</span> הורד ועדכן
+                    </button>
+                </div>
+            </div>
+
+            <!-- PAGE 4: Install -->
+            <div id="page-install" class="page">
+                <div class="install-header-row">
+                    <div>
+                        <h2>התקנה</h2>
+                        <p class="install-subtitle">התקנת LockSuite MDM</p>
+                    </div>
+                    <button class="btn btn-tonal btn-console-trigger" type="button" onclick="openConsoleModal()"
+                        title="פתח יומן פקודות טכני">
+                        <span class="material-symbols-rounded">terminal</span>
+                        <span>יומן פקודות</span>
+                        <span id="console-badge-count" class="console-count-badge">0</span>
+                    </button>
+                </div>
+
+                <!-- Active Step Hero Banner -->
+                <div class="install-hero-card" id="install-hero-status">
+                    <div class="install-hero-icon-wrap">
+                        <span class="material-symbols-rounded" id="install-hero-icon">sync</span>
+                    </div>
+                    <div class="install-hero-info">
+                        <div class="install-hero-header">
+                            <span class="install-hero-title" id="install-hero-title">מתכונן להתקנה...</span>
+                            <span class="install-hero-percent" id="install-hero-percent">0%</span>
+                        </div>
+                        <div class="install-hero-desc" id="install-hero-desc">בודק הרשאות ומכין את תהליך ההתקנה של
+                            LockSuite MDM</div>
+
+                        <!-- Material 3 Standard Progress Bar -->
+                        <div class="progress-wrapper" id="install-progress-wrapper" style="display: block;">
+                            <div class="progress-fill" id="install-progress-bar"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6-Stage Visual Milestone Progress Timeline -->
+                <div class="install-milestones-container" id="install-milestones">
+                    <!-- Milestone 1: Pre-checks -->
+                    <div class="milestone-card" id="milestone-1" data-step="1">
+                        <div class="milestone-indicator">
+                            <div class="milestone-dot">
+                                <span class="material-symbols-rounded milestone-icon">verified_user</span>
+                            </div>
+                            <div class="milestone-line"></div>
+                        </div>
+                        <div class="milestone-content">
+                            <div class="milestone-title-row">
+                                <span class="milestone-title">1. בדיקת תקינות המכשיר</span>
+                                <span class="milestone-badge badge-pending">ממתין</span>
+                            </div>
+                            <div class="milestone-caption">אימות שאין מנהל מכשיר קיים / או בעיות אחרות</div>
+                        </div>
+                    </div>
+
+                    <!-- Milestone 2: Download / Verification -->
+                    <div class="milestone-card" id="milestone-2" data-step="2">
+                        <div class="milestone-indicator">
+                            <div class="milestone-dot">
+                                <span class="material-symbols-rounded milestone-icon">cloud_download</span>
+                            </div>
+                            <div class="milestone-line"></div>
+                        </div>
+                        <div class="milestone-content">
+                            <div class="milestone-title-row">
+                                <span class="milestone-title">2. הורדת קובץ ההתקנה</span>
+                                <span class="milestone-badge badge-pending">ממתין</span>
+                            </div>
+                            <div class="milestone-caption">טעינת גרסת LockSuite העדכנית ביותר</div>
+                        </div>
+                    </div>
+
+                    <!-- Milestone 3: Push to device -->
+                    <div class="milestone-card" id="milestone-3" data-step="3">
+                        <div class="milestone-indicator">
+                            <div class="milestone-dot">
+                                <span class="material-symbols-rounded milestone-icon">sync_alt</span>
+                            </div>
+                            <div class="milestone-line"></div>
+                        </div>
+                        <div class="milestone-content">
+                            <div class="milestone-title-row">
+                                <span class="milestone-title">3. העברת הקובץ למכשיר</span>
+                                <span class="milestone-badge badge-pending">ממתין</span>
+                            </div>
+                            <div class="milestone-caption">העברת קובץ ההתקנה ישירות לזיכרון המכשיר</div>
+                        </div>
+                    </div>
+
+                    <!-- Milestone 4: PM Install -->
+                    <div class="milestone-card" id="milestone-4" data-step="4">
+                        <div class="milestone-indicator">
+                            <div class="milestone-dot">
+                                <span class="material-symbols-rounded milestone-icon">install_mobile</span>
+                            </div>
+                            <div class="milestone-line"></div>
+                        </div>
+                        <div class="milestone-content">
+                            <div class="milestone-title-row">
+                                <span class="milestone-title">4. התקנת LockSuite במכשיר</span>
+                                <span class="milestone-badge badge-pending">ממתין</span>
+                            </div>
+                            <div class="milestone-caption">מתקין קובץ apk</div>
+                        </div>
+                    </div>
+
+                    <!-- Milestone 5: Set Device Owner & Permissions -->
+                    <div class="milestone-card" id="milestone-5" data-step="5">
+                        <div class="milestone-indicator">
+                            <div class="milestone-dot">
+                                <span class="material-symbols-rounded milestone-icon">admin_panel_settings</span>
+                            </div>
+                            <div class="milestone-line"></div>
+                        </div>
+                        <div class="milestone-content">
+                            <div class="milestone-title-row">
+                                <span class="milestone-title">5. הגדרת ניהול והרשאות מערכת</span>
+                                <span class="milestone-badge badge-pending">ממתין</span>
+                            </div>
+                            <div class="milestone-caption">הפעלת ניהול ראשי והענקת הרשאות מערכת ונגישות</div>
+                        </div>
+                    </div>
+
+                    <!-- Milestone 6: Launch & Finalize -->
+                    <div class="milestone-card" id="milestone-6" data-step="6">
+                        <div class="milestone-indicator">
+                            <div class="milestone-dot">
+                                <span class="material-symbols-rounded milestone-icon">rocket_launch</span>
+                            </div>
+                        </div>
+                        <div class="milestone-content">
+                            <div class="milestone-title-row">
+                                <span class="milestone-title">6. הפעלת האפליקציה וסיום</span>
+                                <span class="milestone-badge badge-pending">ממתין</span>
+                            </div>
+                            <div class="milestone-caption">הפעלת LockSuite במכשיר והשלמת ההתקנה</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Installation Failure / Recovery Container -->
+                <div id="install-error-box" class="install-error-card" style="display: none;">
+                    <div class="install-error-header">
+                        <div class="install-error-icon-wrap">
+                            <span class="material-symbols-rounded">error</span>
+                        </div>
+                        <div class="install-error-title-wrap">
+                            <div id="install-error-title" class="install-error-title">ההתקנה נכשלה</div>
+                            <div id="install-error-desc" class="install-error-desc"></div>
+                        </div>
+                    </div>
+                    <div id="install-error-actions" class="install-error-actions">
+                        <button id="btn-err-back-accounts" class="btn btn-tonal" style="display: none;"
+                            onclick="navigateTo('page-accounts', 2)">
+                            <span class="material-symbols-rounded">arrow_forward</span> חזור למסך חשבונות
+                        </button>
+                        <button id="btn-err-retry" class="btn" onclick="runInstallation()">
+                            <span class="material-symbols-rounded">refresh</span> נסה שוב
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Manual APK Fallback Container -->
+                <div id="manual-apk-box" class="warning-box" style="display: none; margin-top: 15px;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                        <span class="material-symbols-rounded" style="color: #FFB4AB; font-size: 24px;">info</span>
+                        <div><strong>זוהתה בעיית סינון רשת (נטפרי / ISP):</strong> הורדת קובץ ההתקנה נחסמה בדפדפן.</div>
+                    </div>
+                    <p
+                        style="font-size: 0.88rem; margin-bottom: 12px; color: var(--md-sys-color-on-surface-variant, #ccc);">
+                        באפשרותך להוריד את הקובץ ישירות בדפדפן דרך אחד מקישורי הגיבוי הבאים, ולאחר מכן לבחור אותו:
+                    </p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;">
+                        <a href="../locksuite-latest.apk" download
+                            class="btn btn-tonal"
+                            style="text-decoration: none; height: 36px; font-size: 0.85rem; padding: 0 12px;">
+                            <span class="material-symbols-rounded" style="font-size: 18px;">cloud_download</span> הורדת LockSuite APK
+                        </a>
+                        <a href="../LockSuite_MDM.apk" download
+                            class="btn btn-tonal"
+                            style="text-decoration: none; height: 36px; font-size: 0.85rem; padding: 0 12px;">
+                            <span class="material-symbols-rounded" style="font-size: 18px;">download</span> הורדת LockSuite MDM
+                        </a>
+                    </div>
+                    <label class="btn"
+                        style="cursor: pointer; height: 40px; font-size: 0.9rem; width: 100%; justify-content: center;">
+                        <span class="material-symbols-rounded">file_open</span> בחר קובץ APK שהורדת
+                        <input type="file" id="manual-apk-input" accept=".apk" style="display: none;"
+                            onchange="handleManualApkSelect(this)">
+                    </label>
+                </div>
+
+                <div class="action-area">
+                    <div style="flex: 1;"></div>
+
+                    <button id="btn-new-device" class="btn" onclick="startNewDeviceInstall()" style="display: none;"
+                        disabled>
+                        <span class="material-symbols-rounded">restart_alt</span> התקן על מכשיר נוסף
+                    </button>
+                    <button id="btn-install-start" style="display: none;" onclick="runInstallation()"></button>
+                </div>
+            </div>
+
+
+            <!-- Footer Footprint -->
+            <footer class="footprint">
+                <a href="../index.html" class="footprint-brand">
+                    <img src="images/locksuite-logo.svg" alt="LockSuite Logo" class="footprint-logo">
+                    LockSuite MDM Panel
+                </a>
+                <span>•</span>
+                <a href="../instalar_locksuite.bat" download>Descargar instalador (.bat)</a>
+            </footer>
         </div>
 
-        <!-- STEP 2: ENABLE USB DEBUGGING & CONNECT -->
-        <div class="step-view" id="step2" style="display: none;">
-          <div class="step-header">
-            <h1 class="step-title">Habilitar Depuración USB y Conectar</h1>
-            <p class="step-subtitle">Sigue estos pasos en tu celular, luego presiona el botón para conectar.</p>
-          </div>
-          <ul class="instructions-list">
-            <li class="instruction-item">
-              <span class="badge-number">1</span>
-              <span>Conecta el teléfono a la computadora mediante un cable USB.</span>
-            </li>
-            <li class="instruction-item">
-              <span class="badge-number">2</span>
-              <span>Entra en <b>Ajustes</b> &rarr; <b>Acerca del teléfono</b>.</span>
-            </li>
-            <li class="instruction-item">
-              <span class="badge-number">3</span>
-              <span>Toca <b>7 veces seguidas</b> en "Número de compilación".</span>
-            </li>
-            <li class="instruction-item">
-              <span class="badge-number">4</span>
-              <span>Ve a Ajustes &rarr; <b>Opciones de desarrollador</b>.</span>
-            </li>
-            <li class="instruction-item">
-              <span class="badge-number">5</span>
-              <span>Activa el interruptor <b>"Depuración USB"</b>.</span>
-            </li>
-          </ul>
-          <div id="usbNotSupportedWarning" style="display:none;" class="alert-banner" style="border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.1);">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <div><b>Este navegador no soporta WebUSB.</b> Por favor abrí esta página en <b>Google Chrome</b>, Edge o Brave.</div>
-          </div>
-          <div class="actions-bar">
-            <div class="device-status-pill">
-              <span class="status-dot" id="statusDotStep2"></span>
-              <span id="statusTextStep2">Listo para conectar</span>
+        <!-- RIGHT PANEL (PHONE) -->
+        <div class="phone-panel" id="phone-panel">
+            <!-- Header with single clean title and icon -->
+            <div class="phone-panel-header" id="phone-panel-header">
+                <div class="phone-guide-badge" id="phone-guide-badge">
+                    <span class="material-symbols-rounded" id="phone-badge-icon">play_circle</span>
+                    <span id="phone-guide-title">מדריך: הפעלת ניפוי באגים ב-USB</span>
+                </div>
             </div>
-            <div class="btn-group">
-              <button class="btn btn-secondary" id="btnBackStep2">&larr; Atrás</button>
-              <button class="btn btn-primary" id="btnConnectUsb">🔌 Conectar dispositivo</button>
+
+            <!-- Phone Mockup Frame -->
+            <div class="phone-frame" id="phone-frame" onclick="handlePhoneFrameClick(event)">
+                <!-- Top speaker notch -->
+                <div class="phone-notch">
+                    <div class="phone-speaker"></div>
+                    <div class="phone-camera-lens"></div>
+                </div>
+
+                <!-- Video Element -->
+                <video id="guide-video" src="Videos/enable-adb.mp4" loop muted playsinline preload="auto"></video>
+
+                <!-- In-Frame Floating Play/Pause Indicator (Brief ripple animation on click) -->
+                <div class="phone-video-overlay" id="phone-video-overlay">
+                    <span class="material-symbols-rounded" id="phone-overlay-icon">play_arrow</span>
+                </div>
+
+                <!-- Live Installation State Screen inside phone (Shown during install / update) -->
+                <div id="phone-installing-screen" class="phone-screen-view" style="display: none;">
+                    <div class="phone-install-graphic">
+                        <div class="phone-install-pulse-ring"></div>
+                        <div class="phone-install-pulse-ring-outer"></div>
+                        <img src="images/locksuite-logo.svg" alt="LockSuite" class="phone-install-logo">
+                    </div>
+                    <div class="phone-install-state-title" id="phone-install-step-title">מתקין את LockSuite...</div>
+                    <div class="phone-install-state-desc" id="phone-install-step-desc">מעביר קבצים ומגדיר הרשאות מערכת ונגישות
+                    </div>
+                    <div class="phone-install-progress-bar">
+                        <div class="phone-install-progress-fill" id="phone-install-progress-fill"></div>
+                    </div>
+                </div>
+
+                <!-- Success Screen (Shown on completion) -->
+                <div id="phone-success-message" class="phone-screen-view" style="display: none;">
+                    <div class="phone-success-logo-wrap">
+                        <img src="images/locksuite-logo.svg" alt="LockSuite Logo" class="phone-success-logo">
+                    </div>
+                    <div class="text">
+                        תודה שבחרתם ב<br>
+                        <span class="brand">LockSuite</span>
+                    </div>
+                    <div class="phone-success-subtext">ההתקנה הושלמה בהצלחה</div>
+                </div>
             </div>
-          </div>
+
+            <!-- Phone Footer / Controls -->
+            <div class="phone-panel-footer" id="phone-panel-footer">
+                <div class="phone-controls" id="phone-controls">
+                    <button class="phone-ctrl-btn" id="btn-video-play-pause" onclick="toggleVideo()"
+                        title="הפעל / השהה">
+                        <span class="material-symbols-rounded" id="video-icon">play_arrow</span>
+                    </button>
+                    <button class="phone-ctrl-btn phone-ctrl-secondary" id="btn-video-replay" onclick="replayVideo()"
+                        title="נגן מהתחלה">
+                        <span class="material-symbols-rounded">replay</span>
+                    </button>
+                </div>
+                <div class="phone-info-card" id="phone-info-card">
+                    <span class="material-symbols-rounded phone-info-icon">info</span>
+                    <p id="video-info-text" class="phone-info-text">ייתכנו שינויים קלים במיקום ההגדרות בין דגמים שונים
+                    </p>
+                </div>
+            </div>
         </div>
 
-        <!-- STEP 3: AUTHORIZE ADB RSA -->
-        <div class="step-view" id="step3" style="display: none;">
-          <div class="step-header">
-            <h1 class="step-title">Autorizar Conexión en el Celular</h1>
-            <p class="step-subtitle">Tu computadora está estableciendo comunicación con el dispositivo.</p>
-          </div>
-          <div class="alert-banner">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            <div>En la pantalla de tu celular aparecerá un cuadro de diálogo preguntando <b>"¿Permitir depuración USB desde esta computadora?"</b>. Marca la casilla <b>"Permitir siempre desde esta computadora"</b> y toca <b>Aceptar</b>.</div>
-          </div>
-          <div class="actions-bar">
-            <div class="device-status-pill">
-              <span class="status-dot connected"></span>
-              <span id="statusTextStep3">Conectado: verificando autorización...</span>
-            </div>
-            <button class="btn btn-primary" id="btnNextStep3" disabled>Siguiente &rarr;</button>
-          </div>
-        </div>
-
-        <!-- STEP 4: INTERACTIVE ACCOUNTS CHECK -->
-        <div class="step-view" id="step4" style="display: none;">
-          <div class="step-header">
-            <h1 class="step-title">Comprobación de Cuentas de Google</h1>
-            <p class="step-subtitle">Es obligatorio eliminar temporalmente todas las cuentas de Google antes de asignar el permiso Device Owner. Podrás volver a agregarlas inmediatamente después.</p>
-          </div>
-          <div class="alert-banner danger" id="accountAlertBanner">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <div>Ve a <b>Ajustes &rarr; Cuentas y respaldo &rarr; Administrar cuentas</b> y elimina cada cuenta listada abajo.</div>
-          </div>
-          
-          <!-- Dynamic Account Cards List -->
-          <div class="account-cards-list" id="accountCardsList">
-            <!-- Account items injected by JS -->
-          </div>
-
-          <div class="actions-bar">
-            <div class="device-status-pill">
-              <span class="status-dot" id="statusDotAccount"></span>
-              <span id="accountCountText">Escaneando cuentas...</span>
-            </div>
-            <div class="btn-group">
-              <button class="btn btn-secondary" id="btnCheckAccountsAgain">🔄 Comprobar de nuevo</button>
-              <button class="btn btn-primary" id="btnNextStep4" disabled>Siguiente &rarr;</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- STEP 5: AUTOMATED INSTALLATION & PERMISSIONS -->
-        <div class="step-view" id="step5" style="display: none;">
-          <div class="step-header">
-            <h1 class="step-title">Instalación Automatizada en Proceso</h1>
-            <p class="step-subtitle">No desconectes el cable USB. Estamos transfiriendo la última versión de LockSuite y configurando las políticas del sistema.</p>
-          </div>
-
-          <div class="progress-container">
-            <div class="progress-bar-bg">
-              <div class="progress-bar-fill" id="progressBarFill"></div>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary);">
-              <span id="progressStatusText">Iniciando descarga del APK...</span>
-              <span id="progressPercentText">0%</span>
-            </div>
-          </div>
-
-          <div class="terminal-log" id="terminalLog">
-            [INFO] Conexión ADB lista. Iniciando flujo de instalación...<br>
-          </div>
-
-          <div class="actions-bar">
-            <div class="device-status-pill">
-              <span class="status-dot connected"></span>
-              <span>Instalando...</span>
-            </div>
-            <button class="btn btn-primary" id="btnNextStep5" disabled>Finalizar &rarr;</button>
-          </div>
-        </div>
-
-        <!-- STEP 6: SUCCESS -->
-        <div class="step-view" id="step6" style="display: none;">
-          <div class="step-header">
-            <h1 class="step-title" style="color: var(--success-color);">¡Instalación Completada con Éxito!</h1>
-            <p class="step-subtitle">LockSuite MDM ha sido instalado en tu dispositivo y configurado como Device Owner del sistema.</p>
-          </div>
-
-          <ul class="instructions-list">
-            <li class="instruction-item">
-              <span style="color: var(--success-color); font-weight: bold;">✓</span>
-              <span><b>Aplicación instalada:</b> Última versión disponible</span>
-            </li>
-            <li class="instruction-item">
-              <span style="color: var(--success-color); font-weight: bold;">✓</span>
-              <span><b>Permiso Device Owner:</b> Otorgado correctamente</span>
-            </li>
-            <li class="instruction-item">
-              <span style="color: var(--success-color); font-weight: bold;">✓</span>
-              <span><b>Servicios de Accesibilidad:</b> Habilitados a nivel de sistema</span>
-            </li>
-          </ul>
-
-          <div class="alert-banner">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <div>¡Ya podés desconectar el cable USB y volver a iniciar sesión con tu cuenta de Google en el celular si lo deseás!</div>
-          </div>
-
-          <div class="actions-bar">
-            <div></div>
-            <button class="btn btn-primary" id="btnGoToAdmin">Ir al Panel de Administración &rarr;</button>
-          </div>
-        </div>
-
-      </div>
     </div>
-  </main>
 
-  <!-- QR Code Modal -->
-  <div id="qrModalOverlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); z-index: 9999; justify-content: center; align-items: center; padding: 20px;">
-    <div style="background: #1e2430; border: 1px solid #2a3447; border-radius: 16px; max-width: 520px; width: 100%; padding: 24px; color: #f3f4f6; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); position: relative;">
-      
-      <button id="btnCloseQrModal" style="position: absolute; top: 16px; right: 16px; background: none; border: none; color: #9ca3af; font-size: 1.5rem; cursor: pointer; line-height: 1;">&times;</button>
-      
-      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
-        <div style="padding: 8px; background: rgba(59,130,246,0.2); border-radius: 10px; color: #60a5fa;">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+    <!-- Bypass Confirmation Modal Dialog -->
+    <div id="modal-bypass-confirm" class="app-modal" role="dialog" aria-modal="true">
+        <div class="modal-backdrop" onclick="closeBypassModal()"></div>
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <div class="modal-title-wrap">
+                    <span class="material-symbols-rounded modal-icon-warn">auto_fix_high</span>
+                    <h3>השבתת חשבונות זמנית</h3>
+                </div>
+                <button class="btn-close-modal" onclick="closeBypassModal()" aria-label="סגור">
+                    <span class="material-symbols-rounded">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-lead">
+                    מצב זה מאפשר להגדיר את LockSuite מבלי למחוק את החשבונות שלכם. שירותי האימות של החשבונות יושבתו באופן
+                    זמני בלבד דרך פקודות ADB, וישוחזרו אוטומטית בסיום ההתקנה.
+                </p>
+                <div class="modal-alert-box">
+                    <span class="material-symbols-rounded">security</span>
+                    <div>
+                        <strong>הנתונים שלכם שמורים:</strong> הסיסמאות, הקבצים וההודעות יישארו במכשיר. לא מתבצעת מחיקת
+                        מידע.
+                    </div>
+                </div>
+
+                <div class="modal-section-title">רכיבים שיושבתו זמנית לצורך ההתקנה:</div>
+                <div id="bypass-package-preview" class="bypass-preview-box">
+                    <div class="preview-loading">
+                        <span class="spin-icon material-symbols-rounded">sync</span> מכין רשימת רכיבים...
+                    </div>
+                </div>
+
+                <div class="modal-disclaimer">
+                    <span class="material-symbols-rounded disclaimer-icon">info</span> במקרים נדירים, אפליקציות מסוימות
+                    עלולות להציג הודעת שגיאה זמנית עד לשחזור בסיום התהליך.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-tonal" onclick="closeBypassModal()">ביטול</button>
+                <button id="btn-confirm-bypass" class="btn" onclick="executeBypassFromModal()">
+                    <span class="material-symbols-rounded">bolt</span> הפעל מצב עקיפה והמשך
+                </button>
+            </div>
         </div>
-        <div>
-          <h2 style="font-size: 1.15rem; font-weight: 700;">Instalación de LockSuite vía Código QR</h2>
-          <p style="font-size: 0.8rem; color: #9ca3af;">Ideal para celulares nuevos o recién formateados (sin cuentas)</p>
-        </div>
-      </div>
-
-      <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: center; justify-content: center; margin: 20px 0;">
-        <div style="background: #fff; padding: 12px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); text-align: center;">
-          <img id="qrCodeImage" src="" alt="Código QR de instalación" style="width: 200px; height: 200px; display: block;" />
-          <div style="font-size: 0.7rem; color: #4b5563; margin-top: 6px; font-weight: 600;">LockSuite MDM Provisioning</div>
-        </div>
-
-        <div style="flex: 1; min-width: 220px;">
-          <h4 style="font-size: 0.88rem; font-weight: 600; color: #93c5fd; margin-bottom: 8px;">Pasos para instalar:</h4>
-          <ol style="font-size: 0.82rem; color: #d1d5db; line-height: 1.6; padding-left: 18px;">
-            <li style="margin-bottom: 6px;">Encendé el celular en la <b>pantalla inicial de Bienvenida</b> (donde elegís idioma).</li>
-            <li style="margin-bottom: 6px;">Tocá <b>6 veces seguidas</b> en cualquier espacio en blanco de la pantalla.</li>
-            <li style="margin-bottom: 6px;">Se abrirá la cámara integrada de Android. Escaneá este <b>Código QR</b>.</li>
-            <li style="margin-bottom: 6px;">Conectate a WiFi: el celular descargará LockSuite y se configurará solo como Device Owner.</li>
-          </ol>
-        </div>
-      </div>
-
-      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
-        <button id="btnCloseQrModalBottom" class="btn btn-primary" style="padding: 8px 20px; font-size: 0.85rem;">Entendido</button>
-      </div>
-
     </div>
-  </div>
 
-  <script src="webadb.js"></script>
-  <script src="installer.js"></script>
+    <!-- Android 14+ Security Restriction Modal Dialog -->
+    <div id="modal-android14-info" class="app-modal" role="dialog" aria-modal="true">
+        <div class="modal-backdrop" onclick="closeAndroid14Modal()"></div>
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <div class="modal-title-wrap">
+                    <span class="material-symbols-rounded modal-icon-info">shield</span>
+                    <h3>הגבלת אבטחה ב-Android 14 ומעלה</h3>
+                </div>
+                <button class="btn-close-modal" onclick="closeAndroid14Modal()" aria-label="סגור">
+                    <span class="material-symbols-rounded">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-lead">
+                    בגרסאות אנדרואיד 14 ומעלה (SDK 34+), גוגל חסמה לחלוטין את היכולת להשבית רכיבי מערכת וחשבונות דרך
+                    ADB.
+                </p>
+                <div class="modal-instruction-card">
+                    <h4>כיצד להסיר את החשבונות כעת:</h4>
+                    <ol class="instruction-steps">
+                        <li>פתחו את אפליקציית <strong>הגדרות</strong> במכשיר הנייד.</li>
+                        <li>היכנסו לתפריט <strong>חשבונות וגיבוי</strong> -> <strong>ניהול חשבונות</strong>.</li>
+                        <li>לחצו על כל חשבון פעיל (Google, Samsung וכו') והקישו על <strong>הסר חשבון</strong>.</li>
+                        <li>לאחר הסרת החשבונות, חזרו לכאן ולחצו על <strong>בדוק שוב</strong>.</li>
+                    </ol>
+                </div>
+                <p class="text-subtle">
+                    <span class="material-symbols-rounded tip-icon">lightbulb</span> ניתן לחבר מחדש את כל החשבונות מיד
+                    לאחר סיום ההתקנה בהצלחה.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeAndroid14Modal()">הבנתי, אבצע הסרה ידנית</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Interactive Bypass Progress Animated Modal Dialog -->
+    <div id="modal-bypass-progress" class="app-modal" role="dialog" aria-modal="true">
+        <div class="modal-backdrop"></div>
+        <div class="modal-dialog progress-modal-dialog">
+            <div class="modal-header">
+                <div class="modal-title-wrap">
+                    <span class="material-symbols-rounded modal-icon-warn spin-icon">sync</span>
+                    <h3 id="bypass-progress-title">משבית שירותי אימות זמנית...</h3>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="progress-hero-stat">
+                    <div class="glow-spinner-box">
+                        <div class="pulse-ring"></div>
+                        <span class="material-symbols-rounded stat-icon">bolt</span>
+                    </div>
+                    <div class="stat-text-wrap">
+                        <div id="bypass-progress-headline" class="stat-headline">מבצע השבתה מבוקרת דרך ADB...</div>
+                        <div id="bypass-progress-counter" class="stat-sub">מכין רשימת רכיבים...</div>
+                    </div>
+                </div>
+
+                <div class="progress-meter-container">
+                    <div id="bypass-meter-bar" class="progress-meter-fill" style="width: 0%;"></div>
+                </div>
+
+                <div class="modal-section-title" style="margin-top: 15px;">מעקב ביצוע בזמן אמת:</div>
+                <div id="bypass-live-checklist" class="bypass-checklist-box">
+                    <!-- Populated dynamically with real-time status items -->
+                </div>
+
+                <div class="modal-reassurance-card">
+                    <span class="material-symbols-rounded">verified_user</span>
+                    <span><strong>המידע שלכם מוגן:</strong> החשבונות והנתונים לא נמחקים. הם יופעלו מחדש אוטומטית מיד עם
+                        סיום ההתקנה.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dedicated Modern Console Modal Dialog -->
+    <div id="modal-console-drawer" class="app-modal console-modal-wrapper" role="dialog" aria-modal="true">
+        <div class="modal-backdrop" onclick="closeConsoleModal()"></div>
+        <div class="modal-dialog console-modal-dialog">
+            <div class="console-modal-header">
+                <div class="console-title-wrap">
+                    <div class="console-title-text">
+                        <span class="material-symbols-rounded console-header-icon">terminal</span>
+                        <strong>יומן פקודות מערכת ו-ADB</strong>
+                    </div>
+                </div>
+                <div class="console-actions">
+                    <button class="btn-console-tool" type="button" onclick="clearConsoleLog()" title="נקה יומן">
+                        <span class="material-symbols-rounded">delete_sweep</span>
+                        <span>נקה</span>
+                    </button>
+                    <button class="btn-console-tool" type="button" onclick="copyLogToClipboard()" title="העתק לוג ללוח">
+                        <span class="material-symbols-rounded">content_copy</span>
+                        <span>העתק לוג</span>
+                    </button>
+                    <button class="btn-close-modal" type="button" onclick="closeConsoleModal()" aria-label="סגור">
+                        <span class="material-symbols-rounded">close</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="console-status-bar">
+                <div class="console-status-indicator">
+                    <span class="status-live-dot"></span>
+                    <span id="console-conn-status">ADB פעיל ומחובר</span>
+                </div>
+                <div class="console-filter-hint">
+                    <span id="console-line-summary">0 שורות יומן</span>
+                </div>
+            </div>
+
+            <div class="console-body">
+                <div class="terminal-log-viewer" id="install-log"></div>
+            </div>
+
+            <div class="console-modal-footer">
+                <span class="console-footer-note">
+                    <span class="material-symbols-rounded">info</span> מעקב שקוף אחר פקודות ADB, תהליכי התקנה ושגיאות
+                    מערכת בזמן אמת.
+                </span>
+                <button class="btn btn-tonal" type="button" onclick="closeConsoleModal()"
+                    style="height: 36px; padding: 0 20px;">סגור</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Snackbar for Notifications -->
+    <div id="snackbar"></div>
+
+    <script src="js/webadb.js"></script>
+    <script type="module" src="js/main.js"></script>
+
+    <script>
+        // Only run GoatCounter on the production domain
+        if (window.location.hostname !== 'cfopuser.github.io') {
+            window.goatcounter = { no_onload: true };
+        }
+    </script>
+    <script data-goatcounter="https://cfopuser.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+
 </body>
+
 </html>

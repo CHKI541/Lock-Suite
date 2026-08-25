@@ -940,6 +940,15 @@ fun PoliciesTabContent(context: Context) {
                         true
                     }
                 )
+                PolicySwitchRow(
+                    label = "Bloqueo de Mercado Libre en Mercado Pago",
+                    isChecked = remember(refreshKey) { policyManager.isMercadoLibreInMpBlocked() },
+                    onCheckedChange = { 
+                        policyManager.setMercadoLibreInMpBlocked(it)
+                        refreshKey++
+                        true
+                    }
+                )
             }
         }
     }
@@ -2340,6 +2349,42 @@ fun ServicesTabContent(
                                     com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
                                 }
                                 Toast.makeText(context, if (enabled) "Ofertas MP (VPN) Bloqueadas." else "Ofertas MP Permitidas.", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF0B192C),
+                                checkedTrackColor = accentOrange
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Bloqueo de Mercado Libre en Mercado Pago", color = Color.White, fontSize = 14.sp)
+                            Text(
+                                "Bloquea por DNS los dominios de Mercado Libre en Mercado Pago (click1, listado, mobile, snoopy, www).",
+                                color = Color.LightGray,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        var blockMlState by remember {
+                            mutableStateOf(policyManager.isMercadoLibreInMpBlocked())
+                        }
+                        Switch(
+                            checked = blockMlState,
+                            onCheckedChange = { enabled ->
+                                policyManager.setMercadoLibreInMpBlocked(enabled)
+                                blockMlState = enabled
+                                scope.launch(Dispatchers.IO) {
+                                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                                }
+                                Toast.makeText(context, if (enabled) "Mercado Libre en MP Bloqueado." else "Mercado Libre en MP Permitido.", Toast.LENGTH_SHORT).show()
                             },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color(0xFF0B192C),

@@ -27,6 +27,14 @@ class PolicyManager(private val context: Context) {
             "factoryResetProtectionAdmin",
             "factoryResetProtectionAdmins"
         )
+
+        val MERCADO_LIBRE_MP_DOMAINS = listOf(
+            "click1.mercadolibre.com.ar",
+            "listado.mercadolibre.com.ar",
+            "mobile.mercadolibre.com.ar",
+            "snoopy.mercadolibre.com.ar",
+            "www.mercadolibre.com.ar"
+        )
     }
 
     private fun setRestriction(restriction: String, enable: Boolean): Boolean {
@@ -772,6 +780,26 @@ class PolicyManager(private val context: Context) {
         return prefs.getBoolean("mp_offers_vpn", prefs.getBoolean("mercadopago_block_offers", false))
     }
 
+    fun isMercadoLibreInMpBlocked(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("block_ml_in_mp", false)
+    }
+
+    fun setMercadoLibreInMpBlocked(enabled: Boolean) {
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("block_ml_in_mp", enabled).apply()
+        try {
+            val ruleManager = com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager
+            for (domain in MERCADO_LIBRE_MP_DOMAINS) {
+                if (enabled) {
+                    ruleManager.setRule(domain, com.ejemplo.locksuite.dns.RuleType.BLOCK)
+                } else {
+                    ruleManager.clearRule(domain)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PolicyManager", "Error actualizando DomainRuleManager para ML en MP: ${e.message}")
+        }
+    }
+
     // ─────────────────────────────────────────────
     // BLOQUEO TOTAL DE INTERNET POR APP
     // ─────────────────────────────────────────────
@@ -848,6 +876,7 @@ class PolicyManager(private val context: Context) {
         dataObj.put("whatsappBlockChannels", isWhatsAppBlockChannelsEnabled())
         dataObj.put("mercadoPagoBlockOffersAccessibility", isMercadoPagoBlockOffersAccessibilityEnabled())
         dataObj.put("mercadoPagoBlockOffersVpn", isMercadoPagoBlockOffersVpnEnabled())
+        dataObj.put("blockMlInMp", isMercadoLibreInMpBlocked())
         dataObj.put("kosherLauncherEnabled", isKosherLauncherEnabled())
 
         
@@ -910,6 +939,7 @@ class PolicyManager(private val context: Context) {
             setWhatsAppBlockChannels(dataObj.optBoolean("whatsappBlockChannels", false))
             setMercadoPagoBlockOffersAccessibility(dataObj.optBoolean("mercadoPagoBlockOffersAccessibility", false))
             setMercadoPagoBlockOffersVpn(dataObj.optBoolean("mercadoPagoBlockOffersVpn", false))
+            setMercadoLibreInMpBlocked(dataObj.optBoolean("blockMlInMp", false))
             setKosherLauncherEnabled(dataObj.optBoolean("kosherLauncherEnabled", false))
 
 

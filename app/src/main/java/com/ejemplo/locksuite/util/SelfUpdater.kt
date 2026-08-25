@@ -62,7 +62,8 @@ object SelfUpdater {
                 }
 
                 val tempFile = File(context.cacheDir, "locksuite_update.apk")
-                val apkConnection = URL(apkUrl).openConnection() as HttpURLConnection
+                val urlWithCacheBuster = if (apkUrl.contains("?")) "$apkUrl&t=${System.currentTimeMillis()}" else "$apkUrl?t=${System.currentTimeMillis()}"
+                val apkConnection = URL(urlWithCacheBuster).openConnection() as HttpURLConnection
                 apkConnection.connectTimeout = 15000
                 apkConnection.readTimeout = 15000
                 apkConnection.connect()
@@ -171,7 +172,8 @@ object SelfUpdater {
                 }
 
                 val tempFile = File(context.cacheDir, "store_${packageName}_update.apk")
-                val apkConnection = URL(apkUrl).openConnection() as HttpURLConnection
+                val urlWithCacheBuster = if (apkUrl.contains("?")) "$apkUrl&t=${System.currentTimeMillis()}" else "$apkUrl?t=${System.currentTimeMillis()}"
+                val apkConnection = URL(urlWithCacheBuster).openConnection() as HttpURLConnection
                 apkConnection.connectTimeout = 15000
                 apkConnection.readTimeout = 15000
                 apkConnection.connect()

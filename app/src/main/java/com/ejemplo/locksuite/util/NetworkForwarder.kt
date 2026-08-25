@@ -1,5 +1,6 @@
 package com.ejemplo.locksuite.util
 
+import android.net.Network
 import android.net.VpnService
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -14,8 +15,13 @@ object NetworkForwarder {
     private const val UPSTREAM_DNS_PORT = 53
     private const val TIMEOUT_MS = 3500
 
+    private data class UpstreamResult(
+        val address: InetAddress,
+        val network: Network?
+    )
+
     // ──────────────────────────────────────────────────────────────────────────
-    // EL RESOLUTOR DE SALIDA  (reescrito el 17/8/2026)
+    // EL RESOLUTOR DE SALIDA  (reescrito el 17/8/2026, endurecido el 25/8/2026)
     //
     // ⚠️ ACÁ ESTABA LA CAUSA MÁS PROBABLE DEL SÍNTOMA "SE CAE INTERNET ENTERO Y
     //    VUELVE APAGANDO Y PRENDIENDO LA VPN".
@@ -43,6 +49,11 @@ object NetworkForwarder {
     //   • El resultado se cachea: antes cada consulta hacía tres llamadas al sistema
     //     (getSystemService + activeNetwork + getLinkProperties). Con 40 consultas por
     //     segundo abriendo una app, eso era CPU y batería tirada.
+    //   • Se guarda también el objeto `Network` físico asociado y se invoca
+    //     `network.bindSocket(socket)` en el socket de salida. Esto evita que
+    //     conflictos de rutas entre Wi-Fi y datos móviles (ej. DNS privado de ISP en
+    //     rango CGNAT 100.64/10 contra ruta celular 100.0.0.0/8) desvíen los paquetes
+    //     hacia la interfaz equivocada causando timeouts.
     //   • KosherVpnService invalida el cache cuando cambia la red.
     // ──────────────────────────────────────────────────────────────────────────
 
@@ -53,12 +64,14 @@ object NetworkForwarder {
     private const val UPSTREAM_TTL_MS = 30_000L
 
     @Volatile private var cachedUpstream: InetAddress? = null
+    @Volatile private var cachedUpstreamNetwork: Network? = null
     @Volatile private var cachedUpstreamAt = 0L
 
     /** La llama KosherVpnService ante cualquier cambio de red o al (re)establecer el túnel. */
     fun invalidateUpstreamCache() {
         cachedUpstreamAt = 0L
         cachedUpstream = null
+        cachedUpstreamNetwork = null
     }
 
     private fun isUsableResolver(dns: InetAddress): Boolean =
@@ -66,24 +79,29 @@ object NetworkForwarder {
         !dns.isAnyLocalAddress &&
         (dns.hostAddress ?: "") !in TUNNEL_ADDRESSES
 
-    private fun getUpstreamDnsAddress(vpnService: VpnService): InetAddress {
+    private fun getUpstreamDnsAddress(vpnService: VpnService): UpstreamResult {
         val now = android.os.SystemClock.elapsedRealtime()
         val cached = cachedUpstream
-        if (cached != null && now - cachedUpstreamAt < UPSTREAM_TTL_MS) return cached
+        val cachedNet = cachedUpstreamNetwork
+        if (cached != null && now - cachedUpstreamAt < UPSTREAM_TTL_MS) {
+            return UpstreamResult(cached, cachedNet)
+        }
 
         val resolved = resolveUpstreamDns(vpnService)
-        cachedUpstream = resolved
+        cachedUpstream = resolved.address
+        cachedUpstreamNetwork = resolved.network
         cachedUpstreamAt = now
         return resolved
     }
 
-    private fun resolveUpstreamDns(vpnService: VpnService): InetAddress {
+    private fun resolveUpstreamDns(vpnService: VpnService): UpstreamResult {
         try {
             val cm = vpnService.getSystemService(android.net.ConnectivityManager::class.java)
             if (cm != null) {
                 @Suppress("DEPRECATION")
                 val networks = cm.allNetworks
                 var ipv6Fallback: InetAddress? = null
+                var ipv6FallbackNetwork: Network? = null
 
                 for (network in networks) {
                     val caps = cm.getNetworkCapabilities(network) ?: continue
@@ -97,24 +115,30 @@ object NetworkForwarder {
                         if (!isUsableResolver(dns)) continue
                         // Preferencia a IPv4: es el que existe en prácticamente todas
                         // las redes y el que menos sorpresas da.
-                        if (dns is Inet4Address) return dns
-                        if (ipv6Fallback == null) ipv6Fallback = dns
+                        if (dns is Inet4Address) return UpstreamResult(dns, network)
+                        if (ipv6Fallback == null) {
+                            ipv6Fallback = dns
+                            ipv6FallbackNetwork = network
+                        }
                     }
                 }
                 // Redes IPv6 puras / DNS64.
-                ipv6Fallback?.let { return it }
+                if (ipv6Fallback != null) {
+                    return UpstreamResult(ipv6Fallback, ipv6FallbackNetwork)
+                }
             }
         } catch (e: Exception) {
             android.util.Log.w("KosherVPN", "No se pudo resolver el DNS de salida: ${e.message}")
         }
 
         val customIp = PrefsHelper.getMdmPrefs(vpnService).getString("upstream_dns_ip", "8.8.8.8") ?: "8.8.8.8"
-        return try {
+        val fallbackAddress = try {
             val fallback = InetAddress.getByName(customIp)
             if (isUsableResolver(fallback)) fallback else InetAddress.getByName("8.8.8.8")
         } catch (e: Exception) {
             InetAddress.getByName("8.8.8.8")
         }
+        return UpstreamResult(fallbackAddress, null)
     }
 
     fun forwardDnsQuery(
@@ -128,7 +152,23 @@ object NetworkForwarder {
             vpnService.protect(socket) // CRÍTICO: Evita bucle infinito de reentrada de red
             socket.soTimeout = TIMEOUT_MS
 
-            val upstream = getUpstreamDnsAddress(vpnService)
+            val upstreamResult = getUpstreamDnsAddress(vpnService)
+            val upstream = upstreamResult.address
+
+            // Vincular el socket a la red física de donde sale el DNS.
+            // Esto evita que el kernel elija la interfaz equivocada cuando
+            // hay varias redes activas (Wi-Fi + datos móviles). Sin esto,
+            // una ruta más específica de otra interfaz puede "robar" el
+            // paquete y mandarlo a una red que no conoce el servidor DNS.
+            upstreamResult.network?.let { physicalNetwork ->
+                try {
+                    physicalNetwork.bindSocket(socket)
+                } catch (e: Exception) {
+                    // Si falla (red ya caída, etc.), seguir sin bind:
+                    // protect() solo basta en la mayoría de los casos.
+                    android.util.Log.w("KosherVPN", "bindSocket a red física falló: ${e.message}")
+                }
+            }
 
             socket.send(DatagramPacket(packet.payload, packet.payload.size, upstream, UPSTREAM_DNS_PORT))
 

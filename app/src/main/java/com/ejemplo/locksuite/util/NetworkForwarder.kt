@@ -141,6 +141,21 @@ object NetworkForwarder {
         return UpstreamResult(fallbackAddress, null)
     }
 
+    private val FALLBACK_DNS_PRIMARY: InetAddress by lazy { InetAddress.getByName("8.8.8.8") }
+    private val FALLBACK_DNS_SECONDARY: InetAddress by lazy { InetAddress.getByName("1.1.1.1") }
+
+    /**
+     * Verifica si una dirección IPv4 está en el bloque 100.0.0.0/8 (especialmente CGNAT 100.64.0.0/10).
+     * En dispositivos con módem celular (ej. MediaTek/Qualcomm), la interfaz de datos móviles suele
+     * registrar una ruta amplia 100.0.0.0/8. Si la red Wi-Fi provee un DNS de ISP en ese rango (como
+     * Telecentro 100.72.3.101) y no se logra hacer bindSocket a la interfaz Wi-Fi, el kernel desviará
+     * el paquete a la red móvil y fallará.
+     */
+    private fun isCgnatConflictRisk(dns: InetAddress): Boolean {
+        val bytes = dns.address
+        return bytes.size == 4 && (bytes[0].toInt() and 0xFF) == 100
+    }
+
     fun forwardDnsQuery(
         packet: IpPacketParser.ParsedPacket,
         output: FileOutputStream,
@@ -153,7 +168,8 @@ object NetworkForwarder {
             socket.soTimeout = TIMEOUT_MS
 
             val upstreamResult = getUpstreamDnsAddress(vpnService)
-            val upstream = upstreamResult.address
+            val initialUpstream = upstreamResult.address
+            var boundSuccessfully = false
 
             // Vincular el socket a la red física de donde sale el DNS.
             // Esto evita que el kernel elija la interfaz equivocada cuando
@@ -163,18 +179,63 @@ object NetworkForwarder {
             upstreamResult.network?.let { physicalNetwork ->
                 try {
                     physicalNetwork.bindSocket(socket)
+                    boundSuccessfully = true
                 } catch (e: Exception) {
-                    // Si falla (red ya caída, etc.), seguir sin bind:
-                    // protect() solo basta en la mayoría de los casos.
                     android.util.Log.w("KosherVPN", "bindSocket a red física falló: ${e.message}")
                 }
             }
 
-            socket.send(DatagramPacket(packet.payload, packet.payload.size, upstream, UPSTREAM_DNS_PORT))
+            // Si el DNS está en riesgo de conflicto CGNAT (100.x.x.x) y bindSocket no tuvo éxito,
+            // evitamos mandar el paquete a 100.x.x.x (el kernel lo desviaría al módem celular).
+            var activeResolver = if (!boundSuccessfully && isCgnatConflictRisk(initialUpstream)) {
+                android.util.Log.w("KosherVPN", "DNS $initialUpstream en rango CGNAT sin bindSocket; usando fallback $FALLBACK_DNS_PRIMARY")
+                FALLBACK_DNS_PRIMARY
+            } else {
+                initialUpstream
+            }
 
             val responseBuffer = ByteArray(4096)
             val responsePacket = DatagramPacket(responseBuffer, responseBuffer.size)
-            socket.receive(responsePacket)
+            var responseReceived = false
+
+            try {
+                socket.send(DatagramPacket(packet.payload, packet.payload.size, activeResolver, UPSTREAM_DNS_PORT))
+                socket.receive(responsePacket)
+                responseReceived = true
+            } catch (e: SocketTimeoutException) {
+                // Si el DNS primario no contestó y no era ya el fallback de Google,
+                // reintentamos rápidamente con el fallback público (8.8.8.8) para no dejar sin internet al celular.
+                if (activeResolver != FALLBACK_DNS_PRIMARY) {
+                    try {
+                        android.util.Log.w("KosherVPN", "Timeout con DNS $activeResolver; reintentando con fallback $FALLBACK_DNS_PRIMARY")
+                        socket.close()
+                        socket = DatagramSocket()
+                        vpnService.protect(socket)
+                        socket.soTimeout = 2000
+                        activeResolver = FALLBACK_DNS_PRIMARY
+                        socket.send(DatagramPacket(packet.payload, packet.payload.size, activeResolver, UPSTREAM_DNS_PORT))
+                        socket.receive(responsePacket)
+                        responseReceived = true
+                    } catch (e2: Exception) {
+                        // Si falla también 8.8.8.8, último intento con 1.1.1.1
+                        try {
+                            android.util.Log.w("KosherVPN", "Timeout con 8.8.8.8; reintentando con fallback $FALLBACK_DNS_SECONDARY")
+                            socket.close()
+                            socket = DatagramSocket()
+                            vpnService.protect(socket)
+                            socket.soTimeout = 2000
+                            activeResolver = FALLBACK_DNS_SECONDARY
+                            socket.send(DatagramPacket(packet.payload, packet.payload.size, activeResolver, UPSTREAM_DNS_PORT))
+                            socket.receive(responsePacket)
+                            responseReceived = true
+                        } catch (e3: Exception) {
+                            // Sin respuesta tras todos los reintentos
+                        }
+                    }
+                }
+            }
+
+            if (!responseReceived) return
 
             // Verificación 1: la respuesta tiene que venir del resolutor al que le
             // preguntamos. Un socket UDP sin conectar acepta el PRIMER datagrama que
@@ -187,8 +248,8 @@ object NetworkForwarder {
             // porque connect() después de protect() puede re-asociar el socket a la red
             // del túnel y cortar internet. Comparar la dirección de origen a mano logra lo
             // mismo sin tocar el enrutamiento, así que es el reemplazo seguro.
-            if (responsePacket.address != upstream) {
-                android.util.Log.w("KosherVPN", "Respuesta DNS descartada: vino de ${responsePacket.address}, no del resolutor consultado.")
+            if (responsePacket.address != activeResolver) {
+                android.util.Log.w("KosherVPN", "Respuesta DNS descartada: vino de ${responsePacket.address}, no del resolutor consultado ($activeResolver).")
                 return
             }
 

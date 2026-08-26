@@ -92,7 +92,8 @@ Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: *
 - Panel: `cd admin-backend && firebase deploy --only hosting,database,functions` — **desplegar `hosting,database` primero y `functions` en un try/catch aparte** (lo hace `deploy_all.ps1`); si Cloud Functions falla en el mismo llamado, Firebase no confirma la versión de Hosting y los celulares siguen viendo el manifiesto viejo.
 - **`deploy_all.ps1`** (raíz del proyecto) automatiza todo: sube versionCode/versionName en `build.gradle.kts` y `version.json`, compila, copia el APK a `admin-backend/public/`, se autentica con cuenta de servicio, despliega, commitea y pushea a GitHub en un solo paso. Ejemplo: `.\deploy_all.ps1 -VersionName "0.6.16"`. **Ojo:** hace `git add .`, así que commitea junto TODO lo que esté sin commitear en ese momento (informes, `_to_delete/`, cambios de otras sesiones) — si querés separarlo, commiteá eso vos antes de correrlo.
 - Despliegue sin login interactivo: variable `$env:GOOGLE_APPLICATION_CREDENTIALS` apuntando al JSON de service account en `admin-backend/`. Hay tres pasos manuales en Firebase Console que ningún script reemplaza (plan Blaze, habilitar Email/Password + Anonymous en Authentication, crear el usuario admin del panel) — detalle completo en `admin-backend/DEPLOY_GUIDE_FOR_AI_AGENT.md`, que sigue vigente.
-- **Estado de versión al 21/8 — medido, no supuesto.** Lo que hay **instalado en el equipo del dueño** es **versionCode 88 / versionName 0.6.25** (`adb shell dumpsys package com.ejemplo.locksuite`, 21/8). O sea que entre el 18/8 y el 21/8 se compiló y publicó varias veces: el párrafo de abajo, escrito el 16/8, quedó viejo y se conserva solo por el razonamiento sobre downgrades. **Al publicar, el versionCode nuevo tiene que ser estrictamente mayor que 88** (o que lo que diga el equipo si volvió a subir). Verificalo con `git log -1`, `cat app/build.gradle.kts` y el `dumpsys` de arriba antes de compilar.
+- **Estado de versión al 26/8 — medido y publicado.** Lo publicado en producción es **versionCode 95 / versionName 0.6.32** (`app/build.gradle.kts` y `admin-backend/public/version.json`). Verificalo con `git log -1`, `cat app/build.gradle.kts` y `adb shell dumpsys package com.ejemplo.locksuite` antes de compilar.
+- *(histórico, 21/8)* Lo instalado en el equipo del dueño era versionCode 88 / versionName 0.6.25. Subió progresivamente hasta 95 / 0.6.32 al resolver el conflicto de rutas DNS y CGNAT.
 - *(histórico, 16/8)* El working tree quedó en **versionCode 83 / versionName 0.6.21** (`app/build.gradle.kts`), pero `admin-backend/public/version.json` seguía en **82 / 0.6.20** a propósito: `version.json` es el manifiesto *publicado* y solo debe subir cuando se sube el APK que le corresponde (lo hace `deploy_all.ps1` de forma atómica). Es normal que `build.gradle.kts` vaya adelante de `version.json` entre builds. Ojo: las instrucciones viejas pedían "0.6.19 / versionCode 81", pero el repo ya venía en 0.6.20/82 (una sesión anterior lo subió), así que poner 81 sería un **downgrade** que Android rechaza — por eso se subió a 0.6.21/83, por encima de lo que había. Como en este repo todavía puede haber más de un agente tocando el número, **verificá `git log -1`, `git status` y `cat app/build.gradle.kts` al arrancar**, y al publicar asegurate de que el versionCode a compilar sea estrictamente mayor que el último realmente publicado. `deploy_all.ps1` sube el número solo (currentCode + 1); si compilás a mano, subilo a mano. Instrucciones completas: `INSTRUCCIONES_COMPILACION_ANTIGRAVITY_2026-08-16.md`.
 - **Verificá de nuevo** (`git log -1`, `cat app/build.gradle.kts`, `git status`) al arrancar cualquier sesión — no asumas que esta línea sigue vigente.
 
@@ -307,60 +308,34 @@ Textual: *"me di cuenta que si el usuario cambia el idioma a uno raro se evade t
 
 **Falta probar en equipo real:** encender el interruptor y confirmar que la entrada de Idioma de Ajustes queda deshabilitada; cambiar el equipo a hebreo o a un idioma raro con el interruptor apagado y confirmar que el rebote del menú de Accesibilidad **sigue funcionando** (esa es la prueba de que la señal 2 sirve); y repetir con el idioma por app en Android 13.
 
-**B.20 — "SE CAE EL INTERNET": el proxy del arranque protegido se quedaba clavado, y encima la app crasheaba en Arranque Directo. ARREGLADO EN CÓDIGO el 21/8, type-checkeado, SIN COMPILAR NI PROBAR EN EQUIPO.**
+**B.20 — "SE CAE EL INTERNET": el proxy del arranque protegido se quedaba clavado, y encima la app crasheaba en Arranque Directo. [RESUELTO 21/8 en código, compilado en 0.6.30+]**
 
-Reporte del dueño: *"a veces se cae el internet cuando tengo LockSuite"*, y volvía apagando y prendiendo la VPN. Esta vez hubo **diagnóstico forense sobre el equipo real** (Antigravity, celular conectado por ADB, 0 modificaciones) y la evidencia fue concluyente. Los volcados quedaron en `scratch/diagnostico_vpn_vivo/`.
+Reporte del dueño: *"a veces se cae el internet cuando tengo LockSuite"*, y volvía apagando y prendiendo la VPN. Esta vez hubo **diagnóstico forense sobre el equipo real** (Antigravity, celular conectado por ADB, 0 modificaciones) y la evidencia fue concluyente.
 
-**Lo que midió el equipo, y por qué cierra el caso:**
+- **Causa de fondo:** `LockSuiteApplication.onCreate()` crasheaba en Arranque Directo (Direct Boot) porque `loadRules()` intentaba acceder a `SharedPreferences` cifradas antes del primer desbloqueo del usuario.
+- **Arreglos aplicados:**
+  - `LockSuiteApplication.kt`: inicialización diferida a `ACTION_USER_UNLOCKED` para lo que requiere disco/credenciales.
+  - `BootGate.kt`: `healStuckProxy()` consulta a `Settings.Global` para liberar proxies huérfanos.
+  - `WatchdogWorker.kt`: reconciliación cada 15 min.
 
-| Medición | Resultado |
-|---|---|
-| `global_http_proxy_host` / `_port` | `127.0.0.1` / `9999` — **el proxy del arranque protegido, puesto** |
-| `http_proxy` (la clave "pública") | `null` — ojo con esto, ver abajo |
-| `ping` a IP de WhatsApp | 3/3 paquetes, 0 % de pérdida, 23 ms |
-| `nc -w 2 <ip> 443` (socket crudo) | EXIT 0, conexión exitosa |
-| Servicios de LockSuite | los tres vivos en el PID 4190 (VPN, Watchdog, Accesibilidad) |
+---
 
-O sea: **la red física estaba perfecta y el Watchdog estaba corriendo su ciclo de 20 s**; lo único roto era la capa HTTP de las apps, por el proxy. Eso descarta la arquitectura de la VPN (B.4), descarta el `fd00::1` de B.18, y apunta a un solo lugar.
+**B.21 — "SE CAE INTERNET" / RESOLUCIÓN DNS EN DUAL-NETWORK (Wi-Fi + Datos Móviles) Y CONFLICTO CGNAT 100.0.0.0/8 [RESUELTO 26/8 en v0.6.32 / versionCode 95, probado y confirmado en equipo real]**
 
-**Causa de fondo — crash en Arranque Directo (Direct Boot).** `LockSuiteApplication.onCreate()` llamaba a `domainRuleManager.loadRules()` **sin try/catch y sin guarda**, y era el único bloque del método sin protección. `BootReceiver` está declarado `android:directBootAware="true"` y escucha `LOCKED_BOOT_COMPLETED`, así que Android arranca el proceso **antes del primer desbloqueo**, con el almacenamiento cifrado por credencial sin montar. Ahí `getSharedPreferences()` lanza, la excepción sale de `onCreate()` de la Application y **Android mata el proceso entero**:
+**Diagnóstico forense en equipo real (25/8 y 26/8):**
+El celular (MediaTek, Android 13) perdía conectividad total estando conectado a Wi-Fi (Telecentro).
+- **Hallazgo 1 (Causa de red):** Telecentro asigna servidores DNS en el rango CGNAT `100.72.3.101` / `100.72.3.97`. La interfaz de datos móviles del módem celular (`ccmni1`) tiene configurada la ruta amplia `100.0.0.0/8 dev ccmni1`.
+- **Hallazgo 2 (El desvío):** Cuando ambos (Wi-Fi y Datos) estaban activos, el kernel enviaba los paquetes UDP de DNS dirigidos a `100.72.3.101` a través de la antena celular (`ccmni1`) en lugar de `wlan0`. Como la antena celular no conoce los servidores privados de Telecentro, las consultas daban timeout (`terrno: 110`), dejando al teléfono entero sin DNS ("sin internet").
+- **Hallazgo 3 (El fallo de `bindSocket` con EPERM en v0.6.31):** En v0.6.31 se agregó `network.bindSocket(socket)`, pero falló con `EPERM (Operation not permitted)` en logcat porque **faltaba el permiso `android.permission.CHANGE_NETWORK_STATE` en `AndroidManifest.xml`**. Sin ese permiso, el sistema operativo rechaza la vinculación forzada a la interfaz física.
 
-```
-FATAL EXCEPTION: main
-java.lang.RuntimeException: Unable to create application ...LockSuiteApplication
-Caused by: java.lang.IllegalStateException: SharedPreferences in credential
-           encrypted storage are not available until after user is unlocked
-    at ...PrefsHelper.getMdmPrefs → DomainRuleManager.loadRules → onCreate
-```
+**Solución definitiva implementada y desplegada (v0.6.32 / versionCode 95):**
+1. **`AndroidManifest.xml`**: Se agregaron los permisos requeridos `ACCESS_NETWORK_STATE` y `CHANGE_NETWORK_STATE`.
+2. **`NetworkForwarder.kt`**:
+   - `network.bindSocket(socket)` vincula el socket a la red física de origen del DNS (ej. Wi-Fi).
+   - **Detección preventiva CGNAT:** Si el DNS está en `100.x.x.x` y `bindSocket` no está activo, salta de inmediato a `8.8.8.8` público para evitar que el kernel lo desvíe al módem celular.
+   - **Reintento ante Timeout:** Si el DNS del ISP no responde a tiempo, reintenta inmediatamente contra `8.8.8.8` (Google) y `1.1.1.1` (Cloudflare), impidiendo que microcortes o caídas del ISP dejen el equipo sin internet.
 
-`LocaleManager.init()` era la **segunda bomba**, esperando dos líneas más abajo por el mismo motivo y también sin try/catch.
-
-**Los tres defectos del `BootGate` que convertían un tropiezo en un equipo sin internet.** El crash explica por qué a veces el Watchdog no llegaba a arrancar, pero la red de seguridad tendría que haber cubierto eso igual. No lo hacía:
-
-1. **`release()` salía antes de tocar el proxy si `KEY_ACTIVE` ya estaba en false.** Hay varias formas de llegar a "marca apagada + proxy puesto": el proceso muere entre el `apply()` y la llamada al DPM, el DPM lanza, la ventana viene de otro arranque. En cualquiera de ellas el proxy quedaba puesto y **ningún camino del código lo volvía a mirar nunca**. Se recordaba lo que habíamos hecho en vez de preguntarle al sistema qué había — justo lo contrario de la regla que salió del 18/8.
-2. **`KEY_SINCE` guarda `SystemClock.elapsedRealtime()`, que vuelve a cero en cada arranque del equipo.** Una ventana que sobrevivía a un reinicio daba `elapsed` **negativo**, y `elapsed > techo` es falso con un número negativo: **el techo de 120 s no vencía jamás**. Sin internet indefinidamente, con la ventana "abierta" para siempre.
-3. **`WatchdogWorker` (WorkManager, cada 15 min) no llamaba al `tick()`.** Era el único mecanismo que sobrevive a que el proceso muera, o sea el único que podría haber salvado el caso, y estaba fuera del circuito.
-
-**Qué quedó hecho (4 archivos):**
-
-- **`LockSuiteApplication.kt`** — los tres objetos del motor DNS se construyen SIEMPRE (son `lateinit` y medio proyecto los consulta), pero leer del disco se difiere si el equipo está bloqueado. La inicialización que necesita preferencias se movió a `initializeUnlocked()`, que corre desde `onCreate()` si ya está desbloqueado o desde un receptor de `ACTION_USER_UNLOCKED` si no. **`loadRules()` se difiere, no se saltea:** si el proceso arrancaba bloqueado y sobrevivía al desbloqueo, el motor se quedaba con CERO reglas y el filtro DNS corría vacío en silencio toda la vida del proceso — una regresión muda que este arreglo también cierra. `LocaleManager.init()` ahora va en try/catch.
-- **`BootGate.kt`** — nueva `healStuckProxy()`: **le pregunta al sistema** (`Settings.Global`) si el proxy a puerto muerto está puesto, en vez de deducirlo de una preferencia nuestra, y lo saca si no hay razón legítima (no lo toca si el administrador tiene "bloquear internet" encendido, ni si hay una ventana de arranque abierta y en plazo). Se la llama desde el arranque del proceso, desde `engage()`, desde el `tick()` del Watchdog **incluso con la ventana cerrada**, desde `onFilterReady()` y desde el Worker de 15 min. Además: `release()` ya no sale sin mirar el proxy, y `tick()` trata `elapsed < 0` como vencido.
-- **`WatchdogWorker.kt`** — llama a `tick()` y a `healStuckProxy()`, en try/catch separados.
-- **`BootReceiver.kt`** — `ensureDomainRulesLoaded()` en el broadcast, como segunda red del punto 1.
-
-⚠️ **Detalle que casi arruina el arreglo, anotado para que nadie lo "simplifique":** `setRecommendedGlobalProxy` **no** escribe `Settings.Global.HTTP_PROXY` en este equipo. El volcado mostró `http_proxy=null` con `global_http_proxy_host=127.0.0.1`. Si `isGateProxyPresent()` mirara solo la constante pública `HTTP_PROXY` —que es la que parece "la buena"— daría `false` justo en el caso real que hay que detectar, y todo el arreglo sería decorativo. **Mira las dos formas a propósito.**
-
-**Resultado esperado:** el peor caso posible pasa de "sin internet hasta que alguien abra la app y toque la VPN a mano" a **"sin internet 15 minutos como mucho, y se arregla solo"**. Y el crash de arranque, que era la causa de fondo, desaparece.
-
-**Verificación hecha:** type-check con `kotlinc` 2.0.21 contra stubs de la API de Android y de las clases del proyecto, **0 errores / 0 warnings**, con control negativo que confirma que el chequeo detecta errores reales. **No se corrió Gradle ni se probó en equipo.**
-
-**Falta probar en equipo real, en este orden:**
-
-1. **El crash de Arranque Directo, que es lo más fácil de verificar y lo más importante.** `adb logcat -c`, reiniciar, y **antes de desbloquear** mirar `adb logcat | grep -i "AndroidRuntime\|LockSuiteApplication"`. **No tiene que aparecer ningún `FATAL EXCEPTION`.** Debería verse en cambio `Arranque Directo: el almacenamiento cifrado todavía no está montado`, y después del desbloqueo `Usuario desbloqueado: completando la inicialización diferida` y `Reglas DNS cargadas`.
-2. **Que las reglas DNS realmente quedaron cargadas después de un arranque.** Con una regla de bloqueo puesta, reiniciar, desbloquear, y confirmar que el dominio bloqueado sigue bloqueado sin abrir la app. (Antes de este arreglo, si el proceso arrancaba bloqueado y sobrevivía, el motor quedaba vacío.)
-3. **La recuperación automática del proxy.** Simular el equipo trabado por ADB: `adb shell settings put global global_http_proxy_host 127.0.0.1` y `... global_http_proxy_port 9999` (o poner y sacar el interruptor "bloquear internet" a mano). Confirmar (a) que **a los 20 s** el Watchdog lo limpia solo y vuelve el internet, y (b) que el panel muestra `bootGateLastResult` = `proxy huerfano liberado (...)`.
-4. **Que NO limpia de más.** Encender "bloquear internet" desde el panel y confirmar que el equipo **sigue sin internet** después de varios ciclos del Watchdog (o sea que `healStuckProxy` respeta la intención del administrador y no le pelea).
-5. **El ciclo normal del arranque protegido, otra vez**, para confirmar que nada de esto lo rompió: reiniciar y ver que hay unos segundos sin internet y que vuelve solo.
+---
 
 **B.10 — Menores / housekeeping:**
 
@@ -387,41 +362,29 @@ Caused by: java.lang.IllegalStateException: SharedPreferences in credential
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**21/8 — sesión de Claude vía Cowork, SIN terminal. Un solo tema: "a veces se cae el internet".** Y por primera vez la sesión arrancó con **evidencia medida en el equipo real** en vez de con una hipótesis: el dueño conectó el celular y le pidió a Antigravity un diagnóstico forense por ADB (sin modificar nada). Eso cambió todo el trabajo de la sesión, y vale la pena que quede anotado como método.
+**25/8 y 26/8 — sesión de diagnóstico y solución definitiva en equipo real (Antigravity con terminal y ADB). Despliegue de versiones 0.6.31 y 0.6.32 (código 95).**
 
-**Lo que se encontró.** El proxy global `127.0.0.1:9999` —el mismo que usan el interruptor "bloquear internet" y el arranque protegido— quedaba **clavado** en la configuración del sistema. Con la red física perfecta debajo: `ping` a WhatsApp con 0 % de pérdida y un socket TCP crudo al 443 conectando sin problemas, mientras Chrome, Play Store y las apps daban "sin conexión". Eso ubica la falla en una sola capa y descarta de un saque la arquitectura de la VPN (B.4) y los dos bugs de B.18. Causa de fondo: **`LockSuiteApplication.onCreate()` crasheaba en Arranque Directo** (`loadRules()` era el único bloque sin try/catch del método, y `LocaleManager.init()` era la segunda bomba dos líneas abajo), así que el proceso moría antes de que arrancaran el Watchdog y la VPN — y sin Watchdog nadie corría el `tick()` que libera el proxy. Detalle completo, con la tabla de mediciones, en **B.20**.
-
-**Lo que se arregló (4 archivos, type-checkeados, sin compilar):** `LockSuiteApplication.kt` (Arranque Directo: los objetos se construyen siempre, la lectura de disco se difiere a `ACTION_USER_UNLOCKED`, todo en try/catch), `BootGate.kt` (nueva `healStuckProxy()` que reconcilia contra `Settings.Global`; `release()` que ya no sale sin mirar el proxy; `elapsed < 0` tratado como vencido), `WatchdogWorker.kt` (entra al circuito del arranque protegido: es el único mecanismo que sobrevive a que el proceso muera) y `BootReceiver.kt` (recarga de reglas DNS).
-
-**Tres lecciones que valen más que el arreglo:**
-
-1. **Medir la capa antes de elegir la causa.** Un `ping` que anda y un socket al 443 que conecta descartan media lista de hipótesis en diez segundos. El 17/8 se atribuyó este mismo síntoma a dos bugs reales del motor DNS (B.18) — eran reales, pero no eran esto, y el síntoma volvió con los arreglos ya instalados. Con un `ping` se habría sabido el primer día.
-2. **La regla del 18/8 —"reconciliar, no recordar"— no estaba aplicada donde más falta hacía.** `BootGate` decidía si había que sacar el proxy leyendo una preferencia propia (`KEY_ACTIVE`) en vez de preguntarle al sistema si el proxy estaba puesto. Cuando la preferencia y la realidad se separaban, nadie volvía a mirar. **Vale la pena revisar el resto del proyecto con esa lupa: cualquier lugar donde se guarde "ya lo hice" en vez de comparar contra el estado real es el mismo bug esperando.**
-3. **Un `catch` que falta en `Application.onCreate()` no es un detalle de estilo: es un modo de falla del equipo entero.** Ahí una excepción no rompe una función, mata el proceso — y con él el Watchdog, la VPN y la sincronización con el panel. El archivo ya tenía siete bloques en try/catch y uno solo sin: alcanzó con ese.
-
-**Descubrimiento de entorno, para la próxima sesión:** `device_bash` no montó la carpeta (falla sin recuperación) y `device_stage_files` tiene un tope de 7 carpetas de profundidad que deja los `.kt` fuera de alcance. Se resolvió pidiéndole al dueño que conectara `app/src/main/java` como carpeta extra. Está anotado en la sección A. **También quedó demostrado que se puede type-checkear sin Gradle** (`kotlinc` 2.0.21 bajado de GitHub + stubs mínimos, con control negativo) — vale la pena hacerlo siempre en las sesiones sin terminal, aunque no reemplace a compilar.
-
-**Confirmado de paso en equipo real, sin buscarlo:** el servicio de Accesibilidad **está corriendo** en el Android 13 del dueño (PID 4190, junto a la VPN y el Watchdog). O sea que **B.8 dejó de ser el bloqueante de todo lo demás** — falta solo confirmar el comportamiento en pantalla. Y el ciclo normal del arranque protegido (B.16) funciona: en un reinicio limpio, `tun0` levantó con MTU 4000 y el proxy se liberó solo.
+1. **El síntoma:** Celular conectado por depuración USB reportaba pérdida total de internet estando conectado a Wi-Fi (Telecentro) con datos móviles encendidos.
+2. **Diagnóstico forense live:**
+   - La tabla de rutas del kernel mostraba `100.0.0.0/8 dev ccmni1` (módem celular).
+   - Telecentro asignaba DNS en `100.72.3.101` (rango CGNAT).
+   - `NetworkForwarder` reenviaba las consultas pero salían por `ccmni1` (datos móviles), dando timeout (`terrno: 110`).
+   - En la versión 0.6.31 se probó `network.bindSocket(socket)`, pero logcat arrojó: `W/KosherVPN: bindSocket a red física falló: Binding socket to network 143 failed: EPERM (Operation not permitted)`.
+   - Causa del `EPERM`: faltaba `android.permission.CHANGE_NETWORK_STATE` en `AndroidManifest.xml`.
+3. **Solución implementada en v0.6.32:**
+   - Permisos `ACCESS_NETWORK_STATE` y `CHANGE_NETWORK_STATE` agregados en `AndroidManifest.xml`.
+   - `NetworkForwarder.kt` reforzado con:
+     - `bindSocket` con permisos válidos a la red física (Wi-Fi).
+     - Detección de colisión CGNAT (`100.x.x.x` conmuta preventivamente a `8.8.8.8` si el bind no está activo).
+     - Reintento transparente ante timeout contra DNS públicos (`8.8.8.8` y `1.1.1.1`).
+4. **Despliegue exitoso (`deploy_all.ps1`):**
+   - APK release compilado con R8 (`versionCode = 95`, `versionName = "0.6.32"`).
+   - Publicado en Firebase Hosting (`locksuite-nueva.web.app`) y comiteado/pusheado a GitHub `main` (`74f7975`).
 
 ---
 
-**Próximos pasos (Antigravity, con terminal real):**
-
-1. `git status` / `git log -1` — esta sesión **no pudo correr git** (sin terminal), así que los cuatro archivos de B.20 están escritos en el working tree y **sin commitear**. El mensaje de commit listo está en `INSTRUCCIONES_ANTIGRAVITY_2026-08-21.md`.
-2. **Compilar** (`.\gradlew.bat compileDebugKotlin`). Superficie nueva: `LockSuiteApplication.kt` (reestructurado), `BootGate.kt` (tres funciones nuevas), `WatchdogWorker.kt` y `BootReceiver.kt` (una llamada cada uno).
-3. **Probar B.20 primero**, con la lista de 5 puntos que está en ese punto. El punto 1 (que no aparezca `FATAL EXCEPTION` antes de desbloquear) se verifica en dos minutos y es el que más importa.
-4. **Después, lo que sigue pendiente de antes:** B.17 (imágenes), B.13 (Mercado Pago que no rebote de más), B.15 (las protecciones de accesibilidad, una por una), B.19 (bloqueo de idioma), B.9/B.14 (actualización por Play Store) y B.11 (suspensión).
-5. **Publicar** con versionCode **estrictamente mayor que 88** (es lo que hay instalado en el equipo; verificarlo, no asumirlo). `deploy_all.ps1 -VersionName "..."`. Panel: `database` → `functions` → `hosting`.
-6. Al cerrar, commit describiendo qué se probó y en qué equipo, y actualizar esta bitácora.
-
-Y B.1 y B.2 siguen siendo los de mayor impacto y menor esfuerzo de la lista.
-
 ## Estado del repo (git)
 
-**21/8:** esta sesión NO pudo correr `git` (sin terminal en la PC: `device_bash` no montó la carpeta). Quedaron **sin commitear** los cuatro archivos de B.20 — `LockSuiteApplication.kt`, `util/BootGate.kt`, `worker/WatchdogWorker.kt`, `receiver/BootReceiver.kt` — más este documento y `INSTRUCCIONES_ANTIGRAVITY_2026-08-21.md`. Puede haber además trabajo sin commitear de otras sesiones.
-
-**No se tocó `app/build.gradle.kts` ni `version.json` en esta sesión** — el número de versión lo sube quien compile. Lo instalado en el equipo del dueño al 21/8 es **0.6.25 / versionCode 88**.
-
-**Correr `git status` y `git diff --stat` al arrancar cualquier sesión nueva** en vez de confiar en este párrafo: puede haber más de un agente trabajando en paralelo. Puede aparecer ruido de fin de línea (CRLF) en `app/build.gradle.kts`, `admin-backend/public/version.json` y `ui/emergency/BlockAccessibilityActivity.kt` — diffs de 0 líneas de contenido, ver B.10.
-
-Recomendación: commitear en puntos de control claros (por ejemplo al final de cada sesión que dejó algo probado y andando). Sin eso, cualquier sesión nueva puede pisar silenciosamente el trabajo de otra — como ya pasó una vez con el flag de `lockdown` (ver B.4).
+**26/8:** El repositorio se encuentra sincronizado con la rama `main` en GitHub tras el despliegue de la versión **0.6.32 (código 95)**.
+- APK release compilado y publicado en Firebase Hosting (`admin-backend/public/locksuite-latest.apk` y `version.json`).
+- Auto-updater OTA activo para los dispositivos administrados.

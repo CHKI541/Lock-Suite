@@ -1325,137 +1325,42 @@ const storeAppUrl = document.getElementById("store-app-url");
 const addStoreAppBtn = document.getElementById("add-store-app-btn");
 const storeAppsList = document.getElementById("store-apps-list");
 
-if (mainTabDevices && mainTabGroups && mainTabArchived && mainTabGlobalSettings) {
-    mainTabDevices.addEventListener("click", () => {
-        mainTabDevices.classList.add("active");
-        mainTabGroups.classList.remove("active");
-        mainTabArchived.classList.remove("active");
-        mainTabGlobalSettings.classList.remove("active");
-        
-        mainTabDevices.style.background = "var(--navy-light)";
-        mainTabDevices.style.color = "var(--text-light)";
-        mainTabGroups.style.background = "none";
-        mainTabGroups.style.color = "var(--text-gray)";
-        mainTabArchived.style.background = "none";
-        mainTabArchived.style.color = "var(--text-gray)";
-        mainTabGlobalSettings.style.background = "none";
-        mainTabGlobalSettings.style.color = "var(--text-gray)";
-        
-        devicesContainer.classList.remove("hidden");
-        groupsContainer.classList.add("hidden");
-        archivedContainer.classList.add("hidden");
-        globalSettingsContainer.classList.add("hidden");
-    });
+const mainTabPresets = document.getElementById("main-tab-presets");
+const presetsContainer = document.getElementById("presets-container");
+const presetsList = document.getElementById("presets-list");
 
-    mainTabGroups.addEventListener("click", () => {
-        mainTabGroups.classList.add("active");
-        mainTabDevices.classList.remove("active");
-        mainTabArchived.classList.remove("active");
-        mainTabGlobalSettings.classList.remove("active");
-        
-        mainTabGroups.style.background = "var(--navy-light)";
-        mainTabGroups.style.color = "var(--text-light)";
-        mainTabDevices.style.background = "none";
-        mainTabDevices.style.color = "var(--text-gray)";
-        mainTabArchived.style.background = "none";
-        mainTabArchived.style.color = "var(--text-gray)";
-        mainTabGlobalSettings.style.background = "none";
-        mainTabGlobalSettings.style.color = "var(--text-gray)";
-        
-        groupsContainer.classList.remove("hidden");
-        devicesContainer.classList.add("hidden");
-        archivedContainer.classList.add("hidden");
-        globalSettingsContainer.classList.add("hidden");
-        closeDeviceSidebar();
-    });
+const mainNavTabs = [
+    { btn: mainTabDevices, container: devicesContainer },
+    { btn: mainTabGroups, container: groupsContainer, onOpen: () => closeDeviceSidebar() },
+    { btn: mainTabArchived, container: archivedContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
+    { btn: mainTabPresets, container: presetsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); loadPresetsList && loadPresetsList(); } },
+    { btn: mainTabGlobalSettings, container: globalSettingsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } }
+];
 
-    mainTabArchived.addEventListener("click", () => {
-        mainTabArchived.classList.add("active");
-        mainTabDevices.classList.remove("active");
-        mainTabGroups.classList.remove("active");
-        mainTabGlobalSettings.classList.remove("active");
-        
-        mainTabArchived.style.background = "var(--navy-light)";
-        mainTabArchived.style.color = "var(--text-light)";
-        mainTabDevices.style.background = "none";
-        mainTabDevices.style.color = "var(--text-gray)";
-        mainTabGroups.style.background = "none";
-        mainTabGroups.style.color = "var(--text-gray)";
-        mainTabGlobalSettings.style.background = "none";
-        mainTabGlobalSettings.style.color = "var(--text-gray)";
-        
-        archivedContainer.classList.remove("hidden");
-        devicesContainer.classList.add("hidden");
-        groupsContainer.classList.add("hidden");
-        globalSettingsContainer.classList.add("hidden");
-        closeDeviceSidebar();
-        closeGroupSidebar();
-    });
-
-    const mainTabPresets = document.getElementById("main-tab-presets");
-    const presetsContainer = document.getElementById("presets-container");
-    const presetsList = document.getElementById("presets-list");
-
-    if (mainTabPresets) {
-        mainTabPresets.addEventListener("click", () => {
-            mainTabPresets.classList.add("active");
-            mainTabDevices.classList.remove("active");
-            mainTabGroups.classList.remove("active");
-            mainTabArchived.classList.remove("active");
-            mainTabGlobalSettings.classList.remove("active");
-            
-            mainTabPresets.style.background = "var(--navy-light)";
-            mainTabPresets.style.color = "var(--text-light)";
-            mainTabDevices.style.background = "none";
-            mainTabDevices.style.color = "var(--text-gray)";
-            mainTabGroups.style.background = "none";
-            mainTabGroups.style.color = "var(--text-gray)";
-            mainTabArchived.style.background = "none";
-            mainTabArchived.style.color = "var(--text-gray)";
-            mainTabGlobalSettings.style.background = "none";
-            mainTabGlobalSettings.style.color = "var(--text-gray)";
-            
-            presetsContainer.classList.remove("hidden");
-            devicesContainer.classList.add("hidden");
-            groupsContainer.classList.add("hidden");
-            archivedContainer.classList.add("hidden");
-            globalSettingsContainer.classList.add("hidden");
-            closeDeviceSidebar();
-            closeGroupSidebar();
-
-            loadPresetsList();
-        });
-    }
-
-    mainTabGlobalSettings.addEventListener("click", () => {
-        mainTabGlobalSettings.classList.add("active");
-        mainTabDevices.classList.remove("active");
-        mainTabGroups.classList.remove("active");
-        mainTabArchived.classList.remove("active");
-        if (mainTabPresets) mainTabPresets.classList.remove("active");
-        
-        mainTabGlobalSettings.style.background = "var(--navy-light)";
-        mainTabGlobalSettings.style.color = "var(--text-light)";
-        mainTabDevices.style.background = "none";
-        mainTabDevices.style.color = "var(--text-gray)";
-        mainTabGroups.style.background = "none";
-        mainTabGroups.style.color = "var(--text-gray)";
-        mainTabArchived.style.background = "none";
-        mainTabArchived.style.color = "var(--text-gray)";
-        if (mainTabPresets) {
-            mainTabPresets.style.background = "none";
-            mainTabPresets.style.color = "var(--text-gray)";
+function switchMainTab(activeTabObj) {
+    mainNavTabs.forEach(tab => {
+        if (tab.btn && tab.container) {
+            if (tab === activeTabObj) {
+                tab.btn.classList.add("active");
+                tab.btn.style.background = "";
+                tab.btn.style.color = "";
+                tab.container.classList.remove("hidden");
+                if (tab.onOpen) tab.onOpen();
+            } else {
+                tab.btn.classList.remove("active");
+                tab.btn.style.background = "";
+                tab.btn.style.color = "";
+                tab.container.classList.add("hidden");
+            }
         }
-        
-        globalSettingsContainer.classList.remove("hidden");
-        devicesContainer.classList.add("hidden");
-        groupsContainer.classList.add("hidden");
-        archivedContainer.classList.add("hidden");
-        presetsContainer.classList.add("hidden");
-        closeDeviceSidebar();
-        closeGroupSidebar();
     });
 }
+
+mainNavTabs.forEach(tab => {
+    if (tab.btn) {
+        tab.btn.addEventListener("click", () => switchMainTab(tab));
+    }
+});
 
 // ─────────────────────────────────────────────
 // GESTIÓN DE PERFILES GUARDADOS (PRESETS)

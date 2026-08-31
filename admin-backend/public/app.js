@@ -1171,7 +1171,29 @@ sidebarLockBtn.addEventListener("click", () => {
     devicesListener && database.ref("devices").once("value").then(e => {
         currentDevicesData = e.val() || {}, renderDevicesList(currentDevicesData)
     })
-}), globalUpdateLocksuiteBtn.addEventListener("click", () => {
+});
+
+const mobileRefreshBtn = document.getElementById("mobile-refresh-btn"),
+      mobileMenuBtn = document.getElementById("mobile-menu-btn"),
+      headerActionsMenu = document.getElementById("header-actions-menu");
+
+mobileRefreshBtn && mobileRefreshBtn.addEventListener("click", () => {
+    refreshButton && refreshButton.click();
+});
+
+mobileMenuBtn && headerActionsMenu && (
+    mobileMenuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        headerActionsMenu.classList.toggle("menu-open");
+    }),
+    document.addEventListener("click", (e) => {
+        if (!headerActionsMenu.contains(e.target) && e.target !== mobileMenuBtn) {
+            headerActionsMenu.classList.remove("menu-open");
+        }
+    })
+);
+
+globalUpdateLocksuiteBtn.addEventListener("click", () => {
     const deviceIds = Object.keys(currentDevicesData);
     if (deviceIds.length === 0) {
         alert("No hay ningún dispositivo registrado.");

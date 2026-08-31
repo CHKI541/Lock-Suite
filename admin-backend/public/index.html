@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>LockSuite Kosher — Panel de administración</title>
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=21" />
 </head>
 <body>
 
@@ -36,24 +36,30 @@
   <div id="dashboard-screen" class="screen hidden">
     <div class="dashboard-layout">
       <div class="main-content">
-        <header>
-          <h1>LockSuite <span class="accent">Kosher</span></h1>
-          <div class="header-actions">
-            <a href="installer/index.html" target="_blank" style="background-color: #27ae60; color: white; border: none; padding: 8px 12px; border-radius: 8px; font-weight: bold; text-decoration: none; font-size: 13px; margin-right: 8px; display: inline-flex; align-items: center; gap: 4px;">🔌 Instalador Web</a>
-            <button id="global-update-locksuite-btn" style="background-color: #2980b9; color: white; border: none; padding: 8px 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; margin-right: 8px;">🔄 Actualizar LockSuite (Todos)</button>
-            <button id="refresh-button" class="secondary">Actualizar</button>
-            <button id="logout-button" class="secondary">Cerrar sesión</button>
+        <header class="app-header">
+          <div class="header-brand">
+            <h1>LockSuite <span class="accent">Kosher</span></h1>
+          </div>
+          <div class="header-mobile-controls">
+            <button id="mobile-refresh-btn" class="header-icon-btn" type="button" title="Actualizar">🔄</button>
+            <button id="mobile-menu-btn" class="header-icon-btn" type="button" title="Opciones">⋮</button>
+          </div>
+          <div class="header-actions" id="header-actions-menu">
+            <a href="installer/index.html" target="_blank" class="header-btn installer-btn">🔌 Instalador Web</a>
+            <button id="global-update-locksuite-btn" class="header-btn update-all-btn" type="button">🔄 Actualizar LockSuite (Todos)</button>
+            <button id="refresh-button" class="header-btn secondary" type="button">Actualizar</button>
+            <button id="logout-button" class="header-btn secondary" type="button">Cerrar sesión</button>
           </div>
         </header>
         <p id="global-error" class="error-text"></p>
 
         <!-- Pestañas principales -->
-        <div class="main-navigation" style="display: flex; background: var(--navy-medium); border-radius: 12px; margin-bottom: 24px; padding: 4px; border: 1px solid var(--navy-light);">
-          <button id="main-tab-devices" class="main-nav-btn active" style="flex: 1; background: var(--navy-light); color: var(--text-light); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">📱 Celulares</button>
-          <button id="main-tab-groups" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">👥 Grupos</button>
-          <button id="main-tab-archived" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">📦 Archivados</button>
-          <button id="main-tab-presets" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">📋 Perfiles (Presets)</button>
-          <button id="main-tab-global-settings" class="main-nav-btn" style="flex: 1; background: none; color: var(--text-gray); border: none; padding: 10px; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s;">⚙️ Ajustes Globales</button>
+        <div class="main-navigation">
+          <button id="main-tab-devices" class="main-nav-btn active" type="button">📱 Celulares</button>
+          <button id="main-tab-groups" class="main-nav-btn" type="button">👥 Grupos</button>
+          <button id="main-tab-archived" class="main-nav-btn" type="button">📦 Archivados</button>
+          <button id="main-tab-presets" class="main-nav-btn" type="button">📋 Perfiles</button>
+          <button id="main-tab-global-settings" class="main-nav-btn" type="button">⚙️ Ajustes</button>
         </div>
 
         <main id="devices-container">
@@ -545,17 +551,20 @@
   <template id="device-card-template">
     <div class="card device-card">
       <div class="device-header">
-        <div>
+        <div class="device-info-left">
           <h2 class="device-name"></h2>
-          <p class="device-model-label"></p>
-          <p class="device-id"></p>
+          <div class="device-sub-row">
+            <span class="device-model-label"></span>
+            <span class="device-id-sep">•</span>
+            <span class="device-id"></span>
+          </div>
         </div>
         <span class="badge status-badge"></span>
       </div>
       <p class="last-seen"></p>
-      <div class="card-action-bar" style="display: flex; gap: 8px;">
-        <button class="action-btn view-details-btn" style="flex: 1;">⚙️ Administrar Celular</button>
-        <button class="action-btn quick-update-btn" style="background-color: #2980b9; color: white; border: none; padding: 8px 12px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 4px;">🔄 Actualizar</button>
+      <div class="card-action-bar">
+        <button class="action-btn view-details-btn" type="button">⚙️ Administrar Celular</button>
+        <button class="action-btn quick-update-btn" type="button">🔄 Actualizar</button>
       </div>
     </div>
   </template>
@@ -604,6 +613,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=19"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>

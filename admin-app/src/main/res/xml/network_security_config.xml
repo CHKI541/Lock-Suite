@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Política de red de la app de administración.
+
+    cleartextTrafficPermitted="false"
+        Nada de http:// en ningún dominio, nunca. El panel manda comandos de MDM y
+        tokens de sesión: no hay ningún caso donde valga la pena viajar sin cifrar.
+
+    trust-anchors: solo "system"
+        Se ignoran las autoridades certificadoras instaladas a mano en el equipo.
+        Sin esto, alguien con acceso físico al celular (o un perfil de trabajo)
+        podría instalar su propio certificado y leer todo el tráfico del panel.
+
+        ⚠️ CONSECUENCIA QUE HAY QUE CONOCER: en una red que rompe el HTTPS para
+        filtrar (NetFree y similares), el panel NO va a cargar y solo se va a ver la
+        pantalla de "Sin conexión". Es el comportamiento correcto, no un bug.
+        Si algún día hace falta usar la app en una red así, agregar SOLO para los
+        dominios del panel:
+
+            <domain-config>
+                <domain includeSubdomains="false">locksuite-nueva.web.app</domain>
+                <domain includeSubdomains="false">locksuite-nueva.firebaseapp.com</domain>
+                <trust-anchors>
+                    <certificates src="system" />
+                    <certificates src="user" />
+                </trust-anchors>
+            </domain-config>
+
+        …y no en <base-config>, para no abrir el resto del tráfico.
+        (Decisión tomada el 31/8/2026 con el dueño: red normal, sin filtro TLS.)
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

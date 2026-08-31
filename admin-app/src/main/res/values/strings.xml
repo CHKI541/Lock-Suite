@@ -1,7 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">LockSuite Admin</string>
+
     <string name="offline_title">Sin conexión a internet</string>
     <string name="offline_msg">No se pudo cargar el panel de administración. Verifique su conexión Wi-Fi o datos móviles.</string>
     <string name="offline_retry">Reintentar conexión</string>
+
+    <!-- Confinamiento kosher: mensajes que ve el usuario cuando el filtro actúa -->
+    <string name="blocked_navigation">Esta app solo abre el panel de LockSuite.</string>
+    <string name="blocked_download">Las descargas están deshabilitadas. Usá la PC para bajar archivos.</string>
+    <string name="blocked_ssl">Conexión no confiable: se canceló por seguridad.</string>
+
+    <!-- Estados del WebView -->
+    <string name="webview_missing">No se pudo abrir el panel: el componente Android System WebView está desactivado o actualizándose.</string>
+    <string name="webview_recovered">Se quedó sin memoria y se recargó el panel.</string>
+    <string name="no_file_picker">No hay ninguna app para elegir archivos en este equipo.</string>
+
+    <string name="press_back_again">Presione atrás nuevamente para salir</string>
 </resources>

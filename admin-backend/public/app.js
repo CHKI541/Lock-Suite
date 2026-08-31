@@ -1095,16 +1095,50 @@ sidebarLockBtn.addEventListener("click", () => {
 }), auth.onAuthStateChanged(async e => {
     if (e) {
         loginError.textContent = "Verificando permisos...";
+        // ─────────────────────────────────────────────────────────────────────
+        // Por qué esto no es una simple lectura:
+        //
+        // La regla de `authorizedAdminsUids` en database.rules.json es
+        // auto-referencial: para poder LEER si sos admin, tenés que YA estar en
+        // la lista. Entonces una cuenta no autorizada no recibe "vacío", recibe
+        // permission_denied — que antes caía en el catch de abajo y mostraba
+        // "Error al verificar permisos: ... Client doesn't have permission to
+        // access the desired data". Eso parece una falla del sistema (o de la
+        // app Android) cuando en realidad significa, simplemente, que esa cuenta
+        // no está autorizada. Se perdió tiempo real buscándolo en el lugar
+        // equivocado.
+        //
+        // leerFlag() trata permission_denied como "no autorizado" y deja pasar
+        // cualquier otro error (red, base caída) al catch, que sí es un error de
+        // verdad. Y cuando no está autorizada, se muestra el UID en pantalla:
+        // es el dato exacto que hay que copiar a la consola de Firebase.
+        // ─────────────────────────────────────────────────────────────────────
+        const esHtml = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+        const leerFlag = async ruta => {
+            try {
+                const snap = await database.ref(ruta).once("value");
+                return snap.exists() && !0 === snap.val();
+            } catch (err) {
+                const codigo = (err && (err.code || err.message)) || "";
+                if (/permission_denied|PERMISSION_DENIED/i.test(codigo)) return !1;
+                throw err;
+            }
+        };
         try {
-            const t = await database.ref(`authorizedAdminsUids/${e.uid}`).once("value");
-            if (!t.exists() || !0 !== t.val()) {
-                const t = e.email.toLowerCase().replace(/[.@]/g, "_"),
-                    n = await database.ref(`authorizedAdmins/${t}`).once("value");
-                if (!n.exists() || !0 !== n.val()) return loginError.textContent = `Acceso denegado: El correo ${e.email} no está autorizado.`, void auth.signOut()
+            let autorizado = await leerFlag(`authorizedAdminsUids/${e.uid}`);
+            if (!autorizado) {
+                autorizado = await leerFlag(`authorizedAdmins/${e.email.toLowerCase().replace(/[.@]/g, "_")}`);
+            }
+            if (!autorizado) {
+                loginError.innerHTML = "Esta cuenta no está autorizada para administrar.<br>Cuenta: <b>" + esHtml(e.email) +
+                    "</b><br>UID: <b style=\"word-break:break-all\">" + esHtml(e.uid) + "</b><br>" +
+                    "<span style=\"color:var(--text-gray)\">Para autorizarla: Firebase Console \u2192 Realtime Database \u2192 " +
+                    "<code>authorizedAdminsUids</code> \u2192 agregar el UID de arriba con valor <code>true</code>.</span>";
+                return void auth.signOut();
             }
             loginError.textContent = "", loginScreen.classList.add("hidden"), dashboardScreen.classList.remove("hidden"), startRealtimeSync()
-        } catch (e) {
-            loginError.textContent = "Error al verificar permisos: " + e.message, auth.signOut()
+        } catch (err) {
+            loginError.textContent = "Error al verificar permisos: " + err.message, auth.signOut()
         }
     } else stopRealtimeSync(), closeDeviceSidebar(), dashboardScreen.classList.add("hidden"), loginScreen.classList.remove("hidden")
 }), loginButton.addEventListener("click", async () => {
@@ -1118,7 +1152,18 @@ sidebarLockBtn.addEventListener("click", () => {
     loginError.textContent = "";
     try {
         const e = new firebase.auth.GoogleAuthProvider;
-        await auth.signInWithPopup(e)
+        // Dentro de la app Android (LockSuite Admin) el panel corre en un WebView donde
+        // las ventanas nuevas están deshabilitadas a propósito (confinamiento kosher).
+        // signInWithPopup necesita window.open, así que ahí siempre fallaba con
+        // "auth/popup-blocked" y el botón parecía no hacer nada. El flujo por
+        // redirección navega en la misma ventana y sí funciona.
+        // El token "LockSuiteAdminApp" lo agrega la app al User-Agent
+        // (MainActivity.setupWebView). Si se cambia allá, cambiarlo acá.
+        if (/LockSuiteAdminApp/.test(navigator.userAgent)) {
+            await auth.signInWithRedirect(e)
+        } else {
+            await auth.signInWithPopup(e)
+        }
     } catch (e) {
         loginError.textContent = "Error al iniciar sesión con Google: " + e.message
     }
@@ -2431,3 +2476,19 @@ if (auth) {
     });
 }
 // Cache buster: 2026-07-26T18:53
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// App Android: resultado del login por redirección
+// ─────────────────────────────────────────────────────────────────────────────
+// signInWithRedirect no devuelve por la promesa del click: el resultado llega en el
+// SIGUIENTE arranque de la página. Si Google devuelve un error (consentimiento
+// cancelado, cuenta bloqueada, dominio no autorizado en Firebase Auth), sin esto no
+// se ve por ningún lado y desde el celular parece que "el botón no hace nada".
+// El caso de éxito no necesita nada: lo levanta onAuthStateChanged.
+if (typeof auth !== "undefined" && typeof auth.getRedirectResult === "function") {
+    auth.getRedirectResult().catch(err => {
+        const box = document.getElementById("login-error");
+        if (box) box.textContent = "Error al iniciar sesión con Google: " + ((err && err.message) || err);
+    });
+}

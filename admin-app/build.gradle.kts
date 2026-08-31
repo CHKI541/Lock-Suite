@@ -12,8 +12,8 @@ android {
         applicationId = "com.ejemplo.locksuite.admin"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     signingConfigs {
@@ -34,8 +34,19 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // 🛑 Antes estaba en false. Sin R8, decompilar el .apk devuelve los nombres
+            // de clases y métodos tal cual el código fuente — incluidas las listas
+            // blancas de dominios, que es justo el mapa que necesitaría alguien que
+            // quiera saber por dónde escaparse. Reglas conservadoras en
+            // proguard-rules.pro (esta app no tiene reflexión ni puentes JS).
+            //
+            // Si el build falla o la app arranca en negro después de este cambio:
+            // poner las dos líneas en false y avisar — no es un cambio funcional,
+            // se puede revertir sin tocar nada más.
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
             signingConfig = signingConfigs.getByName("release")

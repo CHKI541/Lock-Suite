@@ -30,54 +30,71 @@
         android:progressDrawable="@drawable/progress_bar_custom"
         android:visibility="gone" />
 
-    <!-- Pantalla limpia de Sin Conexión / Error -->
-    <LinearLayout
+    <!--
+        Pantalla limpia de Sin Conexión / Error.
+
+        Va dentro de un ScrollView a propósito: en horizontal, o en un equipo chico con
+        el tamaño de fuente del sistema en grande, el ícono + los dos textos + el botón
+        suman más alto que la pantalla y el botón "Reintentar" quedaba fuera de vista,
+        sin forma de llegar a él. Con el ScrollView siempre se puede alcanzar.
+        fillViewport mantiene el centrado vertical cuando sí entra todo.
+    -->
+    <ScrollView
         android:id="@+id/layoutOffline"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:padding="24dp"
         android:background="@color/navy_dark"
+        android:fillViewport="true"
         android:visibility="gone">
 
-        <ImageView
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:layout_marginBottom="16dp"
-            app:tint="@color/accent_orange"
-            android:src="@drawable/ic_launcher_foreground" />
-
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:id="@+id/offlineContent"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/offline_title"
-            android:textColor="@color/text_light"
-            android:textSize="18sp"
-            android:textStyle="bold"
             android:gravity="center"
-            android:layout_marginBottom="8dp" />
+            android:orientation="vertical"
+            android:padding="24dp">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/offline_msg"
-            android:textColor="@color/text_gray"
-            android:textSize="13sp"
-            android:gravity="center"
-            android:layout_marginBottom="24dp" />
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:layout_marginBottom="16dp"
+                android:contentDescription="@string/offline_title"
+                app:tint="@color/accent_orange"
+                android:src="@drawable/ic_launcher_foreground" />
 
-        <Button
-            android:id="@+id/btnRetry"
-            android:layout_width="wrap_content"
-            android:layout_height="48dp"
-            android:minWidth="180dp"
-            android:text="@string/offline_retry"
-            android:textColor="@color/navy_dark"
-            android:textStyle="bold"
-            android:textSize="14sp"
-            android:background="@drawable/bg_btn_accent" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/offline_title"
+                android:textColor="@color/text_light"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:layout_marginBottom="8dp" />
 
-    </LinearLayout>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/offline_msg"
+                android:textColor="@color/text_gray"
+                android:textSize="13sp"
+                android:gravity="center"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/btnRetry"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:minWidth="180dp"
+                android:text="@string/offline_retry"
+                android:textColor="@color/navy_dark"
+                android:textStyle="bold"
+                android:textSize="14sp"
+                android:background="@drawable/bg_btn_accent" />
+
+        </LinearLayout>
+
+    </ScrollView>
 
 </FrameLayout>

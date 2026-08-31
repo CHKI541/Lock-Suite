@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Ícono para Android 7.0 y 7.1 (API 24-25).
+
+    ⚠️ POR QUÉ EXISTE ESTE ARCHIVO: el ícono adaptativo vive en `mipmap-anydpi-v26/`,
+    y ese calificador `-v26` significa "solo desde Android 8.0". La app declara
+    minSdk 24, así que en Android 7 NO existía ningún recurso `@mipmap/ic_launcher`
+    y el lanzador mostraba el ícono genérico de Android (o nada).
+
+    Este archivo, sin calificador de versión, cubre 24 y 25. Desde 26 en adelante gana
+    el adaptativo, que es más específico. Las dos capas son los mismos vectores de
+    108×108 que usa el adaptativo, superpuestos: se ve igual, solo que cuadrado en vez
+    de recortado con la máscara del lanzador.
+
+    Si algún día se cambia el ícono, hay que cambiar los DOS (este y el de -v26).
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

@@ -86,6 +86,36 @@ CAPA 3 — VISUAL (service/LockSuiteAccessibilityService.kt)
 
 Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: **`looksuite-41866`**, cuenta dueña `imc112818@gmail.com`. `functions/index.js` (`sendCommandV8`, whitelist `ALLOWED_COMMANDS`), `database.rules.json`, `public/` (panel HTML/CSS/JS + instalador WebADB). Repo de código: **`github.com/CHKI541/Lock-Suite`, público** (ver Pendientes B.2 — es la recomendación de mayor impacto y menor esfuerzo de toda la lista).
 
+### App de administración para celular (`admin-app/`)
+
+Módulo Gradle aparte (`:admin-app`, paquete `com.ejemplo.locksuite.admin`, APK independiente
+del MDM). Es una **cáscara nativa del panel web**, para poder administrar desde un celular
+kosher que no tiene navegador. Un solo archivo Kotlin: `admin-app/src/main/java/com/ejemplo/locksuite/admin/MainActivity.kt`.
+
+Lo importante de entender antes de tocarlo: **un WebView sin restricciones es un navegador
+completo, solo que sin barra de direcciones.** Todo lo que hace este módulo para no romper
+la condición kosher del equipo se apoya en dos listas blancas dentro de `MainActivity.kt`:
+
+| Lista | Qué controla | Cómo se compara |
+|---|---|---|
+| `NAV_ALLOWED_HOSTS` | A qué páginas puede **navegar** el WebView. Hoy: el panel (`locksuite-nueva.web.app`, `locksuite-nueva.firebaseapp.com`) y `accounts.google.com` para el login con Google. | **Host exacto.** Nunca por sufijo: `.google.com` abriría media web. |
+| `RESOURCE_ALLOWED_HOSTS` / `RESOURCE_ALLOWED_SUFFIXES` | De dónde puede bajar **subrecursos** (JS, XHR, WebSocket, imágenes). Firebase, gstatic, la Cloud Function, los íconos de Wikimedia. | Host exacto o sufijo de dominio. |
+
+Un host que está solo en la segunda lista **no se puede visitar**: cargar una imagen de un
+dominio no es poder navegar a ese dominio. Todo lo bloqueado se registra con el tag
+`LockSuiteAdmin`, así que el diagnóstico cuando algo del panel deja de andar es
+`adb logcat -s LockSuiteAdmin` y agregar el host que aparezca a la lista que corresponda.
+**Nunca desactivar el filtro entero "para probar si era eso".**
+
+El resto de las decisiones (por qué el gesto de recargar solo se arma en la franja superior,
+por qué `allowBackup` está en `false`, por qué no hay ningún `@JavascriptInterface`) están
+comentadas en el propio archivo, en el lugar donde importan.
+
+Compilar: `./gradlew :admin-app:assembleRelease` → `admin-app/build/outputs/apk/release/`.
+Usa el mismo keystore de `local.properties` que `:app`. **No** tiene `google-services.json`
+ni plugin de Firebase: no habla con Firebase desde código nativo, solo carga el panel.
+El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
+
 ### Compilar y desplegar
 
 - Android: Android Studio + JDK 17, `google-services.json` en `app/`, keystore en `local.properties`. `./gradlew assembleRelease` → APK en `app/build/outputs/apk/release/`.
@@ -115,6 +145,8 @@ Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: *
 - `INFORME_FORENSE_ACCESIBILIDAD_ANDROID13.md` (15/8) — diagnóstico completo del bug de accesibilidad en Android 13, con evidencia ADB (ver B.8).
 - `INSTRUCCIONES_COMPILACION_ANTIGRAVITY_2026-08-16.md` (16/8) — **empezar por acá si vas a compilar.** Qué entra en el build, comandos exactos, qué puede fallar, y en qué orden probar (B.8 primero, porque bloquea al resto).
 - `INFORME_OPTIMIZACION_ACCESIBILIDAD_2026-08-16.md` (16/8) — detalle línea por línea de la optimización de Capa 3 y del sobre-bloqueo de Mercado Pago, con el porqué de cada cambio y checklist de 9 puntos (ver B.13). Leerlo antes de tocar `LockSuiteAccessibilityService.kt`. **Ojo:** la parte que describe `BlockOverlayManager` como "una ventana por región" quedó desactualizada el 17/8 — ese archivo se reescribió a una sola capa de canvas (ver B.17).
+- `INSTRUCCIONES_ANTIGRAVITY_2026-08-31_APP_ADMIN.md` (31/8) — **la app de administración para celular: qué se auditó, qué se corrigió y qué falta compilar/probar.** Incluye el commit listo para copiar y las pruebas en equipo real ordenadas.
+- `EXPLICACION_APK_ADMIN_PARA_OTRAS_IA.md` — documento que Antigravity dice haber escrito al crear `:admin-app`. **Al 31/8 no está en el repo** (ni en la raíz ni dentro de `admin-app/`): o no se llegó a guardar, o se guardó fuera del proyecto. Si aparece, leerlo como historial de intención; el mapa real del módulo es la sección "App de administración para celular" de más arriba.
 - `INSTRUCCIONES_ANTIGRAVITY_2026-08-21.md` (21/8) — **el más nuevo: si vas a compilar, empezá por acá.** Qué se tocó para arreglar "se cae el internet" (B.20), mensaje de commit listo, y las pruebas en equipo real ordenadas por cuál descarta el problema más rápido.
 - `INSTRUCCIONES_ANTIGRAVITY_2026-08-17.md` (17/8) — **empezar por acá para compilar y probar lo del 17/8.** Qué se tocó y por qué, orden de prueba con checklists por tema, mensaje de commit listo, y una lista de ocho cosas que parecen rulos innecesarios y no hay que "simplificar".
 - `CAMBIOS_ACTUALIZACION_PLAYSTORE.md` + `EXPLICACION_ACTUALIZACION_GOOGLE_PLAY.md` — arquitectura del flujo de actualización silenciosa por Play Store. **Parcialmente desactualizados desde el 16/8**: describen bien la intención y los problemas históricos, pero el reparto de responsabilidades cambió — ahora el flujo vive centralizado en `util/UpdateFlowManager.kt` y no repartido entre cuatro archivos. Leerlos como historial, no como mapa del código actual.
@@ -126,6 +158,9 @@ Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: *
 - La VM de `device_bash` a veces tarda bastante más de lo que dice "Workspace still starting" (se vio más de 3 minutos) — no conviene reintentar en loop.
 - **(21/8) `device_bash` puede directamente NO montar la carpeta** ("failed to mount", con `$HOME/mnt/` vacío). No se recupera reintentando. En ese caso el único camino es `device_stage_files` / `device_commit_files`.
 - **(21/8) `device_stage_files` tiene un tope de 7 carpetas de profundidad** por debajo de la carpeta conectada, y los `.kt` están a 8 (`app/src/main/java/com/ejemplo/locksuite/util/X.kt`). El error lo dice explícito y `device_request_folder_access` **no** lo arregla (una carpeta dentro de una conectada cuenta como ya concedida). La solución es pedirle al dueño que agregue **`E:\Documentos\Lock Suite segunda version\app\src\main\java`** como carpeta extra desde el botón "Add folder" de la app de escritorio: desde ahí todo el Kotlin queda a 4 niveles. **Si en una sesión nueva `device_bash` no monta, pedí esa carpeta de entrada en vez de descubrirlo a mitad de camino.**
+- **(31/8) Volvió a pasar exactamente eso, y la solución funcionó.** `device_bash` no montó ("failed to mount") y `MainActivity.kt` de `:admin-app` (a 8 niveles) no se pudo bajar. Se le pidió al dueño agregar la carpeta desde "Add folder" y con eso quedó accesible al instante. Las carpetas que conviene tener conectadas para trabajar cómodo son **dos**: `E:\Documentos\Lock Suite segunda version` y `E:\Documentos\Lock Suite segunda version\app\src\main\java` (más `admin-app\src\main\java` si se va a tocar la app de administración).
+- **(31/8) Sin `device_bash` tampoco hay `git`.** Ninguna sesión que trabaje solo por `device_stage_files`/`device_commit_files` puede commitear: los archivos quedan escritos en el disco pero sin commit. En ese caso el cierre correcto es dejar el mensaje de commit exacto en el documento de instrucciones y que lo corra Antigravity.
+- **(31/8) El type-check con `kotlinc` volvió a rendir.** Contra stubs escritos a mano de la API de Android usada por el archivo, `MainActivity.kt` dio 0 errores y 0 warnings, y los tres controles negativos (método inexistente, llave desbalanceada, tipo equivocado) fueron detectados. Es barato y agarra cosas reales; conviene hacerlo siempre antes de entregar Kotlin sin compilar.
 - **Sí se puede type-checkear sin Gradle, y conviene hacerlo.** `kotlinc` 2.0.21 se baja de `github.com/JetBrains/kotlin/releases` (Maven Central da 404 para ese artefacto) y corre en el contenedor. Contra stubs mínimos de la API de Android + de las clases del proyecto que toque el archivo, agarra errores reales de tipos y de referencias. **Siempre con control negativo** (romper a propósito una referencia y confirmar que la detecta): sin eso, un "0 errores" puede ser simplemente que no compiló nada.
 
 ---
@@ -337,6 +372,88 @@ El celular (MediaTek, Android 13) perdía conectividad total estando conectado a
 
 ---
 
+**B.22 — APP DE ADMINISTRACIÓN PARA CELULAR (`:admin-app`): auditoría profunda del 31/8. Doce defectos corregidos en código; NADA compilado ni probado en equipo real.**
+
+Contexto: el dueño pidió una app Android para administrar el panel desde su propio celular kosher (sin navegador). Antigravity la creó (versionCode 1) y esta sesión la auditó línea por línea. **El hallazgo central es que el confinamiento kosher no existía**: `shouldOverrideUrlLoading` devolvía `false` siempre, que es literalmente "cargá cualquier URL". Con un solo enlace externo, un redirect o un iframe, el equipo dejaba de ser kosher.
+
+*Decisiones de producto tomadas con el dueño el 31/8:* login con Google **sí** (se permite navegar a `accounts.google.com` y nada más de Google); red **sin** filtro TLS tipo NetFree (solo CA del sistema); capturas de pantalla **permitidas** (no se puso `FLAG_SECURE`).
+
+**Lo corregido (todo en código, sin compilar):**
+
+1. **Confinamiento kosher (crítico).** Dos listas blancas en `MainActivity.kt` (ver la sección "App de administración para celular" en la parte A). `shouldOverrideUrlLoading` corta toda navegación fuera de `NAV_ALLOWED_HOSTS` y todo esquema que no sea `https` (bloquea de paso `intent:`, que es el vector clásico para saltar a Chrome desde un WebView). `shouldInterceptRequest` es la segunda barrera y filtra scripts, XHR e iframes. `setSupportMultipleWindows(false)` + `onCreateWindow` en `false` hacen que `window.open` y `target="_blank"` caigan dentro del mismo WebView y pasen por el filtro.
+2. **Descargas bloqueadas** con un `DownloadListener` explícito. Antes no había ninguno: un `<a download>` simplemente no hacía nada, en silencio (por eso "exportar preset" parecía roto desde el celular). Ahora avisa. **Decisión:** en un celular sin navegador, bajar archivos arbitrarios es una vía de escape; los presets se exportan desde la PC.
+3. **`onShowFileChooser` implementado.** Sin él, el `<input type="file">` de "importar preset" del panel era un botón muerto.
+4. **`onRenderProcessGone` (crítico en equipos económicos).** Si Android mataba el proceso del renderizador por falta de memoria —el perfil típico del celular kosher—, se llevaba puesta la app entera. Ahora se recupera recreando la pantalla.
+5. **`restoreState()` sin chequear null.** Al rotar o al volver después de que el sistema matara el proceso, si el Bundle guardado se había perdido nadie llamaba a `loadUrl()` y **la app quedaba en negro para siempre**. Ahora hay fallback a `loadPanel()`.
+6. **`allowBackup="true"` → `false`.** La sesión de administrador (cookies + almacenamiento del WebView) se copiaba al backup de Google y se podía sacar con `adb backup` en equipos viejos. Alcanzaba para entrar al panel de MDM sin la contraseña.
+7. **Ícono ausente en Android 7.0/7.1.** El ícono adaptativo vivía solo en `mipmap-anydpi-v26/`, o sea "desde Android 8". Con `minSdk 24`, en Android 7 no existía `@mipmap/ic_launcher`. Agregados `res/mipmap/ic_launcher.xml` y `ic_launcher_round.xml` sin calificador.
+8. **Deslizar-para-recargar recargaba la página al intentar desplazarse (bug de uso garantizado).** La condición era `swipeRefresh.isEnabled = webView.scrollY == 0`, pero el panel dibuja el detalle del dispositivo dentro de `.sidebar-content`, un contenedor con `overflow-y: auto` que **no mueve `webView.scrollY`**. Con el panel de un equipo abierto —o sea casi siempre— `scrollY` valía 0 y cualquier arrastre hacia abajo disparaba una recarga completa. Ahora, vía `setOnChildScrollUpCallback` + la Y del `ACTION_DOWN`, el gesto solo se arma si el dedo bajó en los primeros **64 dp** de pantalla (la cabecera de la barra lateral, que no tiene scroll propio).
+9. **`onReceivedSslError` explícito.** El comportamiento por defecto ya era cancelar, pero ahora está escrito, logueado y con cartel. **Nunca agregar `handler.proceed()` acá.**
+10. **`network_security_config.xml` nuevo:** nada de `http://` en ningún dominio y solo CA del sistema (se ignoran las instaladas a mano). El propio archivo lleva comentado el bloque exacto a agregar si algún día hace falta usar la app en una red que rompe el HTTPS para filtrar.
+11. **`configChanges` completo** (`density|fontScale|uiMode|layoutDirection|locale|…`) + `launchMode="singleTask"`: cambiar el modo oscuro o el tamaño de fuente ya no destruye la Activity y recarga el panel entero. Más `onPause`/`onResume` del WebView y `CookieManager.flush()` para no perder la sesión si el sistema mata el proceso.
+12. **R8 activado** en `:admin-app` release (`isMinifyEnabled`/`isShrinkResources`, con `proguard-rules.pro` conservador). Estaba en `false`: decompilar el APK devolvía las listas blancas de dominios con nombres originales, o sea el mapa exacto de por dónde intentar escaparse.
+
+**Panel (`admin-backend/public/`):** el botón "Iniciar sesión con Google" usaba `signInWithPopup`, que **no funciona en un WebView** (necesita `window.open`, deshabilitado a propósito) — daba `auth/popup-blocked` y parecía no hacer nada. Ahora, cuando el User-Agent trae el token `LockSuiteAdminApp` que agrega la app, usa `signInWithRedirect`; en la PC sigue con popup. Se sumó un `getRedirectResult().catch()` para que un error de Google se vea en pantalla en vez de desaparecer. Cache-buster de `app.js` subido a `v=18`.
+
+**Verificación hecha:** type-check con kotlinc 2.0.21 contra stubs de la API de Android, **0 errores / 0 warnings**, con tres controles negativos que confirman que el chequeo estaba vivo. XML bien formado. `node --check` sobre `app.js`. **No se corrió Gradle, no se generó APK, no se probó nada en equipo.**
+
+**Falta hacer (en este orden, detalle completo en `INSTRUCCIONES_ANTIGRAVITY_2026-08-31_APP_ADMIN.md`):** compilar `:admin-app`; desplegar el panel (`hosting` primero); y probar en el celular — (a) que el login entre (con Google, mirando `adb logcat -s LockSuiteAdmin` por si algún host quedó afuera de la lista blanca), (b) que ningún enlace saque de la app, (c) que desplazarse en el panel de un dispositivo ya no recargue, (d) que el ícono aparezca en un equipo Android 7 si hay uno a mano.
+
+**Riesgos conocidos que hay que mirar en la prueba:**
+- **La lista blanca de subrecursos puede quedar corta para el login de Google.** Es el riesgo número uno de esta entrega. No se pudo probar el flujo real, y `accounts.google.com` toca varios dominios de Google. Por eso todo lo bloqueado se loguea: el arreglo es agregar el host, no aflojar el filtro.
+- **R8 nunca se corrió sobre este módulo.** Si el build falla o la app arranca en negro, poner `isMinifyEnabled`/`isShrinkResources` en `false` — es un cambio aislado, no toca el comportamiento.
+- **`signInWithRedirect` cruza dos orígenes** (`web.app` → `firebaseapp.com`). El WebView tiene cookies de terceros habilitadas, así que debería andar; si diera problemas, el remedio documentado por Firebase es poner `authDomain: "locksuite-nueva.web.app"` en `firebase-config.js` (deja el flujo en un solo origen). No se hizo para no cambiar el login de la PC sin poder probarlo.
+
+**Pendiente que NO se tocó, y por qué:** exportar presets desde el celular sigue sin funcionar (requiere leer una URL `blob:` desde código nativo, que solo se puede con un puente de JavaScript o `WebMessageListener` de `androidx.webkit`). Se eligió bloquear y avisar en vez de abrir esa superficie sin poder probarla. Si el dueño lo pide, la vía limpia es `WebViewCompat.addWebMessageListener` con la lista de orígenes acotada al panel — es más seguro que `addJavascriptInterface` porque el origen lo verifica el framework.
+
+**Detalles menores anotados, sin cambiar:** el panel usa `viewport-fit=cover` pero no usa `env(safe-area-inset-*)` en ningún lado (hoy es inofensivo porque la app no va de borde a borde; sería un bug si alguna vez se sube a `targetSdk 35+`); `user-scalable=no` + `setSupportZoom(false)` impiden agrandar con los dedos, y `textZoom = 100` fija el tamaño de texto ignorando la escala de fuente del sistema — es cómodo para el diseño y malo para accesibilidad, decidir a conciencia; varios elementos táctiles del panel quedan en 33-40 dp de alto, por debajo de los 48 dp recomendados; los íconos de apps del panel se bajan de `upload.wikimedia.org` (conviene hospedarlos en Firebase para no depender de un tercero).
+
+**B.23 — "No puedo iniciar sesión en el panel": el `permission_denied` no era un error, era una cuenta sin autorizar. [DIAGNOSTICADO 31/8 (tarde); arreglo escrito, SIN DESPLEGAR]**
+
+Reporte del dueño tras instalar el APK: con email y contraseña aparece
+`Error al verificar permisos: permission_denied at /authorizedAdminsUids/dklXHRAY3tdjmnwzX0CxJMoGb…`,
+y con Google "titila la pantalla y no hace nada".
+
+**No es un bug de la app.** El UID en el propio mensaje prueba que Firebase Auth ya había
+aceptado el email y la contraseña; lo que falla es el paso siguiente, la verificación de si
+esa cuenta puede administrar. La regla de `database.rules.json` es **auto-referencial**:
+
+```json
+"authorizedAdminsUids": { ".read": "auth != null && root.child('authorizedAdminsUids').child(auth.uid).exists()" }
+```
+
+Para leer si sos admin tenés que **ya estar** en la lista. Entonces una cuenta no autorizada
+no recibe "vacío" sino `permission_denied`, y `app.js` lo mostraba con el texto de un fallo
+del sistema. **El significado real es simplemente "esta cuenta no está en la lista de
+administradores".** Se pierde tiempo buscándolo en el lugar equivocado — pasó exactamente
+eso. Corolario: el plan B por email (`authorizedAdmins/<email>`) **nunca pudo funcionar**,
+porque su regla de lectura exige lo mismo; es código muerto.
+
+**Arreglo de datos (no requiere compilar ni desplegar):** Firebase Console → Authentication
+→ Users → copiar el UID → Realtime Database → `authorizedAdminsUids/<UID>` = `true`
+(booleano). Con eso el login por email y contraseña funciona con el APK ya instalado.
+
+**Arreglo de código (escrito el 31/8, falta `firebase deploy --only hosting,database`):**
+`database.rules.json` deja que cada usuario lea **su propia** entrada de
+`authorizedAdminsUids` (tres líneas; la autorización real no cambia, sigue siendo estar en
+esa lista); y `app.js` distingue "no autorizado" de un error de verdad y **muestra el UID en
+pantalla**, que es el dato exacto que hay que copiar a la consola. Cache-buster a `v=19`.
+
+**Lo de Google es otra cosa y ya estaba previsto en B.22:** `signInWithPopup` no funciona en
+un WebView (necesita `window.open`), da `auth/popup-blocked` y por eso "titila". El arreglo
+—`signInWithRedirect` cuando el User-Agent trae `LockSuiteAdminApp`— **necesita el APK
+recompilado Y el panel desplegado a la vez**; con uno solo no alcanza.
+
+⚠️ **No arreglar esto habilitando `setSupportMultipleWindows(true)`.** Una ventana nueva del
+WebView **no pasa por `shouldOverrideUrlLoading`**: se saltea la lista blanca entera y el
+celular deja de ser kosher. La redirección navega en la misma ventana y sí pasa por el filtro.
+
+**Deuda que queda abierta:** la autorización es doble y solo una mitad manda. El panel
+decide mostrar el tablero mirando `authorizedAdminsUids` **o** `authorizedAdmins` (email),
+pero las reglas de `devices`, `groups`, `presets`, etc. solo aceptan `authorizedAdminsUids`.
+Una cuenta autorizada solo por email vería el tablero y fallaría en cada lectura. O se borra
+el camino por email, o se hace que las reglas lo acepten. Relacionado con B.3.
+
 **B.10 — Menores / housekeeping:**
 
 - `DISALLOW_CONFIG_DATE_TIME` no implementado — el bloqueo de intentos de PIN ya usa reloj monotónico así que no es explotable hoy, pero cerraría del todo esa puerta. Implementar como interruptor opcional del panel, no forzado (decisión de producto: el usuario final pierde poder corregir la hora).
@@ -362,28 +479,27 @@ El celular (MediaTek, Android 13) perdía conectividad total estando conectado a
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**25/8 y 26/8 — sesión de diagnóstico y solución definitiva en equipo real (Antigravity con terminal y ADB). Despliegue de versiones 0.6.31 y 0.6.32 (código 95).**
+**31/8 — auditoría profunda de la app de administración para celular (`:admin-app`). Sesión de Claude por el puente al dispositivo: sin compilar, sin desplegar, sin commitear.**
 
-1. **El síntoma:** Celular conectado por depuración USB reportaba pérdida total de internet estando conectado a Wi-Fi (Telecentro) con datos móviles encendidos.
-2. **Diagnóstico forense live:**
-   - La tabla de rutas del kernel mostraba `100.0.0.0/8 dev ccmni1` (módem celular).
-   - Telecentro asignaba DNS en `100.72.3.101` (rango CGNAT).
-   - `NetworkForwarder` reenviaba las consultas pero salían por `ccmni1` (datos móviles), dando timeout (`terrno: 110`).
-   - En la versión 0.6.31 se probó `network.bindSocket(socket)`, pero logcat arrojó: `W/KosherVPN: bindSocket a red física falló: Binding socket to network 143 failed: EPERM (Operation not permitted)`.
-   - Causa del `EPERM`: faltaba `android.permission.CHANGE_NETWORK_STATE` en `AndroidManifest.xml`.
-3. **Solución implementada en v0.6.32:**
-   - Permisos `ACCESS_NETWORK_STATE` y `CHANGE_NETWORK_STATE` agregados en `AndroidManifest.xml`.
-   - `NetworkForwarder.kt` reforzado con:
-     - `bindSocket` con permisos válidos a la red física (Wi-Fi).
-     - Detección de colisión CGNAT (`100.x.x.x` conmuta preventivamente a `8.8.8.8` si el bind no está activo).
-     - Reintento transparente ante timeout contra DNS públicos (`8.8.8.8` y `1.1.1.1`).
-4. **Despliegue exitoso (`deploy_all.ps1`):**
-   - APK release compilado con R8 (`versionCode = 95`, `versionName = "0.6.32"`).
-   - Publicado en Firebase Hosting (`locksuite-nueva.web.app`) y comiteado/pusheado a GitHub `main` (`74f7975`).
+1. **Qué se pidió:** revisar la app Android que Antigravity creó para administrar el panel desde el celular kosher del dueño — que funcione bien, que sea compatible con celulares populares, que sea segura, y sobre todo **que no se pueda entrar a otras páginas web desde la app**.
+2. **Hallazgo central:** el confinamiento kosher no existía. `shouldOverrideUrlLoading` devolvía `false` en todos los casos, o sea que la app era un navegador completo sin barra de direcciones. Doce defectos más, cuatro de ellos capaces de dejar la app inservible (pantalla en negro tras rotar, cierre inesperado por falta de memoria, recarga de la página al intentar desplazarse, ícono ausente en Android 7). Lista completa y razonada en **B.22**.
+3. **Qué se corrigió:** 9 archivos de `:admin-app` (`MainActivity.kt` reescrito, Manifest, `build.gradle.kts`, layout, strings, `network_security_config.xml`, `proguard-rules.pro`, dos íconos nuevos) y 2 del panel (`app.js`, `index.html`).
+4. **Verificación:** type-check con kotlinc 2.0.21 contra stubs de la API de Android → **0 errores / 0 warnings**, con tres controles negativos que confirman que el chequeo detectaba errores reales. XML bien formado, `node --check` sobre `app.js`.
+5. **Decisiones tomadas con el dueño:** login con Google habilitado (se permite navegar solo a `accounts.google.com`); red sin filtro TLS, así que solo se confían CA del sistema; capturas de pantalla permitidas.
+6. **Limitación del entorno, otra vez:** `device_bash` no montó la carpeta, así que **esta sesión no pudo compilar, desplegar ni hacer `git commit`**. Los archivos están escritos en el disco pero **sin commitear**. El mensaje de commit exacto quedó en `INSTRUCCIONES_ANTIGRAVITY_2026-08-31_APP_ADMIN.md`.
+7. **Estado:** `:admin-app` pasa de versionCode 1 / 1.0.0 a **2 / 1.1.0** en `build.gradle.kts`. El MDM (`:app`) sigue en **95 / 0.6.32** — esta sesión no lo tocó.
+
+**31/8 (tarde) — segunda mitad de la misma sesión: diagnóstico del "no puedo iniciar sesión".**
+
+8. El dueño probó el APK y no pudo entrar. Con email y contraseña salía `permission_denied at /authorizedAdminsUids/…`; con Google, la pantalla titilaba sin hacer nada. **Ninguna de las dos cosas era un bug de la app** — detalle completo en **B.23**.
+9. **Hallazgo importante para cualquier sesión que siga:** Antigravity reportó haber aplicado todas las correcciones y haber compilado un APK de 1,95 MB, pero **nada de eso está en esta carpeta**. `MainActivity.kt` es byte por byte el archivo escrito a la mañana (`NAV_ALLOWED_HOSTS` presente, `LockSuiteBridge` / `@JavascriptInterface` / `setSupportMultipleWindows(true)` con cero coincidencias), y los dos `LockSuite_Admin.apk` siguen en 4.830.930 bytes con fecha del 17/8. **O sea que el APK instalado en el celular es el original sin ningún confinamiento kosher, y el panel desplegado también es el viejo.** Puede ser que se haya trabajado sobre otra copia del proyecto. Antes de dar por hecho lo que diga un reporte, **verificar en el disco** (tamaño + fecha + un `grep` de algún identificador nuevo).
+10. Se escribieron los arreglos del login: `database.rules.json` (lectura de la propia entrada), `app.js` (mensaje honesto + muestra el UID) e `index.html` (`v=19`). **Sin desplegar.**
 
 ---
 
 ## Estado del repo (git)
+
+**31/8:** ⚠️ **Hay 11 archivos modificados SIN COMMITEAR** (9 de `admin-app/`, más `admin-backend/public/app.js` e `index.html`), escritos por la sesión de Claude del 31/8 — ver B.22. Esa sesión no tenía terminal y no pudo commitear. **Antes de correr `deploy_all.ps1`, tener presente que hace `git add .` y se los va a llevar puestos junto con todo lo demás**; el mensaje de commit ya escrito está en `INSTRUCCIONES_ANTIGRAVITY_2026-08-31_APP_ADMIN.md`.
 
 **26/8:** El repositorio se encuentra sincronizado con la rama `main` en GitHub tras el despliegue de la versión **0.6.32 (código 95)**.
 - APK release compilado y publicado en Firebase Hosting (`admin-backend/public/locksuite-latest.apk` y `version.json`).

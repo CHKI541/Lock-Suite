@@ -11,7 +11,9 @@
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
         ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || !data.exists() || data.child('ownerUid').val() === auth.uid || newData.child('ownerUid').val() === auth.uid || root.child('devices').child($device_id).child('ownerUid').val() === auth.uid)",
-        "commandSecret": { ".write": "auth != null && (!data.exists() || newData.val() === data.val() || auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())" }
+        "commandSecret": {
+          ".write": "auth != null && (!data.exists() || newData.val() === data.val() || auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
+        }
       }
     },
     "authorizedAdmins": {
@@ -20,7 +22,10 @@
     },
     "authorizedAdminsUids": {
       ".read": "auth != null && root.child('authorizedAdminsUids').child(auth.uid).exists()",
-      ".write": "false"
+      ".write": "false",
+      "$uid": {
+        ".read": "auth != null && $uid === auth.uid"
+      }
     },
     "commandLog": {
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",

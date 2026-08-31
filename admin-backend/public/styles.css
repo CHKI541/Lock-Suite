@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --navy-dark: #0B192C;
   --navy-medium: #152A4A;
   --navy-light: #1E3E62;
@@ -753,6 +753,140 @@ button.google-btn:hover {
   border-radius: 6px !important;
   border: none !important;
   cursor: pointer !important;
+}
+
+/* ==========================================================================
+   Lista de Aplicaciones en el Sidebar (Administración de Apps)
+   ========================================================================== */
+
+.app-item {
+  background: rgba(11, 25, 44, 0.6);
+  border: 1px solid var(--navy-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.app-item:hover {
+  border-color: var(--navy-border-hover);
+  background: rgba(11, 25, 44, 0.9);
+}
+
+.app-main-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+}
+
+.app-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.app-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-light);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-pkg {
+  margin: 2px 0 0 0;
+  font-size: 10.5px;
+  color: var(--text-gray);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-toggles {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.app-toggle-btn {
+  width: auto !important;
+  padding: 4px 8px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  border-radius: 6px !important;
+  border: 1px solid var(--navy-border) !important;
+  background: var(--navy-light) !important;
+  color: var(--text-light) !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  box-shadow: none !important;
+  transition: all 0.15s ease !important;
+  height: 28px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+}
+
+.app-toggle-btn:hover {
+  background: #2b5585 !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+  transform: none !important;
+}
+
+/* Estado activo Bloquear (Rojo) */
+.app-toggle-btn.active-block {
+  background: #DC2626 !important;
+  border-color: #EF4444 !important;
+  color: #FFFFFF !important;
+}
+
+.app-toggle-btn.active-block:hover {
+  background: #B91C1C !important;
+}
+
+/* Estado activo Suspender (Ámbar) */
+.app-toggle-btn.active-suspend {
+  background: #D97706 !important;
+  border-color: #F59E0B !important;
+  color: #FFFFFF !important;
+}
+
+.app-toggle-btn.active-suspend:hover {
+  background: #B45309 !important;
+}
+
+/* Estado activo Bloquear Web (Azul índigo) */
+.app-toggle-btn.active-webview {
+  background: #4F46E5 !important;
+  border-color: #6366F1 !important;
+  color: #FFFFFF !important;
+}
+
+.app-toggle-btn.active-webview:hover {
+  background: #4338CA !important;
+}
+
+.app-toggle-btn.gear-btn {
+  padding: 4px 6px !important;
+  font-size: 11px !important;
+  min-width: 28px !important;
 }
 
 /* ==========================================================================

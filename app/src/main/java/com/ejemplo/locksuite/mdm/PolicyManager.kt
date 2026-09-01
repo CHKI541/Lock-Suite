@@ -1334,6 +1334,22 @@ class PolicyManager(private val context: Context) {
         for (app in userApps) {
             if (!app.isCritical && app.packageName != "com.android.vending" &&
                 app.packageName != updatingPkgNow) {
+                // ARREGLO 1/9/2026 (S-2): el ocultamiento va PRIMERO y antes faltaba
+                // entero. liftAllForSuspension() des-oculta todas las apps, y al reanudar
+                // nadie las volvía a ocultar: `hide_<paquete>` no se leía en ningún lado
+                // salvo para Play Store. O sea que suspender y reanudar dejaba las apps
+                // ocultas visibles PARA SIEMPRE, con el panel diciendo lo contrario.
+                //
+                // El orden importa: hideApp(pkg, true) deshabilita el paquete, y
+                // suspenderlo después no aporta nada; además hideApp(pkg, false) ya
+                // re-suspende solo si corresponde. Por eso: primero ocultar, y suspender
+                // solo si NO quedó oculta.
+                val debeOcultarse = prefs.getBoolean("hide_${app.packageName}", false)
+                if (debeOcultarse) {
+                    appController.hideApp(app.packageName, true)
+                    continue
+                }
+
                 val isIndividuallySuspended = prefs.getBoolean("suspend_${app.packageName}", false)
                 if (isIndividuallySuspended) {
                     appController.suspendApp(app.packageName, true)
@@ -1466,7 +1482,12 @@ class PolicyManager(private val context: Context) {
             UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
             UserManager.DISALLOW_CONFIG_TETHERING,
             UserManager.DISALLOW_CONFIG_VPN,
-            UserManager.DISALLOW_CONFIG_DATE_TIME
+            UserManager.DISALLOW_CONFIG_DATE_TIME,
+            // ARREGLO 1/9/2026 (S-3): faltaba. Está en reapplyAllRestrictions() desde el
+            // 18/8 (B.19) pero no acá, así que un equipo "suspendido" seguía sin poder
+            // cambiar de idioma — justo lo contrario de "queda como si LockSuite no
+            // estuviera instalado".
+            UserManager.DISALLOW_CONFIG_LOCALE
         )
         allRestrictions.forEach { restriction ->
             try {
@@ -1568,7 +1589,13 @@ class PolicyManager(private val context: Context) {
             UserManager.DISALLOW_BLUETOOTH_SHARING,
             UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
             UserManager.DISALLOW_CONFIG_TETHERING,
-            UserManager.DISALLOW_CONFIG_VPN
+            UserManager.DISALLOW_CONFIG_VPN,
+            // ARREGLO 1/9/2026 (P-3): faltaban las dos. Sin la de idioma, un equipo al
+            // que se le encendió el interruptor de B.19 queda SIN PODER CAMBIAR DE
+            // IDIOMA para siempre después de la purga, y ya no hay ninguna app con
+            // Device Owner que pueda deshacerlo.
+            UserManager.DISALLOW_CONFIG_DATE_TIME,
+            UserManager.DISALLOW_CONFIG_LOCALE
         )
 
         restrictions.forEach { restriction ->
@@ -1634,6 +1661,62 @@ class PolicyManager(private val context: Context) {
             context.stopService(vpnIntent)
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+
+        // ARREGLO 1/9/2026 (P-1 y P-4). Esto faltaba entero: la purga solo des-suspendía
+        // Play Store, los navegadores y el WebView, así que toda app suspendida una por
+        // una desde el panel quedaba SUSPENDIDA después de que LockSuite ya no estaba —
+        // y como abajo se limpian las preferencias, se perdía hasta la lista de cuáles
+        // eran. El código es el mismo que ya usa liftAllForSuspension(); la única razón
+        // de que no estuviera acá es que las dos funciones se escribieron por separado.
+        //
+        // Va DESPUÉS de todo lo demás y ANTES de limpiar las preferencias, a propósito:
+        // el paso 1 de executeFullPurge() re-suspende apps al des-ocultarlas
+        // (hideApp(pkg,false) vuelve a suspender si existe suspend_<paquete>), así que
+        // esto tiene que ser lo último que toque la suspensión.
+        try {
+            val pm = context.packageManager
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                PackageManager.MATCH_UNINSTALLED_PACKAGES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_UNINSTALLED_PACKAGES
+            }
+            val packages = pm.getInstalledApplications(flags).map { it.packageName }
+            // En tandas de 50: setPackagesSuspended con listas enormes puede fallar entera.
+            packages.chunked(50).forEach { chunk ->
+                try {
+                    dpm.setPackagesSuspended(adminComponent, chunk.toTypedArray(), false)
+                } catch (e: Exception) {
+                    android.util.Log.w("PolicyManager", "Purga: no se pudo liberar una tanda: ${e.message}")
+                }
+            }
+            // Y des-ocultar lo que haya quedado oculto. executeFullPurge() ya lo hace en
+            // su paso 1, pero esto es la red de seguridad: si aquel paso falló para
+            // alguna app, una app oculta es una app DESHABILITADA, que es lo peor que se
+            // le puede dejar a un equipo del que ya no tenemos control.
+            packages.forEach { pkg ->
+                try {
+                    if (dpm.isApplicationHidden(adminComponent, pkg)) {
+                        dpm.setApplicationHidden(adminComponent, pkg, false)
+                    }
+                } catch (e: Exception) {
+                    // Paquetes del sistema que no admiten el cambio: se ignoran.
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PolicyManager", "Purga: error liberando apps", e)
+        }
+
+        // P-4: soltar la designación de Always-on VPN, igual que hace
+        // liftAllForSuspension(). Si no, el sistema sigue teniendo a LockSuite anotada
+        // como la VPN permanente de un paquete que ya no aplica ninguna política.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                dpm.setAlwaysOnVpnPackage(adminComponent, null, false)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "Purga: no se pudo limpiar Always-on VPN: ${e.message}")
         }
 
         // Clear local preferences (incluida la marca de suspensión: tras la purga

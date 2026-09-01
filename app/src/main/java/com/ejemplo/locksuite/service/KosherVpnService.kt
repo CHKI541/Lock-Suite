@@ -213,6 +213,12 @@ class KosherVpnService : VpnService() {
             }
             if (establishedInterface == null) {
                 android.util.Log.e("KosherVPN", "Android did not authorize the VPN interface; filter not started.")
+                // ARREGLO 1/9/2026 (V-7): si el túnel no levanta, el arranque protegido se
+                // entera recién cuando vence su techo de 120 s — dos minutos sin internet
+                // evitables. Acá ya sabemos que no va a haber filtro.
+                try {
+                    com.ejemplo.locksuite.util.BootGate.release(applicationContext, "el sistema no autorizo el tunel")
+                } catch (ignored: Exception) { }
                 stopForeground(true)
                 stopSelf()
                 return
@@ -705,9 +711,21 @@ class KosherVpnService : VpnService() {
                         if (VERBOSE) android.util.Log.i("KosherVPN", "onAvailable de la misma red; no se reestablece el tunel.")
                         return
                     }
-                    lastNetworkHandle = handle
                     android.util.Log.i("KosherVPN", "Cambio la red fisica por defecto; reestableciendo tunel VPN.")
-                    restartVpn()
+                    // ARREGLO 1/9/2026 (V-3): el handle se anota SOLO si el
+                    // reestablecimiento efectivamente ocurrió. Antes se anotaba siempre,
+                    // y si el antirrebote de 8 s cancelaba el reinicio quedaba el túnel
+                    // de la red vieja marcado como si fuera el de la nueva — con lo cual
+                    // el siguiente aviso de la red buena se descartaba por "es la misma".
+                    if (restartVpn()) {
+                        lastNetworkHandle = handle
+                    }
+                }
+
+                override fun onLinkPropertiesChanged(network: Network, lp: android.net.LinkProperties) {
+                    // Los servidores DNS de una red cambian sin que la red cambie. No hace
+                    // falta rehacer el túnel: alcanza con volver a elegir el resolutor.
+                    NetworkForwarder.invalidateUpstreamCache()
                 }
 
                 override fun onLost(network: Network) {
@@ -737,20 +755,21 @@ class KosherVpnService : VpnService() {
      * Tiene un debounce corto porque un mismo evento de red fisica puede
      * disparar varios callbacks casi simultaneos.
      */
-    private fun restartVpn() {
+    private fun restartVpn(): Boolean {
         val isCurrentlyRunning = synchronized(lifecycleLock) { running }
-        if (!isCurrentlyRunning) return // La VPN no esta activa; no reiniciar por cuenta propia.
+        if (!isCurrentlyRunning) return false // La VPN no esta activa; no reiniciar por cuenta propia.
 
         // Debounce de 8 s (antes 3 s). Un handoff de Wi-Fi a datos móviles genera una
         // ráfaga de callbacks durante varios segundos; con 3 s se alcanzaban a encadenar
         // dos o tres reestablecimientos seguidos, y cada uno es un hueco sin resolver.
         val now = android.os.SystemClock.elapsedRealtime()
-        if (now - lastNetworkRestartAtMs < 8000) return
+        if (now - lastNetworkRestartAtMs < 8000) return false
         lastNetworkRestartAtMs = now
 
         android.util.Log.i("KosherVPN", "Reestableciendo tunel VPN tras cambio de conectividad.")
         stopVpn()
         startVpn()
+        return true
     }
 
     /**

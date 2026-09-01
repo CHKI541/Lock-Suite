@@ -14,6 +14,12 @@ object NetworkForwarder {
 
     private const val UPSTREAM_DNS_PORT = 53
     private const val TIMEOUT_MS = 3500
+    /**
+     * Paciencia de los reintentos. Más corta que la del primer intento a propósito: si el
+     * resolutor de la red no contestó, lo que importa es darle una respuesta a la app
+     * antes de que ELLA se dé por vencida, no agotar los 3,5 s con cada alternativa.
+     */
+    private const val RETRY_TIMEOUT_MS = 2000
 
     private data class UpstreamResult(
         val address: InetAddress,
@@ -98,33 +104,56 @@ object NetworkForwarder {
         try {
             val cm = vpnService.getSystemService(android.net.ConnectivityManager::class.java)
             if (cm != null) {
-                @Suppress("DEPRECATION")
-                val networks = cm.allNetworks
-                var ipv6Fallback: InetAddress? = null
-                var ipv6FallbackNetwork: Network? = null
+                // ⚠️ ARREGLO 1/9/2026 (V-2). Antes esto era un único for sobre
+                // cm.allNetworks que devolvía LA PRIMERA red con DNS IPv4 usable. Dos
+                // problemas: el orden de allNetworks no está definido (con Wi-Fi y datos
+                // arriba a la vez podía elegir la que NO se está usando), y
+                // NET_CAPABILITY_INTERNET es la capacidad PEDIDA, no la validada — una
+                // Wi-Fi "conectada sin internet" la cumple igual. Ahora hay tres niveles
+                // de preferencia, y recién se baja al siguiente si el anterior no dio
+                // nada:
+                //
+                //   1º la red ACTIVA, si no es la nuestra (esto es lo que se había
+                //      perdido en B.18: ahí se sacó activeNetwork entero porque podía
+                //      devolver el VPN, cuando alcanzaba con descartarlo si lo es);
+                //   2º cualquier red VALIDADA (o sea, que el sistema confirmó que sale
+                //      a internet de verdad);
+                //   3º cualquier red con capacidad de internet — el comportamiento viejo,
+                //      que se conserva como último recurso para no empeorar ningún caso
+                //      que hoy funcione.
+                fun esUsable(net: Network, exigirValidada: Boolean): UpstreamResult? {
+                    val caps = cm.getNetworkCapabilities(net) ?: return null
+                    if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) return null
+                    if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) return null
+                    if (exigirValidada &&
+                        !caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    ) return null
 
-                for (network in networks) {
-                    val caps = cm.getNetworkCapabilities(network) ?: continue
-                    // Saltear el propio túnel: sus DNS son virtuales y no responden
-                    // desde afuera. Este es el chequeo que faltaba.
-                    if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue
-                    if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
-
-                    val dnsList = cm.getLinkProperties(network)?.dnsServers ?: continue
+                    val dnsList = cm.getLinkProperties(net)?.dnsServers ?: return null
+                    var v6: InetAddress? = null
                     for (dns in dnsList) {
                         if (!isUsableResolver(dns)) continue
-                        // Preferencia a IPv4: es el que existe en prácticamente todas
-                        // las redes y el que menos sorpresas da.
-                        if (dns is Inet4Address) return UpstreamResult(dns, network)
-                        if (ipv6Fallback == null) {
-                            ipv6Fallback = dns
-                            ipv6FallbackNetwork = network
-                        }
+                        // Preferencia a IPv4: es el que existe en prácticamente todas las
+                        // redes y el que menos sorpresas da.
+                        if (dns is Inet4Address) return UpstreamResult(dns, net)
+                        if (v6 == null) v6 = dns
                     }
+                    return v6?.let { UpstreamResult(it, net) }   // redes IPv6 puras / DNS64
                 }
-                // Redes IPv6 puras / DNS64.
-                if (ipv6Fallback != null) {
-                    return UpstreamResult(ipv6Fallback, ipv6FallbackNetwork)
+
+                // 1º — la red activa.
+                cm.activeNetwork?.let { activa ->
+                    esUsable(activa, exigirValidada = false)?.let { return it }
+                }
+                // 2º — cualquier red validada.
+                @Suppress("DEPRECATION")
+                for (network in cm.allNetworks) {
+                    esUsable(network, exigirValidada = true)?.let { return it }
+                }
+                // 3º — comportamiento anterior, como último recurso.
+                @Suppress("DEPRECATION")
+                for (network in cm.allNetworks) {
+                    esUsable(network, exigirValidada = false)?.let { return it }
                 }
             }
         } catch (e: Exception) {
@@ -163,9 +192,11 @@ object NetworkForwarder {
     ) {
         var socket: DatagramSocket? = null
         try {
-            socket = DatagramSocket()
-            vpnService.protect(socket) // CRÍTICO: Evita bucle infinito de reentrada de red
-            socket.soTimeout = TIMEOUT_MS
+            var sock: DatagramSocket = DatagramSocket().also {
+                socket = it
+                vpnService.protect(it) // CRÍTICO: Evita bucle infinito de reentrada de red
+                it.soTimeout = TIMEOUT_MS
+            }
 
             val upstreamResult = getUpstreamDnsAddress(vpnService)
             val initialUpstream = upstreamResult.address
@@ -178,7 +209,7 @@ object NetworkForwarder {
             // paquete y mandarlo a una red que no conoce el servidor DNS.
             upstreamResult.network?.let { physicalNetwork ->
                 try {
-                    physicalNetwork.bindSocket(socket)
+                    physicalNetwork.bindSocket(sock)
                     boundSuccessfully = true
                 } catch (e: Exception) {
                     android.util.Log.w("KosherVPN", "bindSocket a red física falló: ${e.message}")
@@ -198,40 +229,62 @@ object NetworkForwarder {
             val responsePacket = DatagramPacket(responseBuffer, responseBuffer.size)
             var responseReceived = false
 
-            try {
-                socket.send(DatagramPacket(packet.payload, packet.payload.size, activeResolver, UPSTREAM_DNS_PORT))
-                socket.receive(responsePacket)
-                responseReceived = true
-            } catch (e: SocketTimeoutException) {
-                // Si el DNS primario no contestó y no era ya el fallback de Google,
-                // reintentamos rápidamente con el fallback público (8.8.8.8) para no dejar sin internet al celular.
-                if (activeResolver != FALLBACK_DNS_PRIMARY) {
-                    try {
-                        android.util.Log.w("KosherVPN", "Timeout con DNS $activeResolver; reintentando con fallback $FALLBACK_DNS_PRIMARY")
-                        socket.close()
-                        socket = DatagramSocket()
-                        vpnService.protect(socket)
-                        socket.soTimeout = 2000
-                        activeResolver = FALLBACK_DNS_PRIMARY
-                        socket.send(DatagramPacket(packet.payload, packet.payload.size, activeResolver, UPSTREAM_DNS_PORT))
-                        socket.receive(responsePacket)
-                        responseReceived = true
-                    } catch (e2: Exception) {
-                        // Si falla también 8.8.8.8, último intento con 1.1.1.1
-                        try {
-                            android.util.Log.w("KosherVPN", "Timeout con 8.8.8.8; reintentando con fallback $FALLBACK_DNS_SECONDARY")
-                            socket.close()
-                            socket = DatagramSocket()
-                            vpnService.protect(socket)
-                            socket.soTimeout = 2000
-                            activeResolver = FALLBACK_DNS_SECONDARY
-                            socket.send(DatagramPacket(packet.payload, packet.payload.size, activeResolver, UPSTREAM_DNS_PORT))
-                            socket.receive(responsePacket)
-                            responseReceived = true
-                        } catch (e3: Exception) {
-                            // Sin respuesta tras todos los reintentos
+            // ⚠️ ARREGLO 1/9/2026 (V-1). Antes esta cadena de reintentos colgaba de
+            // `catch (e: SocketTimeoutException)`. Ese era el defecto: cuando el socket
+            // quedó vinculado (bindSocket) a una red que se cayó, o que no tiene ruta al
+            // DNS elegido, el sistema NO devuelve timeout. Devuelve:
+            //
+            //   • SocketException: sendto failed: ENETUNREACH / EHOSTUNREACH  (desde send)
+            //   • PortUnreachableException                                    (desde receive)
+            //
+            // Ninguna de las dos es SocketTimeoutException, así que la consulta caía al
+            // catch general del final y se descartaba SIN probar ningún otro resolutor.
+            // O sea: toda la red de seguridad de B.21 no corría justo en el caso más
+            // común. Ahora se captura IOException, que es la superclase de las tres
+            // (SocketTimeoutException incluida), y los reintentos se hacen en un bucle
+            // en vez de tres try/catch anidados — así agregar un resolutor más es
+            // agregar un elemento a una lista, no otro nivel de anidamiento.
+            //
+            // El orden importa: primero el resolutor que corresponde a la red, después
+            // Google, después Cloudflare. Y no se repite el mismo dos veces (V-6: antes,
+            // si el resolutor inicial YA era 8.8.8.8, no había ningún reintento).
+            val resolvers = LinkedHashSet<InetAddress>().apply {
+                add(activeResolver)
+                add(FALLBACK_DNS_PRIMARY)
+                add(FALLBACK_DNS_SECONDARY)
+            }
+
+            for ((intento, resolver) in resolvers.withIndex()) {
+                try {
+                    if (intento > 0) {
+                        // Socket nuevo por intento: uno que ya falló con ENETUNREACH
+                        // puede quedar asociado a la red muerta.
+                        sock.close()
+                        sock = DatagramSocket()
+                        socket = sock
+                        vpnService.protect(sock)
+                        // V-5: volver a vincular a la red física si la tenemos. En un
+                        // equipo con la ruta ancha 100.0.0.0/8 del módem, no vincular es
+                        // justamente lo que desvía el paquete a la antena.
+                        upstreamResult.network?.let { net ->
+                            try { net.bindSocket(sock) } catch (ignored: Exception) { }
                         }
+                        // Los reintentos van con menos paciencia que el primero: el
+                        // objetivo es responderle rápido a la app, no insistir.
+                        sock.soTimeout = RETRY_TIMEOUT_MS
+                        android.util.Log.w("KosherVPN", "DNS $activeResolver no respondió; reintentando con $resolver")
                     }
+                    activeResolver = resolver
+                    sock.send(DatagramPacket(packet.payload, packet.payload.size, resolver, UPSTREAM_DNS_PORT))
+                    sock.receive(responsePacket)
+                    responseReceived = true
+                    break
+                } catch (e: java.io.IOException) {
+                    // Timeout, red inalcanzable, puerto cerrado: los tres se tratan igual
+                    // y se pasa al siguiente resolutor. Se registra el motivo porque la
+                    // diferencia entre "timeout" y "ENETUNREACH" es la que dice si el
+                    // problema es el servidor o la ruta.
+                    android.util.Log.w("KosherVPN", "Consulta a $resolver falló (${e.javaClass.simpleName}: ${e.message})")
                 }
             }
 

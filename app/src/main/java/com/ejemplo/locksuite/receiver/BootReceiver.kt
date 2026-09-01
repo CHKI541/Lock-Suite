@@ -83,7 +83,14 @@ class BootReceiver : BroadcastReceiver() {
         // 3. Iniciar el servicio Watermark si el modo Kosher Launcher está activo y tiene permisos de overlay
         try {
             val policyManager = PolicyManager(context)
-            if (policyManager.isKosherLauncherEnabled() && android.provider.Settings.canDrawOverlays(context)) {
+            // ARREGLO 1/9/2026 (S-1): faltaba mirar la suspensión. Con LockSuite
+            // suspendido el equipo tiene que quedar como si la app no estuviera
+            // instalada, y la marca de agua es lo más visible de todo. El mismo chequeo
+            // en WatchdogForegroundService.checkRunnable SÍ la miraba: eran dos lugares
+            // haciendo lo mismo con criterios distintos. Y como el Watchdog solo ARRANCA
+            // el servicio y nunca lo para, una vez que aparecía se quedaba.
+            if (!policyManager.isLockSuiteSuspended() &&
+                policyManager.isKosherLauncherEnabled() && android.provider.Settings.canDrawOverlays(context)) {
                 val watermarkIntent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(watermarkIntent)

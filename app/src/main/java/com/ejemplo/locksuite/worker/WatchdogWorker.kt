@@ -12,6 +12,10 @@ import com.ejemplo.locksuite.util.PrefsHelper
 class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
 
     override fun doWork(): Result {
+        if (PrefsHelper.getMdmPrefs(applicationContext).getBoolean("locksuite_purged", false)) {
+            return Result.success()
+        }
+
         // LATIDO PRIMERO, Y BARATO (2/9/2026) — "a veces los celulares no quedan en línea".
         //
         // El único latido que había en la práctica era el del servicio de primer plano:

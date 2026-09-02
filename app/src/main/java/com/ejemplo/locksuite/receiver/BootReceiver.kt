@@ -20,6 +20,11 @@ class BootReceiver : BroadcastReceiver() {
 
         android.util.Log.i("BootReceiver", "Recibido broadcast de sistema: $action")
 
+        if (com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context).getBoolean("locksuite_purged", false)) {
+            android.util.Log.i("BootReceiver", "Dispositivo purgado de emergencia. Ignorando arranque.")
+            return
+        }
+
         // 0. ARRANQUE PROTEGIDO — lo PRIMERO de todo, antes que cualquier otra cosa.
         //
         // Las restricciones de red las aplica nuestra VPN de filtrado, y esa VPN tarda
@@ -127,6 +132,10 @@ class BootReceiver : BroadcastReceiver() {
                 // de DNS es una restricción más y tiene que quedar apagada, si no
                 // el Watchdog la volvería a levantar cada 20 segundos.
                 if (prefs?.getBoolean("locksuite_suspended", false) == true) return false
+
+                if (prefs?.getBoolean("locksuite_purged", false) == true) {
+                    return false
+                }
 
                 val isVpnConfigBlocked = prefs?.getBoolean(android.os.UserManager.DISALLOW_CONFIG_VPN, false) ?: false
                 val hasAdBlocking = prefs?.getBoolean("global_ad_blocking", false) ?: false

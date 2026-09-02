@@ -102,7 +102,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
             }
             return
         }
-        recordCommand(commandId!!)
+        recordCommand(commandId!!, timestamp!!.toLong())
 
         val packagesStr = data["packages"]
         val packagesList = packagesStr?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
@@ -697,9 +697,6 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         val clockIsCredible = now > CREDIBLE_CLOCK_FLOOR_MS
         if (clockIsCredible && Math.abs(now - timeMs) > ABSOLUTE_WINDOW_MS) return true
 
-        if (timeMs > lastAccepted) {
-            prefs.edit().putLong(KEY_LAST_CMD_TIMESTAMP, timeMs).apply()
-        }
         return false
     }
 
@@ -740,8 +737,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
      * inserción, así que podía borrar un comando recién procesado en vez de uno
      * viejo, reabriendo brevemente su ventana de repetición.
      */
-    private fun recordCommand(commandId: String) {
+    private fun recordCommand(commandId: String, timestampMs: Long) {
         val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
+        val lastAccepted = prefs.getLong(KEY_LAST_CMD_TIMESTAMP, 0L)
+        if (timestampMs > lastAccepted) {
+            prefs.edit().putLong(KEY_LAST_CMD_TIMESTAMP, timestampMs).apply()
+        }
         val now = System.currentTimeMillis()
         // El doble de la ventana de 5 minutos que ya exige verifyFcmSignature: para
         // cuando un comando llega acá ya sabemos que tiene como máximo 5 min de

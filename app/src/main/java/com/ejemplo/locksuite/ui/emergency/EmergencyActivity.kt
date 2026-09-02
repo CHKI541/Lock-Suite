@@ -3,6 +3,7 @@ package com.ejemplo.locksuite.ui.emergency
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
@@ -91,6 +92,19 @@ class EmergencyActivity : ComponentActivity() {
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(this, "Error al quitar Device Owner: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+
+        // 5b. Detener servicios, cancelar WorkManager, limpiar notificaciones y marcar purga persistente
+        try {
+            stopService(Intent(this, com.ejemplo.locksuite.service.WatchdogForegroundService::class.java))
+            stopService(Intent(this, com.ejemplo.locksuite.service.WatermarkService::class.java))
+            androidx.work.WorkManager.getInstance(this).cancelUniqueWork("LockSuiteWatchdog")
+            androidx.core.app.NotificationManagerCompat.from(this).cancelAll()
+            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).edit()
+                .putBoolean("locksuite_purged", true)
+                .apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
         // 6. Cerrar sesión y salir

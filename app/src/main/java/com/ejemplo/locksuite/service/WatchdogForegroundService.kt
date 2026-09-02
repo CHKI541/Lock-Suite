@@ -288,6 +288,10 @@ class WatchdogForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        if (com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)) {
+            stopSelf()
+            return
+        }
         instance = this
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -594,6 +598,10 @@ class WatchdogForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         return START_STICKY
     }
 

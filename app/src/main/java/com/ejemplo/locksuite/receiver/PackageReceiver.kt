@@ -55,6 +55,7 @@ class PackageReceiver : BroadcastReceiver() {
         }
 
         val packageName = intent.data?.schemeSpecificPart ?: return
+        val isReplacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
 
         val updatingPkg = prefs.getString("updating_package", null)
         if (action == Intent.ACTION_PACKAGE_REPLACED || action == Intent.ACTION_PACKAGE_ADDED) {
@@ -68,7 +69,7 @@ class PackageReceiver : BroadcastReceiver() {
             }
         }
 
-        if (action == Intent.ACTION_PACKAGE_ADDED) {
+        if (action == Intent.ACTION_PACKAGE_ADDED && !isReplacing) {
             val isInstallBlocked = prefs.getBoolean("install_apps_blocked_admin", false) || prefs.getBoolean("install_blocked_programmatic", false)
             if (isInstallBlocked) {
                 val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
@@ -106,13 +107,14 @@ class PackageReceiver : BroadcastReceiver() {
             action == Intent.ACTION_PACKAGE_REMOVED ||
             action == Intent.ACTION_PACKAGE_REPLACED) {
             
-            val isReplacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
             // ACTION_PACKAGE_REMOVED se dispara con EXTRA_REPLACING = true cuando se está actualizando la app.
             // Para evitar doble sincronización durante una actualización (quitar + añadir),
             // ignoramos el REMOVED si es parte de un reemplazo.
             if (action == Intent.ACTION_PACKAGE_REMOVED && isReplacing) {
                 return
             }
+
+            prefs.edit().putLong("launcher_packages_version", System.currentTimeMillis()).apply()
 
             // Re-suspender de forma inmediata el paquete si fue instalado o actualizado y debe estar suspendido
             if (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED) {

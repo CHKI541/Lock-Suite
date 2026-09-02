@@ -75,8 +75,11 @@ class KosherLauncherActivity : ComponentActivity() {
     /** Índice absoluto de la app seleccionada dentro de la lista completa. */
     private var nokiaSeleccion by mutableIntStateOf(0)
 
-    /** Lista de apps que el modo teclas está mostrando. La llena la pantalla al componer. */
-    private var nokiaApps: List<AppItem> = emptyList()
+    /** Lista de apps que el modo teclas está mostrando. */
+    private var nokiaApps by mutableStateOf<List<AppItem>>(emptyList())
+
+    /** Versión del conjunto de paquetes instalados/desinstalados. */
+    private var launcherPackagesVersion by mutableStateOf(0L)
 
     private var nokiaFecha by mutableStateOf("")
 
@@ -168,6 +171,7 @@ class KosherLauncherActivity : ComponentActivity() {
         // Se decide acá y no dentro de LauncherScreen para no meter una segunda interfaz
         // entera dentro de una función que ya es grande.
         val prefsLauncher = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+        launcherPackagesVersion = prefsLauncher.getLong("launcher_packages_version", 0L)
         if (prefsLauncher.getBoolean("nokia_keypad_mode", false)) {
             // La lista de apps se arma UNA vez acá, no dentro del `setContent`: cargarla en
             // la composición sería un efecto colateral que se repetiría en cada
@@ -192,7 +196,8 @@ class KosherLauncherActivity : ComponentActivity() {
                 LauncherScreen(
                     batteryPercent = batteryPercent,
                     isBluetoothEnabled = isBluetoothEnabled,
-                    currentTime = currentTime
+                    currentTime = currentTime,
+                    packagesVersion = launcherPackagesVersion
                 )
             }
         }
@@ -410,6 +415,16 @@ class KosherLauncherActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
 
+        // Invalidación barata de apps: recargar solo si PackageReceiver notificó cambios
+        val prefsLauncher = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+        val currentPkgVer = prefsLauncher.getLong("launcher_packages_version", 0L)
+        if (currentPkgVer != launcherPackagesVersion) {
+            launcherPackagesVersion = currentPkgVer
+            if (prefsLauncher.getBoolean("nokia_keypad_mode", false)) {
+                nokiaApps = cargarAppsNokia()
+            }
+        }
+
         // ── KIOSCO REAL DEL SO (Lock Task, 2/9/2026) ──
         //
         // Copiado de A Bloq (`KioskActivity`). Con el interruptor encendido, esta Activity
@@ -491,14 +506,15 @@ class KosherLauncherActivity : ComponentActivity() {
 fun LauncherScreen(
     batteryPercent: Int,
     isBluetoothEnabled: Boolean,
-    currentTime: String
+    currentTime: String,
+    packagesVersion: Long = 0L
 ) {
     val context = LocalContext.current
     val pm = context.packageManager
     val appController = remember { AppController(context) }
 
-    // Cargar lista de apps visibles
-    val appsList = remember {
+    // Cargar lista de apps visibles (se invalida ante cambios de paquetes)
+    val appsList = remember(packagesVersion) {
         val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }

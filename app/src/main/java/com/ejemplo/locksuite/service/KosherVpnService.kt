@@ -427,7 +427,7 @@ class KosherVpnService : VpnService() {
     }
 
     private fun handleDnsQuery(packet: IpPacketParser.ParsedPacket, output: FileOutputStream) {
-        val queriedDomain = DnsPacketParser.extractQueriedDomain(packet.payload)
+        val queriedDomain = DnsPacketParser.extractQueriedDomain(packet.payload)?.lowercase()?.trimEnd('.')
         if (queriedDomain == null) {
             NetworkForwarder.forwardDnsQuery(packet, output, this)
             return

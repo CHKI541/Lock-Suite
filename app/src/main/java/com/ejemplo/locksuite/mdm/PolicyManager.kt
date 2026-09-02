@@ -531,6 +531,7 @@ class PolicyManager(private val context: Context) {
             } else {
                 // Limpiar launcher preferido
                 dpm.clearPackagePersistentPreferredActivities(adminComponent, context.packageName)
+                PrefsHelper.getMdmPrefs(context).edit().remove("kosher_wallpaper_applied").apply()
 
                 // Detener servicio de la marca de agua
                 val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
@@ -554,6 +555,9 @@ class PolicyManager(private val context: Context) {
 
     private fun applyKosherMp3Wallpaper() {
         try {
+            val prefs = PrefsHelper.getMdmPrefs(context)
+            if (prefs.getBoolean("kosher_wallpaper_applied", false)) return
+
             val wallpaperManager = android.app.WallpaperManager.getInstance(context)
             val bitmap = android.graphics.Bitmap.createBitmap(1080, 1920, android.graphics.Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(bitmap)
@@ -574,6 +578,7 @@ class PolicyManager(private val context: Context) {
             } else {
                 wallpaperManager.setBitmap(bitmap)
             }
+            prefs.edit().putBoolean("kosher_wallpaper_applied", true).apply()
         } catch (e: Exception) {
             android.util.Log.w("PolicyManager", "Error aplicando fondo de pantalla MP3", e)
         }
@@ -1266,6 +1271,7 @@ class PolicyManager(private val context: Context) {
                 prefs.edit().putStringSet("per_app_internet_blocked", set).apply()
             }
 
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
             return true
         } catch (e: Exception) {

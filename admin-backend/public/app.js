@@ -707,12 +707,7 @@ function renderAppsList(e) {
             netRow.appendChild(netLabel);
             netRow.appendChild(netBtn);
             advancedPanel.appendChild(netRow);
-
-            imgRow.appendChild(label);
-            imgRow.appendChild(select);
-            advancedPanel.appendChild(imgRow);
-
-            // Fila 2: Actualizar App
+            // Fila 3: Actualizar App
             const updateRow = document.createElement("div");
             updateRow.style.display = "flex";
             updateRow.style.alignItems = "center";
@@ -823,11 +818,12 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                         ackRef.off();
                         setCommandStatus("✓ Comando aplicado con éxito en el celular");
                         if (a) a.disabled = false;
-                    } else if (status === "failed") {
+                    } else if (status === "failed" || status === "rejected") {
                         clearTimeout(timeoutId);
                         ackRef.off();
                         const reason = snap.val().reason ? ` (${snap.val().reason})` : "";
-                        setCommandStatus("✗ El comando falló en el celular" + reason);
+                        const prefix = status === "rejected" ? "✗ El comando fue rechazado por el celular" : "✗ El comando falló en el celular";
+                        setCommandStatus(prefix + reason);
                         if (a) a.disabled = false;
                         if (i) i();
                     }

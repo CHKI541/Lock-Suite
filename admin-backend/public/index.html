@@ -208,6 +208,100 @@
                 <label class="toggle-row"><span>Bloquear Ajuste de Volumen</span><input type="checkbox" class="policy-switch" data-policy="adjustVolumeBlocked" /></label>
                 <label class="toggle-row"><span>Proteger Servicio de Accesibilidad</span><input type="checkbox" class="policy-switch" data-policy="accessibilityProtected" /></label>
               </div>
+
+              <!--
+                Aviso de divergencia (2/9/2026). El resto de esta tarjeta muestra lo que
+                LockSuite QUISO aplicar (sus preferencias). Esto muestra lo que el equipo
+                TIENE puesto de verdad, leido de dpm.getUserRestrictions(). Cuando difieren,
+                el interruptor de arriba miente: dice "bloqueado" sobre un equipo abierto.
+                Ver PolicyManager.divergentRestrictions().
+              -->
+              <p id="policy-drift" class="muted" style="display:none; font-size:11px; margin:10px 0 0; padding:8px; border-radius:8px;"></p>
+            </div>
+
+            <!--
+              Restricciones adicionales (2/9/2026)
+
+              Se generan desde app/src/main/java/com/ejemplo/locksuite/mdm/PolicySpec.kt.
+              Si agregas una restriccion alla, agrega aca su fila, su entrada en el mapa de
+              app.js y su comando en ALLOWED_COMMANDS de functions/index.js.
+
+              Las filas se deshabilitan solas en los equipos cuya version de Android no
+              soporta la restriccion: el celular reporta <campo>Supported. Eso importa
+              porque Android ACEPTA Y DESCARTA EN SILENCIO una restriccion que no conoce, y
+              sin este aviso el panel mostraria el interruptor encendido sobre un equipo
+              donde no hace nada.
+            -->
+            <div class="sidebar-card">
+              <h3>Restricciones Adicionales</h3>
+              <p class="muted" style="font-size: 11px; margin: -4px 0 10px;">
+                <strong>Bloquear DNS privado</strong> es la más importante de esta lista: sin ella el usuario
+                puede activar DNS-over-TLS y el filtro de dominios deja de ver el tráfico.
+                Las opciones en gris no las soporta la versión de Android de este equipo.
+              </p>
+              <div class="toggle-list">
+                <label class="toggle-row" data-needs="privateDnsSupported"><span>Bloquear DNS privado (DoT)</span><input type="checkbox" class="policy-switch" data-policy="privateDnsBlocked" /></label>
+                <label class="toggle-row" data-needs="smsSupported"><span>Bloquear SMS</span><input type="checkbox" class="policy-switch" data-policy="smsBlocked" /></label>
+                <label class="toggle-row" data-needs="outgoingCallsSupported"><span>Bloquear llamadas salientes</span><input type="checkbox" class="policy-switch" data-policy="outgoingCallsBlocked" /></label>
+                <label class="toggle-row" data-needs="configLocationSupported"><span>Bloquear ajustes de ubicación</span><input type="checkbox" class="policy-switch" data-policy="configLocationBlocked" /></label>
+                <label class="toggle-row" data-needs="shareLocationSupported"><span>Bloquear compartir ubicación</span><input type="checkbox" class="policy-switch" data-policy="shareLocationBlocked" /></label>
+                <label class="toggle-row" data-needs="configCredentialsSupported"><span>Bloquear almacén de credenciales</span><input type="checkbox" class="policy-switch" data-policy="configCredentialsBlocked" /></label>
+                <label class="toggle-row" data-needs="usbFileTransferSupported"><span>Bloquear transferencia por USB</span><input type="checkbox" class="policy-switch" data-policy="usbFileTransferBlocked" /></label>
+                <label class="toggle-row" data-needs="outgoingBeamSupported"><span>Bloquear envío por NFC</span><input type="checkbox" class="policy-switch" data-policy="outgoingBeamBlocked" /></label>
+                <label class="toggle-row" data-needs="printingSupported"><span>Bloquear impresión</span><input type="checkbox" class="policy-switch" data-policy="printingBlocked" /></label>
+                <label class="toggle-row" data-needs="autofillSupported"><span>Bloquear autocompletado</span><input type="checkbox" class="policy-switch" data-policy="autofillBlocked" /></label>
+                <label class="toggle-row" data-needs="contentCaptureSupported"><span>Bloquear captura de contenido</span><input type="checkbox" class="policy-switch" data-policy="contentCaptureBlocked" /></label>
+                <label class="toggle-row" data-needs="airplaneModeSupported"><span>Bloquear modo avión</span><input type="checkbox" class="policy-switch" data-policy="airplaneModeBlocked" /></label>
+                <label class="toggle-row" data-needs="dataRoamingSupported"><span>Bloquear roaming de datos</span><input type="checkbox" class="policy-switch" data-policy="dataRoamingBlocked" /></label>
+                <label class="toggle-row" data-needs="ambientDisplaySupported"><span>Bloquear pantalla ambiente</span><input type="checkbox" class="policy-switch" data-policy="ambientDisplayBlocked" /></label>
+                <label class="toggle-row" data-needs="systemErrorDialogsSupported"><span>Ocultar diálogos de error del sistema</span><input type="checkbox" class="policy-switch" data-policy="systemErrorDialogsBlocked" /></label>
+                <label class="toggle-row" data-needs="setWallpaperSupported"><span>Bloquear cambio de fondo de pantalla</span><input type="checkbox" class="policy-switch" data-policy="setWallpaperBlocked" /></label>
+                <label class="toggle-row" data-needs="setUserIconSupported"><span>Bloquear foto de perfil</span><input type="checkbox" class="policy-switch" data-policy="setUserIconBlocked" /></label>
+                <label class="toggle-row" data-needs="unmuteMicrophoneSupported"><span>Silenciar micrófono</span><input type="checkbox" class="policy-switch" data-policy="unmuteMicrophoneBlocked" /></label>
+                <label class="toggle-row" data-needs="configCellBroadcastsSupported"><span>Bloquear alertas de difusión celular</span><input type="checkbox" class="policy-switch" data-policy="configCellBroadcastsBlocked" /></label>
+                <label class="toggle-row" data-needs="removeManagedProfileSupported"><span>Bloquear quitar perfil de trabajo</span><input type="checkbox" class="policy-switch" data-policy="removeManagedProfileBlocked" /></label>
+              </div>
+            </div>
+
+            <!--
+              Kiosco real del sistema operativo (Lock Task) — 2/9/2026, copiado de A Bloq.
+              APAGADO por defecto. Ver la advertencia del texto: es la unica opcion del
+              panel que puede dejar un equipo sin forma de marcar el codigo de recuperacion.
+            -->
+            <div class="sidebar-card">
+              <h3>Modo Kiosco (Lock Task)</h3>
+              <p class="muted" style="font-size: 11px; margin: -4px 0 10px;">
+                Con esto, el equipo <strong>solo puede abrir las apps de la lista permitida</strong>, y lo hace
+                cumplir Android — no LockSuite. Sin esto, la lista del launcher es solo visual: una
+                notificación o un enlace alcanza para abrir cualquier app.
+                <br /><strong>⚠️ Antes de activarlo:</strong> asegurate de que el marcador telefónico esté en la
+                lista de apps permitidas. Si no, no se va a poder marcar el código de recuperación
+                <code>*#*#9999#*#*</code> en ese equipo.
+              </p>
+              <div class="toggle-list">
+                <label class="toggle-row"><span>Anclar el equipo al launcher kosher</span><input type="checkbox" class="policy-switch" data-policy="kioskLockTaskEnabled" /></label>
+              </div>
+            </div>
+
+            <!--
+              Modo telefono de teclas (2/9/2026). Pantalla estilo Nokia manejada con la
+              cruceta y los numeros, con iconos propios por funcion. Ver
+              app/ui/launcher/NokiaKeypadScreen.kt y NokiaIconSet.kt.
+            -->
+            <div class="sidebar-card">
+              <h3>Modo Teléfono de Teclas</h3>
+              <p class="muted" style="font-size: 11px; margin: -4px 0 10px;">
+                Pantalla de inicio estilo Nokia: reloj grande, menú de 3×3 con las apps numeradas
+                del 1 al 9, navegación con la cruceta y selección con el centro. Los íconos son por
+                <em>función</em> (Llamadas, Contactos, Mensajes…), no el ícono original de cada app.
+                <br /><strong>El táctil se apaga solo dentro del launcher</strong> — Android no permite
+                apagar el digitalizador del equipo entero. Para que sea un modo de teclas de verdad,
+                usalo junto con el Modo Kiosco de arriba.
+              </p>
+              <div class="toggle-list">
+                <label class="toggle-row"><span>Activar modo teléfono de teclas</span><input type="checkbox" class="policy-switch" data-policy="nokiaKeypadMode" /></label>
+                <label class="toggle-row"><span>Táctil habilitado en el launcher</span><input type="checkbox" class="policy-switch" data-policy="nokiaTouchEnabled" /></label>
+              </div>
             </div>
 
             <!--
@@ -613,6 +707,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=22"></script>
+  <script src="app.js?v=24"></script>
 </body>
 </html>

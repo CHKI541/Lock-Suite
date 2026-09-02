@@ -153,16 +153,43 @@ object FirebaseDeviceSync {
         withAuth {
             val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
             // 1. Escribir credenciales reales en la ruta protegida deviceSecrets
+            //
+            // ⚠️ 2/9/2026 — POR QUÉ EL commandSecret VA EN SU PROPIA ESCRITURA Y NO ACÁ.
+            //
+            // Antes este updateChildren() mandaba {pinHash, pinSalt, commandSecret}
+            // JUNTOS. Un updateChildren de Realtime Database es ATÓMICO: si las reglas
+            // rechazan UNA sola de las rutas, se rechaza la escritura ENTERA. Y la regla
+            // de deviceSecrets/$id/commandSecret dice, textual, que el dispositivo NO
+            // puede cambiar el valor una vez que existe (solo reescribir el mismo, o un
+            // admin):
+            //
+            //   ".write": "auth != null && (!data.exists() || newData.val() === data.val()
+            //              || auth.token.admin === true || root.child('authorizedAdminsUids')...)"
+            //
+            // El commandSecret vive en EncryptedSharedPreferences, que NO sobrevive a
+            // reinstalar la app ni a que se invalide la clave del Keystore — mientras que
+            // el deviceId es el ANDROID_ID, que SÍ sobrevive. O sea: reinstalás LockSuite,
+            // el equipo genera un secreto nuevo, el servidor conserva el viejo, y a partir
+            // de ahí la escritura del secreto se rechaza para siempre. Con el paquete
+            // atómico, ese rechazo se llevaba puesto también el pinHash y el pinSalt: el
+            // panel seguía viendo el PIN VIEJO. Ese es exactamente el síntoma reportado
+            // por el dueño — "a veces hay que cambiar el PIN varias veces hasta que puedo
+            // controlar el equipo desde la web".
+            //
+            // Separadas, el PIN llega siempre; el secreto falla solo (y se reporta más
+            // abajo con `commandSecretMismatch` para que el panel ofrezca re-vincular).
             val secretsRef = FirebaseDatabase.getInstance().getReference("deviceSecrets/${deviceId(context)}")
             val secretsPayload = mutableMapOf<String, Any>(
                 "pinHash" to pinHash,
-                "pinSalt" to pinSalt,
-                "commandSecret" to getOrCreateCommandSecret(context)
+                "pinSalt" to pinSalt
             )
             if (authUid.isNotEmpty()) {
                 secretsPayload["ownerUid"] = authUid
             }
             secretsRef.updateChildren(secretsPayload).addOnFailureListener { it.printStackTrace() }
+
+            // Escritura separada e independiente del secreto de comandos.
+            pushCommandSecret(context)
 
             // 2. Escribir solo la bandera hasPinConfigured en la ruta pública
             val publicRef = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
@@ -178,11 +205,128 @@ object FirebaseDeviceSync {
         }
     }
 
+    /**
+     * Publica el secreto de firma de comandos en su PROPIA escritura de una sola ruta, y
+     * deja anotado en `devices/{id}` si el servidor lo rechazó.
+     *
+     * Por qué existe separado (2/9/2026): la regla de `deviceSecrets/$id/commandSecret`
+     * no deja que el dispositivo cambie el valor una vez que existe. Eso es correcto como
+     * defensa (que nadie que adivine un deviceId pueda re-vincularse el equipo), pero
+     * tiene un efecto colateral grave: el secreto vive en EncryptedSharedPreferences, que
+     * NO sobrevive a reinstalar la app ni a una invalidación del Keystore, mientras que el
+     * deviceId (ANDROID_ID) SÍ sobrevive. Cuando se desincronizan, la Cloud Function firma
+     * cada comando con el secreto viejo, el equipo verifica con el nuevo, y **todos los
+     * comandos del panel se descartan en silencio**: el panel dice "enviado" y en el
+     * celular no pasa nada.
+     *
+     * No se puede arreglar desde el equipo (la regla lo impide, y aflojarla abriría el
+     * agujero que la regla cierra). Lo que sí se puede es DECIRLO: si la escritura falla,
+     * se marca `commandSecretMismatch = true` en `devices/{id}` —una ruta que el equipo sí
+     * puede escribir— y el panel muestra el aviso con el botón "Re-vincular", que borra
+     * `deviceSecrets/{id}/commandSecret` (un admin autorizado sí puede) para que la próxima
+     * sincronización del equipo lo vuelva a escribir con `!data.exists()`.
+     */
+    fun pushCommandSecret(context: Context) {
+        withAuth {
+            val id = deviceId(context)
+            val secret = getOrCreateCommandSecret(context)
+            FirebaseDatabase.getInstance()
+                .getReference("deviceSecrets/$id/commandSecret")
+                .setValue(secret)
+                .addOnSuccessListener { markCommandSecretMismatch(context, false) }
+                .addOnFailureListener { e ->
+                    e.printStackTrace()
+                    markCommandSecretMismatch(context, true)
+                }
+        }
+    }
+
+    /**
+     * Reconcilia el NOMBRE del dispositivo entre el panel y el celular.
+     *
+     * ⚠️ 2/9/2026 — ESTE ERA EL BUG DE "PONGO EL NOMBRE DESDE LA WEB Y NO SE REGISTRA".
+     *
+     * El panel escribe `devices/{id}/deviceName`. Pero `syncDeviceInfo()` incluía
+     * `"deviceName" to prefs.getString("device_name", "")` en su writeFields() —o sea que
+     * en la siguiente sincronización (el Watchdog las dispara todo el tiempo, y de entrada
+     * al arrancar el servicio) el celular **pisaba el nombre del panel con la cadena
+     * vacía**. El único lugar que traía el nombre desde Firebase era un LaunchedEffect
+     * dentro de DashboardScreen, o sea que solo pasaba si alguien abría el panel local del
+     * celular. En la práctica el nombre duraba segundos.
+     *
+     * Regla nueva, explícita: **el panel manda.** Si Firebase tiene un nombre no vacío, es
+     * el bueno y el celular lo adopta en sus preferencias (para mostrarlo en su propia
+     * pantalla). Solo si Firebase NO tiene nombre y el celular sí, se sube el del celular.
+     * Nunca se escribe una cadena vacía sobre un nombre existente.
+     */
+    private fun reconcileDeviceName(context: Context) {
+        withAuth {
+            try {
+                val id = deviceId(context)
+                val prefs = PrefsHelper.getMdmPrefs(context)
+                val localName = prefs.getString("device_name", "") ?: ""
+                FirebaseDatabase.getInstance()
+                    .getReference("devices/$id/deviceName")
+                    .get()
+                    .addOnSuccessListener { snap ->
+                        val remoteName = snap.getValue(String::class.java) ?: ""
+                        if (remoteName.isNotEmpty()) {
+                            // El panel manda: adoptarlo localmente si cambió.
+                            if (remoteName != localName) {
+                                prefs.edit().putString("device_name", remoteName).apply()
+                            }
+                        } else if (localName.isNotEmpty()) {
+                            // Firebase no tiene nombre todavía y el celular sí: subirlo.
+                            writeFields(context, mapOf("deviceName" to localName))
+                        }
+                    }
+                    .addOnFailureListener { it.printStackTrace() }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    /**
+     * Sube el nombre elegido EN EL CELULAR, pisando el de Firebase a propósito.
+     * Lo llama únicamente el botón "Guardar" de la pantalla de identificación del
+     * Dashboard local — es la única situación en que el celular tiene que ganarle al panel.
+     */
+    fun pushDeviceName(context: Context, name: String) {
+        PrefsHelper.getMdmPrefs(context).edit().putString("device_name", name).apply()
+        withAuth { writeFields(context, mapOf("deviceName" to name)) }
+    }
+
+    /** Bandera visible para el panel. Se escribe en `devices/{id}`, no en `deviceSecrets`. */
+    private fun markCommandSecretMismatch(context: Context, mismatch: Boolean) {
+        try {
+            val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+            val payload = mutableMapOf<String, Any>(
+                "commandSecretMismatch" to mismatch,
+                "info/commandSecretMismatch" to mismatch
+            )
+            if (authUid.isNotEmpty()) {
+                payload["ownerUid"] = authUid
+                payload["info/ownerUid"] = authUid
+            }
+            FirebaseDatabase.getInstance()
+                .getReference("devices/${deviceId(context)}")
+                .updateChildren(payload)
+                .addOnFailureListener { it.printStackTrace() }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     fun syncDeviceInfo(context: Context) {
         val policyManager = PolicyManager(context)
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
         val prefs = PrefsHelper.getMdmPrefs(context)
-        val deviceName = prefs.getString("device_name", "") ?: ""
+
+        // El nombre del dispositivo YA NO se manda dentro del writeFields() de abajo.
+        // Ver reconcileDeviceName() para el porqué completo: mandarlo ahí era lo que
+        // borraba el nombre puesto desde el panel.
+        reconcileDeviceName(context)
 
         val aliasComponent = android.content.ComponentName(context, "com.ejemplo.locksuite.LauncherAlias")
         val isStealth = try {
@@ -235,17 +379,20 @@ object FirebaseDeviceSync {
         }
         val currentVersionName = pInfo?.versionName ?: "Unknown"
 
+        // Una sola consulta a getUserRestrictions() por sincronización: la lista se usa
+        // dos veces en el reporte de abajo.
+        val policyDrift = policyManager.divergentRestrictions()
+
         withAuth {
             // La Function usa esta credencial para firmar cada comando. No se
             // replica bajo /devices, que el panel consume habitualmente.
-            FirebaseDatabase.getInstance()
-                .getReference("deviceSecrets/${deviceId(context)}/commandSecret")
-                .setValue(getOrCreateCommandSecret(context))
-                .addOnFailureListener { it.printStackTrace() }
+            // Va por pushCommandSecret() para que un rechazo de las reglas quede
+            // REPORTADO (commandSecretMismatch) en vez de perderse en un stack trace:
+            // ese rechazo es lo que deja el equipo sordo a los comandos del panel.
+            pushCommandSecret(context)
             writeFields(
                 context,
                 mapOf(
-                    "deviceName" to deviceName,
                     "model" to "${Build.MANUFACTURER} ${Build.MODEL}",
                     "isDeviceOwner" to dpm.isDeviceOwnerApp(context.packageName),
                     "kioskEnabled" to false,
@@ -275,6 +422,10 @@ object FirebaseDeviceSync {
                     "userSwitchBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_USER_SWITCH),
                     "modifyAccountsBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_MODIFY_ACCOUNTS),
                     "safeBootBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_SAFE_BOOT),
+                    // 2/9/2026 — faltaba reportarla, y el perfil del panel la necesita:
+                    // sin este campo, guardar un perfil desde el panel la daba por
+                    // apagada y al aplicarlo la QUITABA del equipo de destino.
+                    "networkResetBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_NETWORK_RESET),
                     "unknownSourcesBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES),
                     "adjustVolumeBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_ADJUST_VOLUME),
                     "appsControlBlocked" to policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_APPS_CONTROL),
@@ -334,8 +485,28 @@ object FirebaseDeviceSync {
                     "bootGateLastResult" to com.ejemplo.locksuite.util.BootGate.lastResult(context),
 
                     // Bloqueo de imágenes
-                    "imageStrictScroll" to policyManager.isImageBlockStrictScrollEnabled()
+                    "imageStrictScroll" to policyManager.isImageBlockStrictScrollEnabled(),
+
+                    // Kiosco real del sistema operativo (Lock Task)
+                    "kioskLockTaskEnabled" to policyManager.isKioskLockTaskEnabled(),
+
+                    // Modo teléfono de teclas
+                    "nokiaKeypadMode" to policyManager.isNokiaKeypadMode(),
+                    "nokiaTouchEnabled" to policyManager.isNokiaTouchEnabled(),
+
+                    // ── Divergencia entre lo pedido y lo que el sistema TIENE puesto ──
+                    // Ver PolicyManager.divergentRestrictions(). `isRestrictionEnabled()`
+                    // lee la preferencia, o sea lo que LockSuite QUISO aplicar; esto compara
+                    // contra `dpm.getUserRestrictions()`, que es lo que el equipo tiene de
+                    // verdad. Cuando difieren, el panel mostraba el interruptor encendido
+                    // sobre un equipo desprotegido, en silencio.
+                    "policyDrift" to policyDrift.joinToString(","),
+                    "policyDriftCount" to policyDrift.size
                 )
+                // Restricciones del registro declarativo (mdm/PolicySpec.kt). Se agregan
+                // desde la misma lista que las aplica, así una restricción nueva aparece en
+                // el panel sin tocar este archivo.
+                    + policyManager.extraRestrictionsStatus()
             )
             syncAppsListInternal(context)
         }
@@ -360,10 +531,30 @@ object FirebaseDeviceSync {
                     "isCritical" to app.isCritical
                 )
             }
-            val baseRef = FirebaseDatabase.getInstance().reference
-            val deviceId = deviceId(context)
-            baseRef.child("devices/$deviceId/apps").setValue(appsMap)
-            baseRef.child("devices/$deviceId/info/apps").setValue(appsMap)
+            // 2/9/2026 — Va DENTRO de withAuth y reafirmando `ownerUid` en la misma
+            // escritura. Antes eran dos setValue() sueltos, sin autenticar y sin ownerUid:
+            // la regla de `devices/$id` solo los aceptaba por la rama
+            // `data.child('ownerUid').val() === auth.uid`, o sea que después de que el uid
+            // anónimo rotara (reinstalar la app, limpiar datos) esta escritura quedaba
+            // rechazada hasta que corriera antes un writeFields() —que sí reafirma el
+            // ownerUid—. Resultado visible: la lista de apps del panel se quedaba
+            // congelada en la de la instalación anterior, sin ningún error a la vista.
+            withAuth {
+                val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+                val id = deviceId(context)
+                val payload = mutableMapOf<String, Any>(
+                    "apps" to appsMap,
+                    "info/apps" to appsMap
+                )
+                if (authUid.isNotEmpty()) {
+                    payload["ownerUid"] = authUid
+                    payload["info/ownerUid"] = authUid
+                }
+                FirebaseDatabase.getInstance()
+                    .getReference("devices/$id")
+                    .updateChildren(payload)
+                    .addOnFailureListener { it.printStackTrace() }
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }

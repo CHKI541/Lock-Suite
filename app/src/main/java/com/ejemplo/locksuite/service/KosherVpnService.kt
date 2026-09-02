@@ -69,6 +69,25 @@ class KosherVpnService : VpnService() {
             "2606:4700:4700::1111", "2606:4700:4700::1001", // Cloudflare
             "2620:fe::fe", "2620:fe::9"                      // Quad9
         )
+
+        /**
+         * ¿El túnel está realmente leyendo paquetes en este proceso?
+         *
+         * 2/9/2026 (batería). `BootReceiver.ensureVpnRunning()` llamaba a
+         * `startForegroundService(KosherVpnService)` en CADA ciclo de 20 s del Watchdog
+         * mientras alguna política pidiera la VPN — o sea siempre, en el uso normal. Cada
+         * llamada es una transacción Binder contra ActivityManagerService y un
+         * `onStartCommand` que termina en `startVpn()`, que a su vez toma `lifecycleLock`
+         * y sale por el `if (running) return` de la línea 166. Trabajo tirado 4.320 veces
+         * por día, en el proceso que además tiene el hilo lector del túnel.
+         *
+         * Este espejo del campo `running` deja que quien va a arrancar el servicio lo
+         * consulte SIN pagar el IPC. Es un espejo y no la fuente de verdad: se actualiza
+         * junto a `running`, y si el proceso muere vuelve a `false` solo al recargarse la
+         * clase — nunca puede quedar diciendo "está arriba" después de un reinicio.
+         */
+        @Volatile
+        var isTunnelRunning: Boolean = false
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -252,6 +271,7 @@ class KosherVpnService : VpnService() {
             )
             synchronized(lifecycleLock) {
                 running = true
+                isTunnelRunning = true
             }
             Thread({ runFilterLoop() }, "LockSuiteDnsFilter").start()
             android.util.Log.i("KosherVPN", "Servicio VPN iniciado exitosamente.")
@@ -390,6 +410,7 @@ class KosherVpnService : VpnService() {
             val shouldStopService = synchronized(lifecycleLock) {
                 if (vpnInterface === iface) {
                     running = false
+                    isTunnelRunning = false
                     vpnInterface = null
                     dnsExecutor?.shutdownNow()
                     dnsExecutor = null
@@ -653,6 +674,7 @@ class KosherVpnService : VpnService() {
         val executorToStop: java.util.concurrent.ExecutorService?
         synchronized(lifecycleLock) {
             running = false
+            isTunnelRunning = false
             executorToStop = dnsExecutor
             dnsExecutor = null
             interfaceToClose = vpnInterface

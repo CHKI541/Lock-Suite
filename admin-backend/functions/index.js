@@ -76,6 +76,37 @@ const ALLOWED_COMMANDS = new Set([
   "ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE",
   // Bloqueo de imagenes: tapado estricto del contenedor mientras se desplaza.
   "ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL",
+  // Kiosco real del sistema operativo (Lock Task). El equipo SOLO puede abrir los
+  // paquetes de la lista blanca del launcher, y lo hace cumplir Android, no LockSuite.
+  // OJO: si el marcador telefonico no esta en esa lista, el codigo de recuperacion
+  // *#*#9999#*#* no se puede marcar. Ver PolicyManager.applyKioskLockTask().
+  "ENABLE_KIOSK_LOCK_TASK", "DISABLE_KIOSK_LOCK_TASK",
+  // Modo telefono de teclas (estilo Nokia) y su interruptor de tactil.
+  "ENABLE_NOKIA_MODE", "DISABLE_NOKIA_MODE",
+  "ENABLE_NOKIA_TOUCH", "DISABLE_NOKIA_TOUCH",
+  // ── Restricciones del registro declarativo (app/mdm/PolicySpec.kt) ──
+  // Esta lista se genera desde ese archivo: si agregas una restriccion alla, agregala
+  // aca tambien o la Cloud Function la va a rechazar con "Comando no reconocido".
+  "BLOCK_PRIVATE_DNS", "UNBLOCK_PRIVATE_DNS",
+  "BLOCK_SMS", "UNBLOCK_SMS",
+  "BLOCK_OUTGOING_CALLS", "UNBLOCK_OUTGOING_CALLS",
+  "BLOCK_CONFIG_LOCATION", "UNBLOCK_CONFIG_LOCATION",
+  "BLOCK_SHARE_LOCATION", "UNBLOCK_SHARE_LOCATION",
+  "BLOCK_AUTOFILL", "UNBLOCK_AUTOFILL",
+  "BLOCK_CONTENT_CAPTURE", "UNBLOCK_CONTENT_CAPTURE",
+  "BLOCK_PRINTING", "UNBLOCK_PRINTING",
+  "BLOCK_USB_FILE_TRANSFER", "UNBLOCK_USB_FILE_TRANSFER",
+  "BLOCK_DATA_ROAMING", "UNBLOCK_DATA_ROAMING",
+  "BLOCK_AIRPLANE_MODE", "UNBLOCK_AIRPLANE_MODE",
+  "BLOCK_AMBIENT_DISPLAY", "UNBLOCK_AMBIENT_DISPLAY",
+  "BLOCK_SYSTEM_ERROR_DIALOGS", "UNBLOCK_SYSTEM_ERROR_DIALOGS",
+  "BLOCK_SET_WALLPAPER", "UNBLOCK_SET_WALLPAPER",
+  "BLOCK_SET_USER_ICON", "UNBLOCK_SET_USER_ICON",
+  "BLOCK_CONFIG_CREDENTIALS", "UNBLOCK_CONFIG_CREDENTIALS",
+  "BLOCK_CONFIG_CELL_BROADCASTS", "UNBLOCK_CONFIG_CELL_BROADCASTS",
+  "BLOCK_OUTGOING_BEAM", "UNBLOCK_OUTGOING_BEAM",
+  "BLOCK_UNMUTE_MICROPHONE", "UNBLOCK_UNMUTE_MICROPHONE",
+  "BLOCK_REMOVE_MANAGED_PROFILE", "UNBLOCK_REMOVE_MANAGED_PROFILE",
 ]);
 
 function canonicalCommandPayload(payload) {

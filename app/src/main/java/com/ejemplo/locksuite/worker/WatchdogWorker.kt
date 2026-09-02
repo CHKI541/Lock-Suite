@@ -7,10 +7,35 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.service.WatchdogForegroundService
+import com.ejemplo.locksuite.util.PrefsHelper
 
 class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
 
     override fun doWork(): Result {
+        // LATIDO PRIMERO, Y BARATO (2/9/2026) — "a veces los celulares no quedan en línea".
+        //
+        // El único latido que había en la práctica era el del servicio de primer plano:
+        // `syncLastSeenOnly()` cada 90 s, dentro de un `Handler.postDelayed(20_000)`. Y
+        // `postDelayed` cuenta con `SystemClock.uptimeMillis()`, que NO AVANZA mientras el
+        // equipo está en sueño profundo. Un celular con la pantalla apagada un rato deja
+        // de latir; el panel considera "En línea" solo los últimos minutos, así que el
+        // equipo aparece "Desconectado" aunque esté perfecto y reciba comandos sin
+        // problema (FCM de alta prioridad despierta el equipo igual).
+        //
+        // Este Worker es lo único que WorkManager garantiza que corre aunque el proceso
+        // haya muerto y aunque el equipo esté en Doze (en la ventana de mantenimiento).
+        // Antes sincronizaba, sí — pero al FINAL, con `syncDeviceInfo()`, que es la
+        // sincronización pesada (pide el token de FCM, enumera políticas, escribe ~40
+        // campos) y encima quedaba después de `reapplyAllRestrictions()`, o sea que si esa
+        // parte tardaba o el proceso se moría antes, el latido no salía nunca.
+        //
+        // Escribir solo `lastSeen` es una escritura de dos campos y va PRIMERO.
+        try {
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // ARRANQUE PROTEGIDO — red de seguridad de último recurso (21/8/2026).
         //
         // Va PRIMERO y a propósito. Este Worker es el único mecanismo del proyecto que
@@ -72,11 +97,32 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             e.printStackTrace()
         }
 
-        // Sincronizar información del dispositivo periódicamente en segundo plano
-        try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)
-        } catch (e: Exception) {
-            e.printStackTrace()
+        // Sincronización COMPLETA: una de cada cuatro vueltas, o sea ~1 vez por hora.
+        //
+        // 2/9/2026 (batería). `syncDeviceInfo()` no es barata: pide el token de FCM,
+        // construye un PolicyManager, enumera el estado de ~40 políticas, consulta
+        // `getUserRestrictions()` y escribe un nodo grande en Firebase — y encima llama a
+        // `syncAppsListInternal()`, que enumera TODAS las apps del equipo. Hacer eso cada
+        // 15 minutos es cuatro veces por hora un trabajo que casi nunca cambia entre una
+        // vuelta y la siguiente.
+        //
+        // Lo que sí tiene que pasar siempre —que el panel vea el equipo en línea— ya se
+        // hizo arriba con `syncLastSeenOnly()`, que son dos campos.
+        //
+        // Y lo que hace que esto NO retrase un cambio real: cada comando del panel llama a
+        // `syncDeviceInfo()` al terminar de aplicarse (ver LockSuiteFirebaseService), así
+        // que el panel refleja los cambios al instante. Esta vuelta periódica solo existe
+        // para reconciliar lo que haya cambiado SIN pasar por el panel.
+        val vuelta = PrefsHelper.getMdmPrefs(applicationContext)
+            .getInt("watchdog_worker_tick", 0)
+        PrefsHelper.getMdmPrefs(applicationContext).edit()
+            .putInt("watchdog_worker_tick", (vuelta + 1) % 4).apply()
+        if (vuelta == 0) {
+            try {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         return Result.success()

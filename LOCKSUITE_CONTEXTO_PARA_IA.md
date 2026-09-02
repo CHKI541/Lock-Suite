@@ -145,7 +145,8 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - `INFORME_FORENSE_ACCESIBILIDAD_ANDROID13.md` (15/8) — diagnóstico completo del bug de accesibilidad en Android 13, con evidencia ADB (ver B.8).
 - `INSTRUCCIONES_COMPILACION_ANTIGRAVITY_2026-08-16.md` (16/8) — **empezar por acá si vas a compilar.** Qué entra en el build, comandos exactos, qué puede fallar, y en qué orden probar (B.8 primero, porque bloquea al resto).
 - `INFORME_OPTIMIZACION_ACCESIBILIDAD_2026-08-16.md` (16/8) — detalle línea por línea de la optimización de Capa 3 y del sobre-bloqueo de Mercado Pago, con el porqué de cada cambio y checklist de 9 puntos (ver B.13). Leerlo antes de tocar `LockSuiteAccessibilityService.kt`. **Ojo:** la parte que describe `BlockOverlayManager` como "una ventana por región" quedó desactualizada el 17/8 — ese archivo se reescribió a una sola capa de canvas (ver B.17).
-- `INSTRUCCIONES_ANTIGRAVITY_2026-09-01_RED_SUSPENSION_BORRADO.md` (1/9) — **el más nuevo: empezá por acá.** Los parches exactos de B.24 (cuarta causa del "se cae internet"), B.11 (los tres defectos de la suspensión) y B.25 (lo que la purga no limpia), con el orden de prueba en equipo real y el mensaje de commit listo.
+- `INSTRUCCIONES_ANTIGRAVITY_2026-09-02_ABLOQ_PANEL_BATERIA.md` (2/9) — **el más nuevo: empezá por acá.** Comparación con A Bloq y qué copiarle, el canal de comandos FCM (por qué el panel no controlaba el equipo y por qué había que cambiar el PIN varias veces), el nombre de dispositivo, la firma de los presets, el estado "en línea", batería, y la auditoría de secretos de GitHub. Trae el orden de prueba y el mensaje de commit listo.
+- `INSTRUCCIONES_ANTIGRAVITY_2026-09-01_RED_SUSPENSION_BORRADO.md` (1/9) — Los parches exactos de B.24 (cuarta causa del "se cae internet"), B.11 (los tres defectos de la suspensión) y B.25 (lo que la purga no limpia), con el orden de prueba en equipo real y el mensaje de commit listo.
 - `INSTRUCCIONES_ANTIGRAVITY_2026-08-31_APP_ADMIN.md` (31/8) — **la app de administración para celular: qué se auditó, qué se corrigió y qué falta probar.** Incluye el commit listo para copiar y las pruebas en equipo real ordenadas. (Lo de compilar y desplegar ya está hecho — ver B.22.)
 - `EXPLICACION_APK_ADMIN_PARA_OTRAS_IA.md` — documento que Antigravity dice haber escrito al crear `:admin-app`. **Al 31/8 no está en el repo** (ni en la raíz ni dentro de `admin-app/`): o no se llegó a guardar, o se guardó fuera del proyecto. Si aparece, leerlo como historial de intención; el mapa real del módulo es la sección "App de administración para celular" de más arriba.
 - `INSTRUCCIONES_ANTIGRAVITY_2026-08-21.md` (21/8) — **el más nuevo: si vas a compilar, empezá por acá.** Qué se tocó para arreglar "se cae el internet" (B.20), mensaje de commit listo, y las pruebas en equipo real ordenadas por cuál descarta el problema más rápido.
@@ -161,6 +162,8 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - **(21/8) `device_stage_files` tiene un tope de 7 carpetas de profundidad** por debajo de la carpeta conectada, y los `.kt` están a 8 (`app/src/main/java/com/ejemplo/locksuite/util/X.kt`). El error lo dice explícito y `device_request_folder_access` **no** lo arregla (una carpeta dentro de una conectada cuenta como ya concedida). La solución es pedirle al dueño que agregue **`E:\Documentos\Lock Suite segunda version\app\src\main\java`** como carpeta extra desde el botón "Add folder" de la app de escritorio: desde ahí todo el Kotlin queda a 4 niveles. **Si en una sesión nueva `device_bash` no monta, pedí esa carpeta de entrada en vez de descubrirlo a mitad de camino.**
 - **(31/8) Volvió a pasar exactamente eso, y la solución funcionó.** `device_bash` no montó ("failed to mount") y `MainActivity.kt` de `:admin-app` (a 8 niveles) no se pudo bajar. Se le pidió al dueño agregar la carpeta desde "Add folder" y con eso quedó accesible al instante. Las carpetas que conviene tener conectadas para trabajar cómodo son **dos**: `E:\Documentos\Lock Suite segunda version` y `E:\Documentos\Lock Suite segunda version\app\src\main\java` (más `admin-app\src\main\java` si se va a tocar la app de administración).
 - **(31/8) Sin `device_bash` tampoco hay `git`.** Ninguna sesión que trabaje solo por `device_stage_files`/`device_commit_files` puede commitear: los archivos quedan escritos en el disco pero sin commit. En ese caso el cierre correcto es dejar el mensaje de commit exacto en el documento de instrucciones y que lo corra Antigravity.
+- **(2/9) LO MÁS RÁPIDO DE TODO MIENTRAS EL REPO SIGA PÚBLICO: CLONARLO EN EL CONTENEDOR.** `git clone https://github.com/CHKI541/Lock-Suite` funciona **sin credenciales** desde el `Bash` del contenedor, y con eso se leen todos los archivos sin pelear con el tope de 7 carpetas ni con `.git/objects/`. **Verificá siempre que el clon corresponde al árbol de trabajo** comparando los tamaños en bytes contra `device_list_dir` (en la sesión del 2/9 coincidieron byte por byte en los 12 archivos clave). Para ESCRIBIR sigue haciendo falta el puente: `SendUserFile` para obtener un `file_uuid` y después `device_commit_files` con la ruta absoluta — eso sí funcionó con la carpeta `…\\app\\src\\main\\java\\com\\ejemplo\\locksuite` conectada, 11 archivos de una. ⚠️ **Esto deja de andar el día que el repo pase a privado (B.2/B.32)**: ahí hay que pedirle al dueño esa carpeta desde el arranque.
+- **(2/9) `device_bash` no montó por TERCERA vez consecutiva** (21/8, 31/8, 2/9). Ya conviene asumir que no va a montar y no perder tiempo: sin él no hay `git`, así que el cierre correcto es dejar el mensaje de commit escrito y que lo corra Antigravity.
 - **(1/9) EL TOPE DE PROFUNDIDAD SE PUEDE ESQUIVAR LEYENDO `.git/objects/` — anotalo, ahorra la sesión entera.** Si el dueño no está para agregar la carpeta, el Kotlin igual se puede leer: los objetos sueltos de git viven en `.git/objects/xx/yyyy…`, o sea a **2 carpetas** de la raíz, y ahí adentro está el contenido exacto de cada archivo commiteado. Receta: leer `.git/logs/HEAD` (2 niveles) → última línea = hash del commit → bajar ese objeto, descomprimirlo con `zlib.decompress` en el contenedor y sacar el `tree` → bajar el árbol y parsearlo (`modo SP nombre \0 sha[20]` en binario) → repetir bajando por `app/src/main/java/com/ejemplo/locksuite/…` → bajar los blobs. Son ~10 llamadas secuenciales para llegar al paquete, y de ahí en más un solo `device_stage_files` baja hasta 50 blobs de golpe. En esta sesión así se leyeron los 12 archivos clave, y los tamaños descomprimidos coincidieron **byte por byte** con los del disco (comparar contra `device_list_dir` es la verificación de que estás leyendo el working tree y no una versión vieja).
   **Los dos límites reales del truco:** (a) solo sirve para lo **commiteado** — si el working tree tiene cambios sin commitear, esto no los ve, así que hay que confirmar con `device_list_dir` que el `mtime` del archivo sea ANTERIOR al del commit; (b) los objetos viejos están **empaquetados** (`.git/objects/pack/*.pack`) y no sueltos: ahí el `stage` da "does not exist". Los `.idx` sí se bajan (son chicos) y dicen en qué pack está cada objeto, pero bajar un pack de 222 MB da **"wall-clock timeout"** — no insistas. Para un archivo que no cambió hace meses, el atajo es la copia aplanada de `_to_delete/app__src__main__java__…` (comparar tamaño en bytes contra el actual: si coincide, es el mismo archivo).
 - **(1/9) El tope es de 7 carpetas, y `ui/emergency/X.kt` está a 9.** O sea que ni siquiera agregando `app\src\main\java` alcanza para todo si hay subpaquetes profundos. Con la carpeta agregada quedan a 4-5 y no hay problema; sin ella, `dns/`, `mdm/`, `receiver/`, `security/`, `service/`, `util/`, `widget/` y `worker/` están a 8, y `ui/*/` a 9.
@@ -219,7 +222,7 @@ Mientras la suspensión está activa: `reapplyAllRestrictions()`, `refreshInstal
 
 **Falta probar en equipo real:** suspender, confirmar que todas las apps se desbloquean y que Ajustes/WiFi/cámara vuelven a funcionar; reiniciar el equipo suspendido y confirmar que sigue suspendido; reanudar y confirmar que vuelve exactamente la configuración anterior (incluidas suspensiones individuales de apps, launcher kosher y VPN). **Riesgo conocido sin resolver:** un equipo que quede suspendido por olvido es un equipo sin ninguna protección — no hay expiración automática. Evaluar agregar un vencimiento configurable.
 
-**⚠️ REVISIÓN DEL 1/9 — tres defectos concretos encontrados leyendo el código; los tres hacen fallar justo las pruebas de arriba. Ninguno está arreglado todavía.** Diffs exactos en `INSTRUCCIONES_ANTIGRAVITY_2026-09-01_RED_SUSPENSION_BORRADO.md`.
+**⚠️ REVISIÓN DEL 1/9 — tres defectos concretos encontrados leyendo el código. ~~Ninguno está arreglado todavía~~ → los tres se parchearon en el commit `3d1174e` (1/9 19:52 UTC); FALTA PROBARLOS EN EQUIPO REAL.** Diffs exactos en `INSTRUCCIONES_ANTIGRAVITY_2026-09-01_RED_SUSPENSION_BORRADO.md`.
 
 1. **Reiniciar un equipo suspendido devuelve la marca de agua kosher (S-1).** `BootReceiver.onReceive()`, paso 3: arranca `WatermarkService` si `isKosherLauncherEnabled() && canDrawOverlays()`, **sin mirar `isLockSuiteSuspended()`**. El mismo chequeo en `WatchdogForegroundService.checkRunnable` (línea ~162) SÍ lo mira — es una asimetría entre dos lugares que hacen lo mismo. Y como el Watchdog solo *arranca* el servicio y nunca lo para, una vez que aparece se queda. Es exactamente la prueba "reiniciar el equipo suspendido y confirmar que sigue suspendido", y falla de forma visible en pantalla.
 2. **Las apps OCULTAS no vuelven al reanudar (S-2).** `liftAllForSuspension()` des-oculta TODAS las apps (`setApplicationHidden(pkg, false)` sobre el enumerado completo con `MATCH_UNINSTALLED_PACKAGES`), pero `reapplyAllRestrictions()` **no vuelve a ocultar ninguna**: la preferencia `hide_<paquete>` no se lee en ningún lado salvo `hide_com.android.vending`. O sea que la asimetría es real — las suspensiones individuales (`suspend_<paquete>`) sí se reconstruyen, las ocultaciones no. Resultado: suspender y reanudar deja las apps ocultas **visibles para siempre**, mientras el panel y la app siguen mostrándolas como ocultas (la preferencia sobrevive). Peor todavía: `AppController.hideApp()` durante la suspensión guarda `hide_<paquete>=true` y devuelve `true` como si hubiera funcionado, pero nadie lo aplica nunca. **Esto rompe la premisa central del diseño de B.11** ("no hace falta snapshot porque `reapplyAllRestrictions()` reconstruye todo desde las preferencias"): hay una preferencia que no reconstruye.
@@ -468,7 +471,9 @@ pero las reglas de `devices`, `groups`, `presets`, etc. solo aceptan `authorized
 Una cuenta autorizada solo por email vería el tablero y fallaría en cada lectura. O se borra
 el camino por email, o se hace que las reglas lo acepten. Relacionado con B.3.
 
-**B.24 — "SE CAE INTERNET", CUARTA CAUSA: el reintento a DNS público solo se dispara si el error es TIMEOUT. [ENCONTRADO 1/9 leyendo el código; SIN ARREGLAR]**
+**B.24 — "SE CAE INTERNET", CUARTA CAUSA: el reintento a DNS público solo se dispara si el error es TIMEOUT. ~~SIN ARREGLAR~~ → [PARCHEADO EN CÓDIGO EL 1/9 POR ANTIGRAVITY, commit `3d1174e`; FALTA PROBAR EN EQUIPO REAL]**
+
+⚠️ *Corrección del 2/9: este punto decía "SIN ARREGLAR" pero el commit `3d1174e` ("fix(red/suspension/borrado): reintento DNS ante ENETUNREACH, eleccion de red validada, y simetria de suspender/purgar", 1/9 19:52 UTC) ya toca `NetworkForwarder.kt`, `KosherVpnService.kt`, `PolicyManager.kt` y `BootReceiver.kt`. Verificado contra el disco: los archivos coinciden byte por byte con el repo. **Lo que falta es la prueba en equipo real de V-1 a V-7**, no el código. Confirmá con `git log -1` y `git show --stat 3d1174e` antes de rehacer nada.*
 
 Contexto: este síntoma ya tuvo tres causas distintas y todas eran reales (B.18 el resolutor `fd00::1` y el pool que trababa el lector, B.20 el proxy clavado, B.21 el desvío CGNAT). **Esta es una cuarta, y sigue abierta.** Es la que mejor explica que el corte vuelva a aparecer con todo lo anterior ya instalado, y por qué se destraba apagando y prendiendo la VPN.
 
@@ -482,7 +487,9 @@ Contexto: este síntoma ya tuvo tres causas distintas y todas eran reales (B.18 
 
 **Cómo probar que V-1 es el que muerde:** con la VPN andando, apagar el Wi-Fi de golpe estando en una red cuyo DNS sea del ISP y mirar `adb logcat -s KosherVPN`. Si aparece "Fallo reenviando consulta DNS: … ENETUNREACH" **sin** la línea "reintentando con fallback 8.8.8.8", está confirmado.
 
-**B.25 — BORRAR LOCKSUITE NO DEJA EL EQUIPO LIMPIO: apps que quedan suspendidas y un idioma bloqueado para siempre. [ENCONTRADO 1/9 leyendo el código; SIN ARREGLAR]**
+**B.25 — BORRAR LOCKSUITE NO DEJA EL EQUIPO LIMPIO: apps que quedan suspendidas y un idioma bloqueado para siempre. ~~SIN ARREGLAR~~ → [PARCHEADO EN CÓDIGO EL 1/9 POR ANTIGRAVITY, commit `3d1174e`; FALTA PROBAR EN EQUIPO REAL]**
+
+⚠️ *Misma corrección del 2/9 que B.24: el commit `3d1174e` incluye "simetria de suspender/purgar". Falta la prueba en equipo, sobre todo P-5 (`clearDeviceOwnerApp()` en Android 13, el único paso irreversible del proyecto — probarlo en un equipo de descarte ANTES de necesitarlo en uno real).*
 
 La purga total (`*#*#9999#*#*` → contraseña maestra → `EmergencyActivity.executeFullPurge()`) hace: des-ocultar apps → `PolicyManager.clearAllRestrictions()` → salir de modo sigiloso → reactivar barra de estado → `dpm.clearDeviceOwnerApp()`. El problema está en `clearAllRestrictions()`, que **no es simétrica con `liftAllForSuspension()`** aunque las dos digan "dejar el equipo como si LockSuite no existiera".
 
@@ -496,6 +503,140 @@ La purga total (`*#*#9999#*#*` → contraseña maestra → `EmergencyActivity.ex
 **Lo que SÍ está bien y no hay que tocar:** la purga des-oculta las apps antes de soltar el Device Owner y usa `MATCH_UNINSTALLED_PACKAGES` en `getUserApps()`, que es lo correcto (una app oculta está deshabilitada y no aparece en un enumerado normal). `clearAllRestrictions()` también libera `setUninstallBlocked(false)`, `setPermittedAccessibilityServices(null)`, FRP, Knox (reset y flasheo), el proxy de internet, el launcher kosher con su marca de agua, y para la VPN.
 
 ⚠️ **Salvedad de método sobre B.25:** `PolicyManager.kt` se leyó en la versión exacta del working tree. `EmergencyActivity.kt` **no** se pudo leer en su versión actual (blob empaquetado + tope de profundidad, ver la sección de limitaciones del entorno): lo de P-2 y el orden de los pasos se verificó contra la copia de julio guardada en `_to_delete/`, que es 923 bytes más chica que la actual. Antes de aplicar P-2, abrir `ui/emergency/EmergencyActivity.kt` y confirmar que `executeFullPurge()` sigue teniendo el paso 1 tal cual.
+
+**B.26 — CANAL DE COMANDOS FCM: "no lo puedo controlar de la web" y "hay que cambiar el PIN varias veces" eran EL MISMO BUG. [ARREGLADO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+Tres causas encadenadas, todas silenciosas. Detalle completo en `INSTRUCCIONES_ANTIGRAVITY_2026-09-02_ABLOQ_PANEL_BATERIA.md` §3.
+
+1. **El secreto de firma se desincroniza y no se puede resincronizar.** `commandSecret` vive en `EncryptedSharedPreferences` (**no** sobrevive a reinstalar la app) pero el `deviceId` es el `ANDROID_ID` (**sí** sobrevive). La regla `deviceSecrets/$id/commandSecret` prohíbe al equipo cambiar un valor ya existente — correcto como defensa, pero deja el canal roto para siempre después de una reinstalación. La Function firma con el viejo, el equipo verifica con el nuevo, **y descarta todos los comandos sin dejar rastro**.
+2. **El PIN quedaba atrapado en la misma escritura atómica.** `syncPinCredentials()` mandaba `{pinHash, pinSalt, commandSecret}` en un solo `updateChildren()`, que en Realtime Database es atómico: el rechazo de la ruta del secreto **se llevaba puesto el PIN**. El panel seguía validando contra el hash viejo. **Eso es, textual, "hay que cambiar el pin varias veces hasta que lo puedo controlar de la web".**
+3. **El reloj del celular.** `verifyFcmSignature()` exigía `abs(System.currentTimeMillis() - timestampDelServidor) < 5 min`. En un equipo sin SIM ni hora de red, con el reloj corrido, **todos** los comandos se rechazaban para siempre. Nada apuntaba al reloj.
+
+**Arreglado:** escrituras separadas para PIN y secreto; ack con motivo en cada rechazo (`BAD_SIGNATURE`, `REPLAY`, `TIMESTAMP_OUT_OF_WINDOW`, …) en vez del `return` mudo; ventana temporal de 24 h solo si el reloj es creíble, más un **piso monotónico de timestamps** que no depende del reloj (el anti-repetición no se debilita: sigue siendo `commandId` + `isReplay()` + el piso); bandera `commandSecretMismatch` reportada al panel y botón **"Re-vincular"** que borra el secreto del servidor para que el equipo lo reescriba (un admin autorizado sí puede, **no hay que tocar las reglas**).
+
+**Falta probar:** mandar un comando y confirmar `commandAcks/<id>` = `applied`. Si sale `rejected`, **el motivo es el diagnóstico** — antes no existía ninguno. Probar también: reinstalar la app en un equipo y confirmar que aparece el aviso "Re-vincular" y que después de usarlo los comandos vuelven a funcionar.
+
+**B.27 — El nombre puesto desde el panel se borraba solo. [ARREGLADO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+`syncDeviceInfo()` incluía `"deviceName" to prefs.getString("device_name", "")` en su `writeFields()` periódico, así que el celular **pisaba con la cadena vacía** el nombre que el panel acababa de escribir, en segundos. Lo único que traía el nombre desde Firebase era un `LaunchedEffect` de `DashboardScreen`, o sea que solo pasaba si alguien abría el panel local **en el celular**. Regla nueva y explícita: **el panel manda** (`reconcileDeviceName()` adopta el remoto; solo se sube el local si Firebase no tiene ninguno; nunca se escribe vacío sobre un nombre existente). El botón "Guardar" del Dashboard del celular usa `pushDeviceName()`, la única vía donde el celular le gana al panel.
+
+**B.28 — PRESETS: la firma HMAC no podía coincidir NUNCA en la mayoría de los equipos. [ARREGLADO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+**Realtime Database no guarda arrays vacíos** (equivalen a `null` y la clave desaparece). El panel firmaba el perfil **con** `perAppInternetBlocked: []` y después lo guardaba; al leerlo para aplicarlo la clave ya no estaba, así que el objeto que llegaba al celular **no era el firmado** y `importPolicyPresetJson()` tiraba "archivo alterado". Como la mayoría de los equipos no tiene apps con internet bloqueado por app, **casi ningún perfil creado desde el panel se podía aplicar**. Arreglado en los dos lados: el panel borra la clave antes de firmar, y la app tolera el array perdido para los perfiles ya guardados.
+
+Además: la clave `no_apps_control` que escribía el panel **no existe en Android** (la real es `no_control_apps`), y `addUserRestriction()` con una clave desconocida no da error — la acepta y no hace nada. O sea que "Bloquear control de apps" viajaba en todos los perfiles y **no se aplicó nunca**. Corregido, con traducción de la clave vieja para los perfiles ya guardados. Y se amplió la cobertura del perfil (bluetooth, idioma, redes móviles, fecha/hora, `network_reset` —que ni siquiera se reportaba, así que aplicar un perfil la **quitaba** del equipo destino— más los interruptores de accesibilidad y arranque protegido), importando con **el valor actual como omisión** para que un perfil viejo no apague protecciones que no nombra.
+
+**Sigue faltando:** el perfil NO guarda apps suspendidas/ocultas, reglas DNS, bloqueos de WebView, modos de imagen por app ni la lista blanca del launcher. Y `APPLY_PRESET_PROFILE` viaja por el `data` de FCM (tope duro ~4 KB; la Function corta en 3.000 bytes): con las claves nuevas el margen se achicó, así que **antes de sumar más** conviene mover el perfil a `devices/<id>/pendingPreset` y mandar por FCM solo el aviso.
+
+**B.29 — "A veces los celulares no quedan en línea": dos causas, una de ellas del panel. [ARREGLADO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+(a) El latido (`syncLastSeenOnly()` cada 90 s) iba dentro de un `handler.postDelayed(20000)`, y `Handler.postDelayed` cuenta con `SystemClock.uptimeMillis()`, **que no avanza en sueño profundo** — un servicio de primer plano no impide que el equipo duerma. (b) El panel llamaba "Desconectado" a los 5 minutos, lo cual es engañoso además porque **un FCM de alta prioridad despierta al equipo igual**: un celular "desconectado" se administra sin problema.
+
+Ahora el `WatchdogWorker` (lo único que sobrevive a que muera el proceso, y corre en la ventana de mantenimiento de Doze) late **primero y barato** en vez de al final con la sincronización pesada; se late también al recibir cualquier FCM; y el panel usa 20 min de ventana con un estado intermedio **"En reposo"**. **Honestidad:** esto hace que el panel diga la verdad, no que el latido sea en tiempo real. Para eso haría falta una alarma `setAndAllowWhileIdle`, que cuesta batería — decisión pendiente del dueño.
+
+**B.30 — BATERÍA: 8.640 arranques de servicio por día tirados. [ARREGLADO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+El ciclo de 20 s de `WatchdogForegroundService` llamaba **siempre** a `startForegroundService()` de `KosherVpnService` y de `WatermarkService`, estuvieran corriendo o no: 4.320 transacciones Binder por día cada una, contra ActivityManagerService, en el mismo proceso que tiene el hilo lector del túnel DNS. Ahora se consulta un espejo en memoria (`KosherVpnService.isTunnelRunning` / `WatermarkService.isRunning`) y **se fuerza el reintento cada 5 minutos** ignorando el espejo.
+
+**No debilita la auto-reparación, y esto no hay que "simplificarlo" después:** si el proceso muere, los espejos vuelven a `false` solos porque se reinicializan con la clase, así que el caso común se sigue detectando al instante. El forzado de 5 min cubre el caso raro de "el servicio está vivo pero inútil" (el túnel no se estableció), que un booleano no puede ver. Debajo siguen `onRevoke()`, el callback de red y el Worker de 15 min. También se dejó de construir `PolicyManager` y de llamar a `canDrawOverlays()` en cada ciclo.
+
+**Sugerido y NO aplicado** (cambia comportamiento, lo decide el dueño): reemplazar la reimposición de "DNS privado apagado" cada 60 s por `DISALLOW_CONFIG_PRIVATE_DNS` (API 29) — es la mejora de batería más grande que queda **y encima cierra mejor el agujero**; bajar `syncDeviceInfo()` del Worker a una de cada cuatro vueltas; y subir `enforcerRunnable` de 20 s a 60 s (no se tocó porque contradice el pedido explícito del 18/8 de B.15).
+
+**B.31 — COMPARACIÓN CON A BLOQ (`github.com/imreykodesh/secureguardmdm-private`). [ANALIZADO 2/9; NADA COPIADO TODAVÍA]**
+
+MDM haredí israelí, ~11.800 líneas, **solo local** (sin panel ni nube). Análisis completo en `INSTRUCCIONES_ANTIGRAVITY_2026-09-02_ABLOQ_PANEL_BATERIA.md` §1. **Ojo: el repo se clona sin credenciales — es público a pesar del nombre.**
+
+Lo que conviene traer, en orden de valor:
+- **El patrón `ProtectionFeature` + `FeatureRegistry`**: una política = un objeto con id, título, SDK mínimo, `applyPolicy()` e `isPolicyActive()`. Hoy la lista de políticas de LockSuite se mantiene a mano y en paralelo en **cinco** lugares (`PolicyManager`, `LockSuiteFirebaseService`, `ALLOWED_COMMANDS`, `app.js`, `index.html`); esta sesión midió que están alineados (105/106, la diferencia es `VERIFY_PIN` y es correcta), pero es una alineación que se rompe sola en cuanto se agregue una política. No hace falta reescribir `PolicyManager`: alcanza un `mdm/PolicySpec.kt` que declare la lista y que los demás la consuman.
+- **`isPolicyActive()` leyendo `dpm.getUserRestrictions()` en vez de la preferencia.** `isRestrictionEnabled()` lee lo que LockSuite *quiso* aplicar, no lo que el sistema *tiene*. Cuando divergen, el panel muestra el interruptor encendido y el equipo está desprotegido, en silencio. Es el mismo tipo de bug que B.15 punto 3, pero para las restricciones DPM.
+- **19 restricciones `DISALLOW_*` que LockSuite no usa** (A Bloq maneja 39, LockSuite 20). La más valiosa: **`DISALLOW_CONFIG_PRIVATE_DNS`** (ver B.30). Siguen `DISALLOW_SMS`, `DISALLOW_OUTGOING_CALLS`, `DISALLOW_CONFIG_LOCATION`, `DISALLOW_AUTOFILL`, `DISALLOW_CONTENT_CAPTURE`, `DISALLOW_PRINTING`, `DISALLOW_USB_FILE_TRANSFER` y varias más.
+- **Un corta-internet REAL con el kernel de por medio.** Esto responde **B.4 de forma definitiva, y hay que leerlo con cuidado porque es fácil concluir lo contrario:** A Bloq usa `setAlwaysOnVpnPackage(..., lockdown = true)` **y le funciona**, porque su `BlockerVpnService` hace `addRoute("0.0.0.0", 0)` + `addAllowedApplication(propioPaquete)` — o sea que **su VPN es un corta-internet, no un filtro**, y con lockdown se queda con todo el tráfico y lo descarta. La de LockSuite es un túnel dividido de solo DNS: con lockdown, todo lo que no sea DNS se queda sin salida. **NO copiar `lockdown = true` sobre `KosherVpnService`.** Lo que sí conviene es copiar ese servicio como una **segunda** VPN solo para bloquear, y usarla en `setInternetBlocked()` y en `BootGate`: hoy los dos usan `setRecommendedGlobalProxy(127.0.0.1:9999)`, que es un proxy *recomendado* y que una app con sockets crudos o QUIC ignora. Una VPN con ruta por defecto lo hace cumplir el kernel — **fallo cerrado de verdad**, y de paso elimina de raíz el ajuste global que se quedaba clavado en B.20.
+- **BCrypt (costo 12) para el PIN** — cierra B.3-b, con implementación de referencia. Recordar la trampa: el hash se calcula en tres lugares que tienen que coincidir.
+- **Kiosco real del SO**: `setLockTaskPackages()` + `setLockTaskFeatures(LOCK_TASK_FEATURE_NONE)` + `startLockTask()` bloquea inicio, recientes, notificaciones y keyguard a nivel de sistema. `KosherLauncherActivity` es una Activity normal y se puede evadir con gestos según el equipo.
+- **`SecureUpdateHelper.verifyLocalApkSignature()`**: es el código de **B.6** ya escrito… pero **comentado**, con un `return true // TEMPORARILY BYPASS`. Copiar la forma, no el estado. Cubre la autoactualización; la Tienda administrada sigue necesitando el `sha256` en `version.json`/`storeApps`.
+
+**Lo que NO hay que copiar:** `lockdown=true` sobre la VPN actual; `isOfficialBuild()` (compara un string consigo mismo, devuelve `true` siempre — parece un control de integridad y no lo es); `ServiceWatchdogJob` (llama a `startForegroundService` en cada disparo sin mirar si el servicio ya corre — es justo el patrón que B.30 sacó de LockSuite); `BlockIncomingCallsFeature` (instala un APK de terceros desde los assets); la delegación en NetFree.
+
+**B.32 — SEGURIDAD Y DATOS PRIVADOS EN GITHUB. [AUDITADO 2/9]**
+
+**Lo bueno, medido:** `.gitignore` funciona. **No hay keystores, ni `google-services.json`, ni service accounts, ni `local.properties` — ni en HEAD ni en todo el historial** (`git log --all --diff-filter=A`). Eso descarta la clase de filtración más grave. La `apiKey` de `firebase-config.js` **no es un secreto**: es un identificador público del proyecto (así lo documenta Firebase); lo que protege es `database.rules.json`.
+
+**Lo que hay que sacar del repo:** `scratch/diagnostico_vpn_vivo/` son **2,1 MB de logcat en vivo del celular real del dueño** — fingerprint del equipo, todas las apps instaladas, comportamiento de red, 14 menciones de IMEI (no hay emails ni credenciales, se buscaron). No es crítico pero no tiene por qué estar público: sacarlo y agregar `scratch/` al `.gitignore`. También `zizR3CfM` (un ZIP suelto con una copia vieja de este documento) y `Claude web 1.zip`.
+
+**El problema de fondo sigue siendo B.2 + B.5.** El repo público expone, sin decompilar nada: la clave HMAC de presets (se puede firmar un `.locksuite` válido), el código de purga `*#*#9999#*#*`, **el mapa completo de evasión** (qué palabras busca la Capa 3, qué view-ids, qué dominios, los topes de tiempo del arranque protegido) y las reglas de Firebase. Nada de eso es una contraseña, así que no hay credenciales que rotar — pero para un producto cuyo valor es que el usuario final no pueda evadirlo, **publicar el mapa de evasión es el problema**. Pasar el repo a privado no rompe nada: el APK y `version.json` se sirven desde Firebase Hosting, así que el OTA y el instalador web siguen igual. ⚠️ **Efecto colateral a anotar:** hoy una sesión de IA puede clonar el repo público desde el contenedor y esquivar todo el problema del tope de 7 carpetas (así trabajó esta sesión). Cuando pase a privado, hay que pedir la carpeta `app\src\main\java\com\ejemplo\locksuite` desde el arranque.
+
+**El resto de la cuenta de GitHub no se pudo revisar**: la API está restringida a los repos configurados de la sesión y la página de repos está bloqueada por `robots.txt`. Pendiente: que el dueño pase la lista de repos.
+
+**B.33 — REGISTRO DECLARATIVO DE POLÍTICAS + 20 RESTRICCIONES NUEVAS COPIADAS DE A BLOQ. [ESCRITO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+Archivo nuevo: **`mdm/PolicySpec.kt`**. Es el patrón `ProtectionFeature`/`FeatureRegistry` de A Bloq (ver B.31) traído de forma incremental: una restricción = una entrada de una lista, con id, etiqueta, API mínima, comandos FCM y campo de reporte. `PolicyManager.setExtraRestriction()`, `reapplyAllRestrictions()`, `liftAllForSuspension()`, `clearAllRestrictions()`, el perfil exportable, el despacho de comandos FCM y el reporte al panel **recorren esa misma lista**. Antes, agregar una política eran cinco lugares a mano; ahora son la lista + el HTML del panel + `ALLOWED_COMMANDS` (esos dos son otro lenguaje y otro despliegue).
+
+**Por qué NO se migró todo `PolicyManager` al patrón:** son 91 KB con lógica que no es "una restricción del DPM" (suspensión, arranque protegido, presets, proxy, Knox, FRP). Reescribir eso sin poder compilar sería temerario. El registro cubre lo que es exactamente "una constante `DISALLOW_*` puesta o sacada", que es lo que se agrega seguido.
+
+**Las 20 restricciones nuevas** (de las 39 que maneja A Bloq contra las 20 que tenía LockSuite): `CONFIG_PRIVATE_DNS`, `SMS`, `OUTGOING_CALLS`, `CONFIG_LOCATION`, `SHARE_LOCATION`, `AUTOFILL`, `CONTENT_CAPTURE`, `PRINTING`, `USB_FILE_TRANSFER`, `DATA_ROAMING`, `AIRPLANE_MODE`, `AMBIENT_DISPLAY`, `SYSTEM_ERROR_DIALOGS`, `SET_WALLPAPER`, `SET_USER_ICON`, `CONFIG_CREDENTIALS`, `CONFIG_CELL_BROADCASTS`, `OUTGOING_BEAM`, `UNMUTE_MICROPHONE`, `REMOVE_MANAGED_PROFILE`.
+
+**La más importante es `DISALLOW_CONFIG_PRIVATE_DNS`** (API 29+): hoy el Watchdog reimpone "DNS privado apagado" **cada 60 segundos** porque el usuario lo puede tocar, y en esa ventana el filtro DNS no ve nada. Con la restricción, el usuario no lo puede tocar; el Watchdog pasa a un repaso cada 30 min (ver B.30) y el agujero se cierra de verdad.
+
+**Reporte honesto de soporte:** Android **acepta y descarta en silencio** una restricción que su versión no conoce. Por eso cada una reporta `<campo>Supported` y el panel deshabilita la fila en los equipos donde no rige — el mismo problema que ya estaba documentado para las reglas DNS por app.
+
+**Falta probar:** encender "Bloquear DNS privado" en el equipo Android 13 y confirmar en Ajustes que la entrada de DNS privado queda deshabilitada; encender dos o tres más y confirmar con `adb shell dumpsys user` que aparecen en las restricciones efectivas.
+
+**B.34 — VERIFICACIÓN DE ESTADO REAL: el panel podía mostrar "bloqueado" sobre un equipo abierto. [ESCRITO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+`PolicyManager.isRestrictionEnabled()` lee `SharedPreferences`: devuelve **lo que LockSuite quiso aplicar**. A Bloq resuelve el equivalente consultando `dpm.getUserRestrictions()`, que es **lo que el sistema tiene puesto**. La diferencia importa porque `addUserRestriction()` puede no surtir efecto sin fallar (un fabricante que la ignora, un Binder que falló, Knox pisando la política, una restricción que la versión no conoce). En todos esos casos el panel mostraba el interruptor encendido y el equipo estaba desprotegido, **sin ninguna forma de enterarse**.
+
+Nuevo: `PolicyManager.divergentRestrictions()` compara las dos vistas y reporta `policyDrift` / `policyDriftCount`; el panel muestra un aviso ámbar con la lista. **Solo reporta, no corrige** — corregir ya es trabajo de `reapplyAllRestrictions()`, que corre al arrancar y cada 15 min. Lo que faltaba era verlo.
+
+Es el mismo tipo de defecto que B.15 punto 3 ("se recordaba 'ya lo apliqué' en una variable en memoria", que era el vaivén de "se suspenden y vuelven a aparecer"), pero para las restricciones del DPM. La lección de aquella vez —**comparar y corregir en vez de ordenar**— es la que se aplicó acá.
+
+**B.35 — MODO KIOSCO REAL DEL SO (Lock Task), copiado de A Bloq. [ESCRITO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+Era el punto donde LockSuite estaba claramente más flojo. `KosherLauncherActivity` es una Activity común registrada como launcher preferido: es LA pantalla de inicio, pero **no impide salir de ella**, y la lista de apps permitidas es una decisión de interfaz que nadie hace cumplir — una notificación, un enlace profundo o un intent de otra app alcanzan para abrir cualquier cosa.
+
+Con `dpm.setLockTaskPackages()` + `setLockTaskFeatures()` + `startLockTask()` en `onResume()`, **lo hace cumplir Android**: solo se abren los paquetes de la lista. Interruptor `kiosk_lock_task_enabled` (`ENABLE/DISABLE_KIOSK_LOCK_TASK`), **apagado por defecto**.
+
+**Por qué NO se usó `LOCK_TASK_FEATURE_NONE` como A Bloq:** `NONE` bloquea también el menú de encendido y el bloqueo de pantalla. El conjunto elegido deja HOME (el botón de inicio vuelve al launcher), GLOBAL_ACTIONS (se puede apagar el equipo), KEYGUARD (sigue habiendo pantalla de bloqueo) y NOTIFICATIONS, y saca OVERVIEW (recientes), que es la vía de escape que importa. Cambiar a `NONE` es una constante, pero probalo en un equipo de descarte.
+
+⚠️ **ADVERTENCIA QUE HAY QUE LEER ANTES DE ENCENDERLO:** si el **marcador telefónico no está en la lista de apps permitidas**, en ese equipo no se va a poder marcar `*#*#9999#*#*`, que es la vía de recuperación. El panel pide confirmación explícita y lo dice. LockSuite se agrega siempre a sí misma. Se suelta en la suspensión y **primero de todo** en la purga (un equipo purgado que quede anclado no tendría ninguna app con Device Owner que pueda soltarlo: quedaría inutilizable para siempre).
+
+**B.36 — MODO TELÉFONO DE TECLAS (estilo Nokia). [ESCRITO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+Pedido del dueño, tomando como referencia KeyLauncher (`mitmachim.top/post/1235807`): *"un modo kiosco especial que imita a esta app… que se controla con botones"*, con *"opción de activar/desactivar el touch"* e íconos *"como de nokia viejos… cambia los contactos, llamadas etc"*.
+
+Archivos nuevos: **`ui/launcher/NokiaKeypadScreen.kt`** y **`ui/launcher/NokiaIconSet.kt`**. Pantalla de inicio con reloj grande y fecha; menú de 3×3 con las apps numeradas del 1 al 9; navegación con la cruceta, selección con el centro, atrás con la tecla derecha; barra de teclas suaves.
+
+**Nada se decompiló ni se copió de la app de referencia.** Se reprodujo el modelo de interacción de un teléfono de teclas, que es una convención de la industria, y los íconos son propios: siluetas planas de Material sobre cuadrados de color liso, con una paleta corta estilo Series 40. Lo que responde al reclamo del dueño es que el ícono va **por FUNCIÓN y no por app** — el menú dice "Contactos" con la silueta de la agenda, sea cual sea la app de contactos del equipo; el launcher de referencia deja el ícono original y por eso no parece un Nokia.
+
+Dos interruptores separados: `nokia_keypad_mode` (`ENABLE/DISABLE_NOKIA_MODE`, inofensivo) y `nokia_touch_enabled` (`ENABLE/DISABLE_NOKIA_TOUCH`, **encendido por defecto**).
+
+⚠️ **ALCANCE REAL DEL BLOQUEO DE TÁCTIL, DICHO SIN ADORNOS:** apaga el táctil **de la pantalla del launcher, no del equipo**. Android no le da a ninguna app —tampoco a un Device Owner— forma de desactivar el digitalizador para todo el sistema; eso necesita permisos de plataforma o root. Para que sea un modo de teclas de verdad hay que combinarlo con **B.35**: con los dos, el equipo solo abre las apps de la lista y el launcher no responde al dedo.
+
+**Salida de emergencia, y no hay que sacarla:** con el táctil apagado, un equipo **sin teclas físicas** queda manejable solo desde el panel. Por eso una pulsación sostenida de **3 segundos en la esquina superior derecha** abre la pantalla de administrador. Está documentada a propósito: una salida secreta que nadie recuerda no sirve de nada. Además el táctil se restaura siempre al suspender y al purgar.
+
+**Falta probar:** navegar el menú con la cruceta en un equipo que la tenga; los dígitos 1-9 como atajo; que el dígito respete la página actual; apagar el táctil y confirmar que el gesto de emergencia abre el login; y confirmar que los íconos de Llamadas/Contactos/Mensajes salen por función.
+
+**B.37 — VERIFICACIÓN DE FIRMA DE APK ANTES DE INSTALAR (mitad de B.6). [ESCRITO EN CÓDIGO 2/9, SIN COMPILAR NI PROBAR]**
+
+Archivo nuevo **`util/ApkSignatureVerifier.kt`**, cableado en `ApkInstaller.installApk()`. Compara la firma del APK descargado contra la del paquete instalado y **no instala** si difieren.
+
+Es la parte de `SecureUpdateHelper` de A Bloq que sirve, **con la verificación encendida** — conviene decirlo porque es una trampa: allá la función está entera pero comentada, con un `return true // TEMPORARILY BYPASS`. Se copió la forma, no el estado.
+
+**Esto NO cierra B.6 entero y no hay que darlo por cerrado.** Comparar firmas solo se puede si el paquete ya está instalado. Para la primera instalación de una app de la **Tienda administrada** sigue haciendo falta publicar el `sha256` en `version.json` / `storeApps` y compararlo contra el archivo descargado; eso necesita un cambio del lado del panel y queda pendiente.
+
+**B.38 — BUG ENCONTRADO CON UN CHEQUEO AUTOMÁTICO DE SIMETRÍA: `DISALLOW_CONFIG_DATE_TIME`. [ARREGLADO 2/9]**
+
+Se escribió un chequeo que compara las cuatro listas de restricciones de `PolicyManager` (aplicar / suspender / purgar / perfil) y encontró que `DISALLOW_CONFIG_DATE_TIME` estaba en `liftAllForSuspension()` y en `clearAllRestrictions()` (las dos del 1/9) **pero no en `reapplyAllRestrictions()`**: una restricción que el proyecto sabía levantar y limpiar pero **no sabía volver a aplicar después de un reinicio**. Era inofensivo mientras nada la activara (B.10 la tiene como "no implementada"), pero al sumarla al perfil exportable pasaba a ser un bug real: aplicás un perfil, el equipo bloquea la fecha, reiniciás, y el bloqueo se fue en silencio.
+
+**Es el mismo defecto que S-3 y P-3**, encontrado esta vez antes de que costara una sesión de diagnóstico. **Vale la pena conservar el chequeo**: extrae las cuatro listas con una expresión regular y las diferencia; correrlo después de tocar restricciones cuesta segundos. Está en el documento de instrucciones del 2/9.
+
+**B.39 — DECISIONES QUE NO SE TOMARON A CIEGAS (pendientes, con el porqué).**
+
+El dueño pidió aplicar todas las recomendaciones. Estas dos **no** se aplicaron, y no por olvido:
+
+- **BCrypt para el PIN (B.3-b).** A Bloq usa `BCrypt.withDefaults().hashToString(12, …)`, que es lo correcto. Pero el hash de LockSuite se calcula en **tres** lugares que tienen que coincidir exactamente (`PinManager.kt`, `hashPin` en `functions/index.js`, `hashPinLocal` en `app.js`) y hay PINs ya en producción. Cambiarlo mal, sin poder compilar ni desplegar Functions, **deja al dueño sin poder entrar a sus propios equipos**. Necesita: soporte de los dos algoritmos a la vez, migración al primer inicio de sesión correcto, y despliegue coordinado de app + panel + Function. Es una sesión con terminal, no un parche a ciegas.
+- **Firma asimétrica de presets (B.5).** Requiere generar el par de claves, meter la privada en una Cloud Function y desplegarla. Sin `firebase deploy` no se puede cerrar el círculo, y dejar la app verificando con una clave pública cuyo par no está desplegado **rompería todos los presets existentes**.
+
+---
 
 **B.10 — Menores / housekeeping:**
 
@@ -521,32 +662,78 @@ La purga total (`*#*#9999#*#*` → contraseña maestra → `EmergencyActivity.ex
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**1/9 — auditoría de las tres cosas que el dueño pidió mirar: red al activar la VPN, suspensión de LockSuite y borrado de LockSuite. Sesión de Claude por el puente al dispositivo: sin compilar, sin desplegar, sin commitear, y SIN TOCAR UNA SOLA LÍNEA DE CÓDIGO.**
+**2/9 — comparación con A Bloq, arreglo del canal de comandos / nombre / presets / consumo, y luego 20 restricciones nuevas + kiosco real + modo teléfono de teclas. Sesión de Claude por el puente al dispositivo: SÍ se tocó código (19 archivos, 4 nuevos), pero SIN compilar en Gradle, sin desplegar y SIN COMMITEAR (no hubo `device_bash`, o sea que no hubo `git`).**
 
-1. **Qué se pidió:** (a) revisar bien "el internet", que activar la VPN nunca dé problemas; (b) que la suspensión de LockSuite funcione; (c) que al borrar LockSuite se vaya todo y se desbloqueen las apps; (d) averiguar si el proyecto vivo es el del disco E o uno del disco C.
+Documento de detalle: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-02_ABLOQ_PANEL_BATERIA.md`** — con el orden de prueba, el porqué de cada cambio y el mensaje de commit listo para copiar.
 
-2. **Dónde quedó el proyecto (respuesta a (d)): en E, y no hay copia en C.** Medido, no supuesto. El HEAD del repo es `65bc6da4` del 31/8 18:40 UTC; los cuatro commits del 31/8 (`ae7582d1`, `1f4aad62`, `5266c35d`, `65bc6da4`) están todos en `E:\Documentos\Lock Suite segunda version`. Se recorrieron `C:\Users\israe\Desktop`, `\Downloads` y `\Documents`: no hay ningún proyecto Android; `Documents` directamente no existe porque `Documentos` está redirigido a E. Lo único que vive en C es el **IDE** Antigravity (`C:\Users\israe\AppData\Local\Programs\Antigravity\`), que no es una copia del proyecto. **La sospecha del 31/8 de que "se trabajó sobre otra copia" era una falsa alarma de 13 minutos** — ver el punto 3.
+1. **Qué se pidió:** (a) leer el repo de A Bloq y comparar; (b) presets que no andan; (c) que el panel web funcione y tenga todo lo que la app; (d) por qué los celulares no quedan en línea y por qué hay que cambiar el PIN varias veces; (e) el nombre de dispositivo de la web no se registra; (f) menos batería y CPU; (g) *(pedido durante la sesión)* seguridad y datos privados en GitHub.
 
-3. **Se cerró el misterio del APK "que nunca apareció" (B.22).** El 31/8 la bitácora dejó anotado que Antigravity decía haber compilado un APK que no estaba en la carpeta. Estaba, 13 minutos después: `admin-app-release.apk` y `admin-backend/public/LockSuite_Admin.apk` pesan hoy los dos **1.000.266 bytes** con fecha 31/8 17:59 UTC, la misma hora del commit `ae7582d1`. El salto de 4,8 MB a 1 MB es la firma de R8 recién activado. No se perdió nada. **Lección para la próxima: con dos agentes en paralelo, antes de escribir "el reporte no coincide con el disco", comparar las horas.**
+2. **El documento estaba una sesión atrasado, y conviene anotar cómo se detectó.** El HEAD real es `3d1174e` del **1/9 19:52 UTC**, no `65bc6da4` del 31/8: **Antigravity ya aplicó los parches de B.24, B.11 y B.25** que este archivo daba por pendientes. Se verificó comparando los tamaños de los 12 archivos clave contra `device_list_dir`: coinciden **byte por byte**. Corregido en B.11, B.24 y B.25 — lo que falta ahí es la prueba en equipo, no el código.
 
-4. **Red / VPN (a): se encontró una CUARTA causa del "se cae internet", distinta de las tres ya arregladas.** El reintento a DNS público que se agregó en B.21 solo se dispara ante un **timeout**, y el error que realmente aparece cuando el socket quedó atado a una red que se cayó es `ENETUNREACH` / `PortUnreachableException` — que no es timeout. Esas consultas se descartan sin ningún reintento. Más otros seis defectos de red, del más grave al más menor, con el porqué de cada uno, en **B.24**.
+3. **Hallazgo de método que ahorra una sesión entera: el repo público se puede CLONAR desde el contenedor.** `git clone https://github.com/CHKI541/Lock-Suite` funciona sin credenciales y esquiva de una el tope de 7 carpetas de `device_stage_files` y el truco de `.git/objects/` del 1/9. Verificar siempre que el clon corresponde al disco comparando tamaños contra `device_list_dir`. **Esto deja de funcionar el día que el repo pase a privado (B.2/B.32)** — ahí hay que pedir la carpeta `app\src\main\java\com\ejemplo\locksuite` desde el arranque. (En esta sesión `device_bash` volvió a no montar, por tercera vez consecutiva; ya se puede dar por sentado que no va a montar.)
 
-5. **Suspensión (b): tres defectos, y los tres rompen justo las pruebas que B.11 tenía pendientes.** Reiniciar un equipo suspendido devuelve la marca de agua kosher (`BootReceiver` no mira la suspensión, el Watchdog sí — asimetría); las apps ocultas no vuelven a ocultarse al reanudar, porque `hide_<paquete>` no se reconstruye en ningún lado; y `DISALLOW_CONFIG_LOCALE` no se levanta al suspender. Detalle en **B.11**.
+4. **(d) y (c) eran EL MISMO BUG, y es el hallazgo más importante de la sesión.** Tres causas encadenadas hacían que el celular descartara **todos** los comandos del panel **sin dejar ningún rastro** (`return` mudo, mientras la Function ya había escrito `status: "sent"`): el secreto de firma se desincroniza al reinstalar la app y las reglas no dejan resincronizarlo; ese rechazo se llevaba puesto **también el PIN**, porque viajaban en el mismo `updateChildren()` atómico —de ahí "hay que cambiar el pin varias veces"—; y la ventana de 5 minutos se comparaba contra el **reloj de pared del celular**, que en un equipo sin hora de red está corrido. Detalle y arreglos en **B.26**.
 
-6. **Borrado (c): la purga no deja el equipo limpio.** `clearAllRestrictions()` no des-suspende las apps que el administrador había suspendido una por una, y encima el paso previo de la purga las **vuelve a suspender** al des-ocultarlas. Y si alguna vez se encendió el bloqueo de idioma, el equipo queda sin poder cambiar de idioma para siempre, ya sin ninguna app con Device Owner para deshacerlo. Detalle en **B.25**.
+5. **(e) El nombre de la web se borraba solo en segundos**, porque `syncDeviceInfo()` lo re-escribía desde la preferencia local (vacía) en cada sincronización. Ahora manda el panel. Ver **B.27**.
 
-7. **Nada de esto se arregló en código, a propósito.** No hubo `device_bash` (la VM del dispositivo no arrancó), así que no había forma de compilar, ni de type-checkear contra el proyecto real, ni de commitear — y escribir Kotlin a ciegas en archivos que después no se pueden volver a leer es peor que no tocarlos. Los parches exactos, listos para pegar, quedaron en **`INSTRUCCIONES_ANTIGRAVITY_2026-09-01_RED_SUSPENSION_BORRADO.md`**, con el orden de prueba y el mensaje de commit.
+6. **(b) Los presets fallaban por una razón que no se ve leyendo el código de a un lado por vez:** Realtime Database **no guarda arrays vacíos**, así que el `perAppInternetBlocked: []` sobre el que se firmaba desaparecía al guardar, y la firma no podía coincidir **nunca**. Casi ningún perfil hecho en el panel se podía aplicar. Más una restricción con la clave mal escrita que no se aplicó jamás. Ver **B.28**.
 
-8. **Hallazgo de entorno que vale para todas las sesiones que vengan:** el tope de 7 carpetas de `device_stage_files` **se puede esquivar leyendo `.git/objects/`**, que está a 2 niveles. Así se leyeron los 12 archivos Kotlin de esta auditoría sin molestar al dueño. Receta completa, y sus dos límites (solo lee lo commiteado; los objetos empaquetados no se bajan), en la sección de limitaciones del entorno de la parte A.
+7. **(c) La paridad de comandos panel↔app estaba BIEN**, medida con un script: `ALLOWED_COMMANDS` 106, la app maneja 105, el panel referencia 105, y la única diferencia (`VERIFY_PIN`) es correcta. **El problema del panel nunca fue que le faltaran comandos: era que los comandos se perdían en silencio** (punto 4). Se agregó lo que sí faltaba: acks con motivo, aviso de re-vinculación y estado "En reposo".
+
+8. **(f) Batería: 8.640 arranques de servicio por día tirados a la basura.** El ciclo de 20 s hacía `startForegroundService()` de la VPN y de la marca de agua **siempre**, corrieran o no. Ver **B.30**, incluida la explicación de por qué el cambio no debilita la auto-reparación (importante para que nadie lo "simplifique" después) y tres optimizaciones más grandes que quedaron **sugeridas y sin aplicar** porque cambian comportamiento.
+
+9. **(a) A Bloq: siete cosas que conviene copiar y cinco que no.** Ver **B.31**. Lo más valioso es el patrón `ProtectionFeature`/`FeatureRegistry` (una política = un objeto, en vez de mantener la lista a mano en cinco lugares) y `isPolicyActive()` leyendo el estado real del sistema en vez de la preferencia. **Y una respuesta definitiva a B.4:** A Bloq usa `lockdown = true` y le funciona **porque su VPN es un corta-internet con ruta por defecto, no un filtro** — o sea que sigue sin haber que copiarlo sobre `KosherVpnService`, pero sí conviene copiar ese servicio como una **segunda** VPN para que "bloquear internet" y el arranque protegido dejen de depender de un proxy *recomendado* que QUIC ignora.
+
+10. **(g) Seguridad: la buena noticia es que no hay credenciales filtradas.** Ni keystores, ni `google-services.json`, ni service accounts, ni en HEAD ni en el historial. Lo que sí hay que sacar es `scratch/diagnostico_vpn_vivo/` (2,1 MB de logcat del celular real). Y el problema de fondo sigue siendo que **el repo es público**, o sea que el mapa de evasión completo está publicado. Ver **B.32**. El resto de la cuenta de GitHub **no se pudo revisar** (la API está restringida a los repos de la sesión): falta que el dueño pase la lista.
+
+11. **Verificación hecha:** `kotlinc` 2.0.21 contra stubs escritos a mano, **0 errores / 0 warnings** sobre todo el código nuevo, con **cuatro controles negativos** que el chequeo detectó (sin eso, un "0 errores" puede ser simplemente que no compiló nada). Parseo limpio de los 9 `.kt` completos. `node --check` sobre `app.js` e `index.js`. **NO se corrió Gradle y NO se probó nada en equipo real.**
+
+12. **Segunda mitad de la sesión — el dueño pidió aplicar TODAS las recomendaciones y copiar más de A Bloq.** Se agregó: el registro declarativo de políticas con **20 restricciones nuevas** (**B.33**), la verificación de estado real contra `getUserRestrictions()` (**B.34**), el **kiosco real del SO** con Lock Task (**B.35**), el **modo teléfono de teclas estilo Nokia** con íconos propios y bloqueo de táctil (**B.36**), la **verificación de firma de APK** (**B.37**), y las tres optimizaciones de batería que habían quedado sugeridas (**B.30**). El panel pasó de 65 a **107 interruptores** y de 106 a **152 comandos**, todos verificados alineados entre app, Cloud Function y panel.
+
+13. **Un bug nuevo, encontrado con un chequeo automático que conviene conservar (B.38).** Comparando las cuatro listas de restricciones de `PolicyManager` apareció que `DISALLOW_CONFIG_DATE_TIME` se levantaba y se limpiaba pero **no se volvía a aplicar tras un reinicio**. Es el mismo defecto que S-3 y P-3, pero esta vez lo encontró un script en segundos en vez de una sesión de diagnóstico.
+
+14. **Dos recomendaciones NO se aplicaron, a propósito (B.39):** BCrypt para el PIN y la firma asimétrica de presets. Las dos tocan tres implementaciones que tienen que coincidir y necesitan desplegar Cloud Functions; hacerlas a ciegas puede dejar al dueño **sin poder entrar a sus propios equipos** o romper todos los presets existentes. Necesitan una sesión con terminal.
+
+15. **Limpieza de seguridad (B.32):** se sacaron del repo `scratch/` (2,1 MB de logcat del celular real), `zizR3CfM` y `Claude web 1.zip`, y se agregaron al `.gitignore`. ⚠️ Del lado del dueño hay que correr `git rm -r --cached scratch/` — el `.gitignore` NO deja de rastrear lo que ya estaba rastreado.
+
+16. **Lo que falta y no puede hacer una sesión por el puente:** compilar, desplegar el panel (`firebase deploy --only hosting,functions` — **esta vez SÍ hace falta `functions`**, porque `ALLOWED_COMMANDS` cambió; el cache-buster quedó en `app.js?v=24`) y **hacer el commit**.
 
 ---
 
 ## Estado del repo (git)
 
-**1/9:** HEAD = `65bc6da4` ("admin-backend: corregir diseño y botones compactos…"), del **31/8 18:40 UTC**. Los 11 archivos que el 31/8 figuraban como **sin commitear ya están commiteados**: los levantó Antigravity en `ae7582d1` (31/8 17:59 UTC) junto con el APK de `:admin-app`. Por fecha de modificación, **ningún archivo del proyecto se tocó después de ese último commit**, así que el working tree parece limpio — con la salvedad de que esta sesión no tuvo `git` y no pudo correr `git status` de verdad: confirmalo con `git status` antes de compilar.
+**2/9:** HEAD = `3d1174e` ("fix(red/suspension/borrado): reintento DNS ante ENETUNREACH, eleccion de red validada, y simetria de suspender/purgar"), del **1/9 19:52 UTC**. Antes de compilar, confirmá con `git log -1` y `git status`.
 
-- `:app` (MDM) sigue en **versionCode 95 / versionName 0.6.32**, igual que `admin-backend/public/version.json`. Esta sesión no lo tocó.
-- `:admin-app` está en **versionCode 2 / 1.1.0**, compilado y desplegado (1.000.266 bytes), sin probar en el celular.
-- Esta sesión **no dejó ningún cambio de código para commitear**: lo único que escribió son dos documentos (este archivo y el de instrucciones del 1/9).
+**Sin commitear, escritos en disco por la sesión del 2/9 (15 modificados + 4 archivos Kotlin nuevos + 2 documentos):**
+
+- `app/src/main/java/com/ejemplo/locksuite/util/FirebaseDeviceSync.kt`
+- `app/src/main/java/com/ejemplo/locksuite/service/LockSuiteFirebaseService.kt`
+- `app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt`
+- `app/src/main/java/com/ejemplo/locksuite/service/WatchdogForegroundService.kt`
+- `app/src/main/java/com/ejemplo/locksuite/service/WatermarkService.kt`
+- `app/src/main/java/com/ejemplo/locksuite/service/KosherVpnService.kt`
+- `app/src/main/java/com/ejemplo/locksuite/receiver/BootReceiver.kt`
+- `app/src/main/java/com/ejemplo/locksuite/worker/WatchdogWorker.kt`
+- `app/src/main/java/com/ejemplo/locksuite/ui/dashboard/DashboardActivity.kt`
+- `admin-backend/public/app.js`
+- `admin-backend/public/index.html` (cache-buster a `app.js?v=24`)
+- `admin-backend/functions/index.js` — **`ALLOWED_COMMANDS` pasó de 106 a 152: hay que desplegar `functions`, si no el panel va a recibir "Comando no reconocido" en todo lo nuevo**
+- `app/src/main/java/com/ejemplo/locksuite/ui/launcher/KosherLauncherActivity.kt`
+- `app/src/main/java/com/ejemplo/locksuite/util/ApkInstaller.kt`
+- `.gitignore`
+- **Archivos Kotlin NUEVOS** (hay que agregarlos al repo, no solo modificarlos):
+  - `app/src/main/java/com/ejemplo/locksuite/mdm/PolicySpec.kt`
+  - `app/src/main/java/com/ejemplo/locksuite/util/ApkSignatureVerifier.kt`
+  - `app/src/main/java/com/ejemplo/locksuite/ui/launcher/NokiaIconSet.kt`
+  - `app/src/main/java/com/ejemplo/locksuite/ui/launcher/NokiaKeypadScreen.kt`
+- `INSTRUCCIONES_ANTIGRAVITY_2026-09-02_ABLOQ_PANEL_BATERIA.md` *(nuevo)*
+- este archivo
+
+**Borrados del repo (siguen en tu disco):** `scratch/`, `zizR3CfM`, `Claude web 1.zip`. Del lado tuyo: `git rm -r --cached scratch/ && git rm --cached zizR3CfM "Claude web 1.zip"`.
+
+**Ojo con `deploy_all.ps1`:** hace `git add .`, así que commitea junto TODO lo que esté sin commitear. Si querés el commit del 2/9 separado, hacelo **antes** de correr el script.
+
+- `:app` (MDM) sigue en **versionCode 95 / versionName 0.6.32**, igual que `admin-backend/public/version.json`. Esta sesión no lo tocó: **subilo antes de compilar** (o dejá que `deploy_all.ps1` lo haga).
+- `:admin-app` sigue en **versionCode 2 / 1.1.0**, compilado y desplegado, **sin probar en el celular** (B.22).
 
 **26/8:** el repositorio quedó sincronizado con `main` en GitHub tras el despliegue de **0.6.32 (código 95)**; APK release publicado en Firebase Hosting (`admin-backend/public/locksuite-latest.apk` y `version.json`), auto-updater OTA activo.

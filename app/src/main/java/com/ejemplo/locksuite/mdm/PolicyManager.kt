@@ -342,6 +342,157 @@ class PolicyManager(private val context: Context) {
      *                         y al desactivar regresa al launcher nativo. Pasar false cuando se llama
      *                         desde applyAllPolicies / Watchdog para no interrumpir al usuario.
      */
+    // ─────────────────────────────────────────────
+    // KIOSCO REAL DEL SISTEMA OPERATIVO  (Lock Task, 2/9/2026)
+    //
+    // Copiado de A Bloq (`kiosk/manager/KioskLockManager.kt`), que es donde LockSuite
+    // estaba claramente más flojo.
+    //
+    // QUÉ PROBLEMA RESUELVE. `KosherLauncherActivity` es una Activity de Compose común,
+    // registrada como launcher preferido con `addPersistentPreferredActivity()`. Eso hace
+    // que sea LA pantalla de inicio, pero **no impide salir de ella**: basta con que algo
+    // lance otra Activity —una notificación, un enlace profundo, un intent de otra app, el
+    // botón de recientes en algunos equipos— para estar fuera del launcher kosher, con la
+    // app abierta. La lista de apps permitidas del launcher es, hoy, una decisión de
+    // interfaz: nadie la hace cumplir.
+    //
+    // Con Lock Task la hace cumplir **el sistema operativo**: solo se pueden abrir los
+    // paquetes de la lista blanca, y el intento de abrir cualquier otro lo rechaza Android,
+    // no LockSuite. Es la misma diferencia que hay entre el proxy "recomendado" y una ruta
+    // de VPN: una es una sugerencia y la otra la aplica el kernel.
+    //
+    // POR QUÉ NO SE USA `LOCK_TASK_FEATURE_NONE` COMO A BLOQ. `NONE` bloquea también el
+    // menú de encendido y el bloqueo de pantalla. Un equipo del que no se puede salir Y que
+    // no se puede apagar Y que no tiene pantalla de bloqueo es un ladrillo cómodo de crear
+    // y muy incómodo de deshacer, sobre todo probando. El conjunto elegido acá deja:
+    //   • HOME — el botón de inicio vuelve al launcher kosher (que es lo que queremos);
+    //   • GLOBAL_ACTIONS — se puede apagar y reiniciar el equipo;
+    //   • KEYGUARD — sigue habiendo pantalla de bloqueo;
+    //   • NOTIFICATIONS — se ven las notificaciones (si no, no se ve ni una llamada perdida).
+    // y deja fuera OVERVIEW (recientes), que es la vía de escape que importa.
+    // Si algún día se quiere el kiosco total, es cambiar esta constante por
+    // `LOCK_TASK_FEATURE_NONE` — pero probalo en un equipo de descarte primero.
+    //
+    // ⚠️ ADVERTENCIA QUE HAY QUE LEER ANTES DE ENCENDERLO. Estando en Lock Task solo se
+    // abren los paquetes de la lista. **Si el marcador telefónico no está en la lista de
+    // apps permitidas del launcher, el código de emergencia `*#*#9999#*#*` no se puede
+    // marcar**, y esa es la vía de recuperación del equipo. LockSuite se agrega siempre a
+    // sí misma; el marcador es decisión del administrador. Por eso el interruptor viene
+    // APAGADO por defecto.
+    // ─────────────────────────────────────────────
+
+    // ─────────────────────────────────────────────
+    // MODO TELÉFONO DE TECLAS  (2/9/2026)
+    //
+    // Pantalla de inicio estilo Nokia manejada con la cruceta y los números, con íconos
+    // propios por FUNCIÓN (Llamadas, Contactos, Mensajes…) en vez del ícono original de
+    // cada app. Ver ui/launcher/NokiaKeypadScreen.kt y NokiaIconSet.kt.
+    //
+    // Son DOS interruptores separados a propósito:
+    //   • `nokia_keypad_mode` cambia la pantalla del launcher. Inofensivo: se puede
+    //     encender y apagar sin riesgo.
+    //   • `nokia_touch_enabled` apaga el táctil DENTRO del launcher. Ese sí tiene filo:
+    //     en un equipo sin teclas físicas deja la pantalla de inicio manejable solo por
+    //     el panel (o con el gesto de emergencia de 3 s en la esquina superior derecha).
+    //     Por eso viene ENCENDIDO por defecto: apagar el táctil es una decisión explícita.
+    // ─────────────────────────────────────────────
+
+    fun isNokiaKeypadMode(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("nokia_keypad_mode", false)
+
+    fun setNokiaKeypadMode(enable: Boolean): Boolean {
+        if (deferIfSuspended("nokia_keypad_mode", enable)) return true
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("nokia_keypad_mode", enable).apply()
+        // El launcher decide qué pantalla dibuja en onCreate(), así que hay que recrearlo
+        // para que el cambio se vea sin que el usuario tenga que reiniciar el equipo.
+        if (isKosherLauncherEnabled()) {
+            try {
+                val i = Intent(context, com.ejemplo.locksuite.ui.launcher.KosherLauncherActivity::class.java)
+                i.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                context.startActivity(i)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        return true
+    }
+
+    fun isNokiaTouchEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("nokia_touch_enabled", true)
+
+    fun setNokiaTouchEnabled(enable: Boolean): Boolean {
+        if (deferIfSuspended("nokia_touch_enabled", enable)) return true
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("nokia_touch_enabled", enable).apply()
+        return true
+    }
+
+    fun isKioskLockTaskEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("kiosk_lock_task_enabled", false)
+
+    /**
+     * Paquetes que pueden correr en Lock Task: los permitidos del launcher kosher, más
+     * LockSuite. LockSuite va siempre y sin excepción: es la que entra a Lock Task, la que
+     * lo tiene que poder soltar, y la que muestra la pantalla de recuperación.
+     */
+    private fun lockTaskAllowedPackages(): Array<String> {
+        val allowed = PrefsHelper.getMdmPrefs(context)
+            .getStringSet("allowed_packages", null) ?: emptySet()
+        return (allowed + context.packageName).toTypedArray()
+    }
+
+    fun setKioskLockTaskEnabled(enable: Boolean): Boolean {
+        if (deferIfSuspended("kiosk_lock_task_enabled", enable)) return true
+        return try {
+            PrefsHelper.getMdmPrefs(context).edit()
+                .putBoolean("kiosk_lock_task_enabled", enable).apply()
+            applyKioskLockTask(enable)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * Aplica el estado de Lock Task al sistema. Se llama al encender el interruptor, al
+     * reaplicar restricciones tras un reinicio, y cada vez que cambia la lista de apps
+     * permitidas del launcher (si no, una app recién permitida no se podría abrir).
+     */
+    fun applyKioskLockTask(enable: Boolean) {
+        try {
+            if (enable) {
+                dpm.setLockTaskPackages(adminComponent, lockTaskAllowedPackages())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    dpm.setLockTaskFeatures(
+                        adminComponent,
+                        DevicePolicyManager.LOCK_TASK_FEATURE_HOME or
+                            DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS or
+                            DevicePolicyManager.LOCK_TASK_FEATURE_KEYGUARD or
+                            DevicePolicyManager.LOCK_TASK_FEATURE_NOTIFICATIONS
+                    )
+                }
+            } else {
+                // Vaciar la lista PRIMERO: con la lista vacía, cualquier tarea que siguiera
+                // anclada se suelta sola. Al revés (devolver las features y después vaciar)
+                // deja una ventana en que el equipo sigue anclado sin lista.
+                dpm.setLockTaskPackages(adminComponent, arrayOf())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    dpm.setLockTaskFeatures(
+                        adminComponent,
+                        DevicePolicyManager.LOCK_TASK_FEATURE_HOME or
+                            DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS or
+                            DevicePolicyManager.LOCK_TASK_FEATURE_KEYGUARD or
+                            DevicePolicyManager.LOCK_TASK_FEATURE_NOTIFICATIONS or
+                            DevicePolicyManager.LOCK_TASK_FEATURE_OVERVIEW or
+                            DevicePolicyManager.LOCK_TASK_FEATURE_SYSTEM_INFO
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     fun setKosherLauncherEnabled(enabled: Boolean, openImmediately: Boolean = true): Boolean {
         if (deferIfSuspended("kosher_launcher_enabled", enabled)) return true
         return try {
@@ -506,6 +657,98 @@ class PolicyManager(private val context: Context) {
 
     fun isLocaleChangeBlocked(): Boolean =
         isRestrictionEnabled(UserManager.DISALLOW_CONFIG_LOCALE)
+
+    // ─────────────────────────────────────────────
+    // RESTRICCIONES DEL REGISTRO DECLARATIVO  (2/9/2026)
+    //
+    // Ver `mdm/PolicySpec.kt` para el porqué. Estas tres funciones son TODO lo que hace
+    // falta del lado de PolicyManager para cualquier restricción nueva que se agregue a
+    // esa lista: no hay un setter por restricción.
+    // ─────────────────────────────────────────────
+
+    /**
+     * Restricciones que LockSuite cree tener aplicadas pero que el sistema NO tiene puestas.
+     *
+     * ─────────────────────────────────────────────────────────────────────────────
+     * POR QUÉ ESTO EXISTE (patrón copiado de A Bloq, 2/9/2026)
+     * ─────────────────────────────────────────────────────────────────────────────
+     *
+     * `isRestrictionEnabled()` lee `SharedPreferences`: devuelve **lo que LockSuite quiso
+     * aplicar**, no lo que el equipo tiene. A Bloq, en cambio, resuelve el equivalente
+     * (`isPolicyActive()`) consultando `dpm.getUserRestrictions(admin)`, que es **lo que el
+     * sistema tiene puesto de verdad**.
+     *
+     * La diferencia importa porque `addUserRestriction()` puede no surtir efecto sin fallar:
+     * un fabricante que la ignora, un Binder que falló en el momento justo, una restricción
+     * que esta versión de Android no conoce (las acepta y las descarta en silencio), o Knox
+     * pisando la política. En todos esos casos, hasta ahora, **el panel mostraba el
+     * interruptor encendido sobre un equipo desprotegido** y no había forma de enterarse.
+     *
+     * Es el mismo tipo de defecto que ya costó caro en este proyecto: B.15 punto 3
+     * ("se recordaba 'ya lo apliqué' en una variable en memoria" — y eso era, textual, el
+     * vaivén de "se suspenden y vuelven a aparecer"). La lección de aquella vez fue
+     * **comparar y corregir en vez de ordenar**. Esto es lo mismo, para las restricciones
+     * del DPM.
+     *
+     * Solo REPORTA, no corrige: corregir es trabajo de `reapplyAllRestrictions()`, que ya
+     * corre al arrancar y cada 15 minutos. Lo que faltaba era **verlo**.
+     */
+    fun divergentRestrictions(): List<String> {
+        return try {
+            val reales = dpm.getUserRestrictions(adminComponent)
+            val candidatas = PolicySpec.EXTRA_RESTRICTIONS
+                .filter { it.supportedHere }
+                .map { it.restriction } + listOf(
+                UserManager.DISALLOW_FACTORY_RESET,
+                UserManager.DISALLOW_INSTALL_APPS,
+                UserManager.DISALLOW_UNINSTALL_APPS,
+                UserManager.DISALLOW_DEBUGGING_FEATURES,
+                UserManager.DISALLOW_SAFE_BOOT,
+                UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
+                UserManager.DISALLOW_CONFIG_WIFI,
+                UserManager.DISALLOW_CONFIG_VPN,
+                UserManager.DISALLOW_BLUETOOTH,
+                UserManager.DISALLOW_CONFIG_TETHERING,
+                UserManager.DISALLOW_CONFIG_LOCALE,
+                UserManager.DISALLOW_APPS_CONTROL,
+                UserManager.DISALLOW_MODIFY_ACCOUNTS
+            )
+            candidatas.distinct().filter { r ->
+                // Solo interesa el caso peligroso: la pedimos y NO está puesta.
+                // Al revés (puesta sin pedirla) puede ser política de otro origen y no es
+                // un agujero de seguridad.
+                isRestrictionEnabled(r) && !reales.getBoolean(r, false)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+    }
+
+    /** Aplica o quita una restricción del registro. Respeta la suspensión igual que el resto. */
+    fun setExtraRestriction(spec: ExtraRestriction, block: Boolean): Boolean =
+        setRestriction(spec.restriction, block)
+
+    fun isExtraRestrictionEnabled(spec: ExtraRestriction): Boolean =
+        isRestrictionEnabled(spec.restriction)
+
+    /**
+     * Estado de todas las restricciones del registro, listo para reportar al panel.
+     *
+     * Devuelve dos campos por restricción: si está pedida, y si este equipo la soporta.
+     * Lo segundo importa porque Android **acepta y descarta en silencio** una restricción
+     * que su versión no conoce — el mismo problema que ya estaba documentado para las
+     * reglas DNS por app, donde el panel mostraba el interruptor encendido en equipos
+     * donde la regla no regía. Reportarlo evita esa mentira.
+     */
+    fun extraRestrictionsStatus(): Map<String, Any> {
+        val out = mutableMapOf<String, Any>()
+        for (spec in PolicySpec.EXTRA_RESTRICTIONS) {
+            out[spec.reportField] = isExtraRestrictionEnabled(spec)
+            out["${spec.reportField}Supported"] = spec.supportedHere
+        }
+        return out
+    }
 
     fun disablePrivateDns() {
         try {
@@ -859,10 +1102,23 @@ class PolicyManager(private val context: Context) {
             UserManager.DISALLOW_APPS_CONTROL,
             UserManager.DISALLOW_BLUETOOTH_SHARING,
             UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
-            UserManager.DISALLOW_CONFIG_TETHERING
+            UserManager.DISALLOW_CONFIG_TETHERING,
+            // 2/9/2026 — faltaban en el perfil aunque la app y el panel sí las manejan.
+            // Un perfil que no las incluye no las apaga NI las prende al aplicarse: el
+            // equipo queda a medio configurar y parece que "el preset no anduvo".
+            UserManager.DISALLOW_BLUETOOTH,
+            UserManager.DISALLOW_CONFIG_LOCALE,
+            UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS,
+            UserManager.DISALLOW_CONFIG_DATE_TIME
         )
         for (r in allRestrictions) {
             restrictionsObj.put(r, isRestrictionEnabled(r))
+        }
+        // Las del registro declarativo se suman con su clave real de UserManager, igual que
+        // el resto: la importación recorre las claves del objeto, así que no hace falta
+        // ningún caso especial del otro lado. Ver mdm/PolicySpec.kt.
+        for (spec in PolicySpec.EXTRA_RESTRICTIONS) {
+            restrictionsObj.put(spec.restriction, isExtraRestrictionEnabled(spec))
         }
         dataObj.put("restrictions", restrictionsObj)
         dataObj.put("cameraDisabled", isCameraDisabled())
@@ -878,8 +1134,22 @@ class PolicyManager(private val context: Context) {
         dataObj.put("mercadoPagoBlockOffersVpn", isMercadoPagoBlockOffersVpnEnabled())
         dataObj.put("blockMlInMp", isMercadoLibreInMpBlocked())
         dataObj.put("kosherLauncherEnabled", isKosherLauncherEnabled())
+        // 2/9/2026 — interruptores que existen en la app y en el panel pero que el perfil
+        // no guardaba. Sin esto, "exportar el perfil de un equipo bien configurado y
+        // aplicarlo a otro" dejaba afuera justamente las protecciones más nuevas.
+        dataObj.put("flashingBlocked", isFlashingBlocked())
+        dataObj.put("hideSuspendedApps", isHideSuspendedApps())
+        dataObj.put("accessibilityProtection", isAccessibilityProtectionEnabled())
+        dataObj.put("accBounceSettings", isAccBounceSettingsEnabled())
+        dataObj.put("accNag", isAccNagEnabled())
+        dataObj.put("accSuspendAll", isAccSuspendAllEnabled())
+        dataObj.put("bootGateEnabled", isBootGateEnabled())
+        dataObj.put("bootGateWaitAccessibility", isBootGateWaitAccessibilityEnabled())
+        dataObj.put("imageBlockStrictScroll", isImageBlockStrictScrollEnabled())
+        dataObj.put("kioskLockTask", isKioskLockTaskEnabled())
+        dataObj.put("nokiaKeypadMode", isNokiaKeypadMode())
+        dataObj.put("nokiaTouchEnabled", isNokiaTouchEnabled())
 
-        
         val perAppNetArr = org.json.JSONArray()
         getPerAppInternetBlockedPackages().forEach { perAppNetArr.put(it) }
         dataObj.put("perAppInternetBlocked", perAppNetArr)
@@ -902,14 +1172,41 @@ class PolicyManager(private val context: Context) {
             val rootObj = org.json.JSONObject(jsonString)
             val dataObj = rootObj.getJSONObject("data")
             val signature = rootObj.optString("signature", "")
-            
-            // Verificación HMAC Anti-Evasión con fallback retrocompatible
+
+            // Verificación HMAC Anti-Evasión con fallbacks retrocompatibles.
+            //
+            // ⚠️ 2/9/2026 — POR QUÉ HAY UN TERCER FALLBACK ("array vacío perdido").
+            //
+            // Realtime Database NO GUARDA arrays vacíos: son equivalentes a null, así que
+            // la clave desaparece del nodo. El panel arma el perfil con
+            // `perAppInternetBlocked: []` cuando el equipo no tiene ninguna app con
+            // internet bloqueado —el caso normal—, FIRMA sobre ese objeto, y recién
+            // después lo guarda en `presets/`. Al leerlo de vuelta para aplicarlo, la clave
+            // ya no está: el objeto que llega al celular NO es el que se firmó, la firma no
+            // puede coincidir nunca, y el perfil se rechaza con "archivo alterado".
+            //
+            // O sea: TODO perfil creado desde el panel en un equipo sin bloqueos de
+            // internet por app era imposible de aplicar. Ese es, textual, "los presets no
+            // andan bien". El fallback reconstruye la clave que RTDB se comió y verifica
+            // contra eso. El panel también se corrigió para no firmar claves que no va a
+            // guardar (ver admin-backend/public/app.js), así que esto es para los perfiles
+            // que ya quedaron guardados de antes.
             val canonicalData = canonicalizeJson(dataObj)
             val computedSignature = computeHmacSha256(canonicalData)
             if (!computedSignature.equals(signature, ignoreCase = true)) {
-                // Fallback: verificar con el formato heredado (toString())
+                // Fallback 1: formato heredado (toString() sin canonicalizar).
                 val legacyComputed = computeHmacSha256(dataObj.toString())
-                if (!legacyComputed.equals(signature, ignoreCase = true)) {
+                // Fallback 2: el array vacío que Realtime Database descarta al guardar.
+                val restoredComputed = if (!dataObj.has("perAppInternetBlocked")) {
+                    val restored = org.json.JSONObject(dataObj.toString())
+                    restored.put("perAppInternetBlocked", org.json.JSONArray())
+                    computeHmacSha256(canonicalizeJson(restored))
+                } else {
+                    ""
+                }
+                if (!legacyComputed.equals(signature, ignoreCase = true) &&
+                    (restoredComputed.isEmpty() || !restoredComputed.equals(signature, ignoreCase = true))
+                ) {
                     android.util.Log.e("PolicyManager", "🚨 FIRMA HMAC INVÁLIDA: El archivo de respaldo ha sido alterado o corrupto.")
                     throw SecurityException("Firma del archivo de respaldo inválida. Archivo alterado no autorizado.")
                 }
@@ -921,11 +1218,10 @@ class PolicyManager(private val context: Context) {
             while (keys.hasNext()) {
                 val key = keys.next()
                 val enabled = restrictionsObj.getBoolean(key)
-                if (enabled) {
-                    setRestriction(key, true)
-                } else {
-                    setRestriction(key, false)
-                }
+                // normalizeRestrictionKey(): el panel venía escribiendo "no_apps_control",
+                // que NO es la constante de Android (es "no_control_apps"). Ese bloqueo
+                // simplemente no se aplicaba nunca al importar un perfil hecho en el panel.
+                setRestriction(normalizeRestrictionKey(key), enabled)
             }
 
             setCameraDisabled(dataObj.optBoolean("cameraDisabled", false))
@@ -942,6 +1238,23 @@ class PolicyManager(private val context: Context) {
             setMercadoLibreInMpBlocked(dataObj.optBoolean("blockMlInMp", false))
             setKosherLauncherEnabled(dataObj.optBoolean("kosherLauncherEnabled", false))
 
+            // 2/9/2026 — interruptores nuevos del perfil. El valor por omisión es EL ACTUAL,
+            // no `false`, a propósito: un perfil viejo (guardado antes de que existieran
+            // estas claves) no debe APAGAR protecciones que el equipo ya tiene puestas —
+            // en particular el arranque protegido y la protección de accesibilidad, que
+            // vienen encendidas por defecto. Un perfil solo cambia lo que dice.
+            setFlashingBlocked(dataObj.optBoolean("flashingBlocked", isFlashingBlocked()))
+            setHideSuspendedApps(dataObj.optBoolean("hideSuspendedApps", isHideSuspendedApps()))
+            setAccessibilityProtection(dataObj.optBoolean("accessibilityProtection", isAccessibilityProtectionEnabled()))
+            setAccBounceSettings(dataObj.optBoolean("accBounceSettings", isAccBounceSettingsEnabled()))
+            setAccNag(dataObj.optBoolean("accNag", isAccNagEnabled()))
+            setAccSuspendAll(dataObj.optBoolean("accSuspendAll", isAccSuspendAllEnabled()))
+            setBootGateEnabled(dataObj.optBoolean("bootGateEnabled", isBootGateEnabled()))
+            setBootGateWaitAccessibility(dataObj.optBoolean("bootGateWaitAccessibility", isBootGateWaitAccessibilityEnabled()))
+            setImageBlockStrictScroll(dataObj.optBoolean("imageBlockStrictScroll", isImageBlockStrictScrollEnabled()))
+            setKioskLockTaskEnabled(dataObj.optBoolean("kioskLockTask", isKioskLockTaskEnabled()))
+            setNokiaKeypadMode(dataObj.optBoolean("nokiaKeypadMode", isNokiaKeypadMode()))
+            setNokiaTouchEnabled(dataObj.optBoolean("nokiaTouchEnabled", isNokiaTouchEnabled()))
 
             val perAppNetArr = dataObj.optJSONArray("perAppInternetBlocked")
             if (perAppNetArr != null) {
@@ -959,6 +1272,19 @@ class PolicyManager(private val context: Context) {
             e.printStackTrace()
             return false
         }
+    }
+
+    /**
+     * Traduce claves de restricción mal escritas en perfiles viejos a la constante real
+     * de `UserManager`. Una clave que Android no conoce se acepta sin error y no hace
+     * absolutamente nada — falla en silencio, que es lo peor posible para una restricción
+     * de seguridad. Mapear en vez de ignorar deja funcionando los perfiles ya guardados.
+     */
+    private fun normalizeRestrictionKey(key: String): String = when (key) {
+        // El panel escribía "no_apps_control"; la constante real es DISALLOW_APPS_CONTROL
+        // == "no_control_apps".
+        "no_apps_control" -> UserManager.DISALLOW_APPS_CONTROL
+        else -> key
     }
 
     fun saveLocalPreset(presetName: String, jsonString: String) {
@@ -1186,7 +1512,11 @@ class PolicyManager(private val context: Context) {
     // ─────────────────────────────────────────────
 
     fun isRestrictionEnabled(restriction: String): Boolean {
-        return PrefsHelper.getMdmPrefs(context).getBoolean(restriction, false)
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (restriction == UserManager.DISALLOW_CONFIG_PRIVATE_DNS && !prefs.contains(restriction)) {
+            return true // Bloquear configuración de DNS privado por defecto para proteger el filtro
+        }
+        return prefs.getBoolean(restriction, false)
     }
 
     fun reapplyAllRestrictions() {
@@ -1219,11 +1549,32 @@ class PolicyManager(private val context: Context) {
             UserManager.DISALLOW_CONFIG_VPN,
             // 18/8/2026: sin esto, cambiar el idioma del equipo evade cualquier filtro
             // que dependa de leer texto de la pantalla. Ver setLocaleChangeBlocked().
-            UserManager.DISALLOW_CONFIG_LOCALE
+            UserManager.DISALLOW_CONFIG_LOCALE,
+            // ⚠️ BUG ENCONTRADO EL 2/9/2026 CON UN CHEQUEO AUTOMÁTICO DE SIMETRÍA.
+            //
+            // `DISALLOW_CONFIG_DATE_TIME` estaba en `liftAllForSuspension()` y en
+            // `clearAllRestrictions()` (las dos se lo agregaron el 1/9) pero NO acá. O sea
+            // que era una restricción que el proyecto sabía levantar y limpiar, pero **no
+            // sabía volver a aplicar después de un reinicio**: si alguna vez quedaba
+            // activada, desaparecía sola al bootear, en silencio.
+            //
+            // Hasta el 2/9 era inofensivo porque nada la activaba (B.10 la tiene como "no
+            // implementada"). Pero al sumarla al perfil exportable pasó a ser activable, y
+            // ahí la asimetría se vuelve un bug real: aplicás un perfil, el equipo bloquea
+            // la fecha, reiniciás, y el bloqueo se fue sin que nada lo diga. Se completa
+            // acá para que las cuatro listas —aplicar, suspender, purgar y perfil— digan lo
+            // mismo. Es exactamente el mismo defecto que S-3 y P-3, encontrado esta vez
+            // antes de que costara una sesión de diagnóstico.
+            UserManager.DISALLOW_CONFIG_DATE_TIME
         )
 
+        // Las del registro declarativo se suman acá, así una restricción nueva sobrevive a
+        // un reinicio sin que nadie tenga que acordarse de agregarla a esta lista también.
+        // Ver mdm/PolicySpec.kt.
+        val todas = restrictions + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }
+
         val isInstallInProgress = PrefsHelper.getMdmPrefs(context).getBoolean("mdm_install_in_progress", false)
-        restrictions.forEach { restriction ->
+        todas.forEach { restriction ->
             if (isInstallInProgress && (restriction == UserManager.DISALLOW_INSTALL_APPS || restriction == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)) {
                 return@forEach
             }
@@ -1259,6 +1610,12 @@ class PolicyManager(private val context: Context) {
         if (isKosherLauncherEnabled()) {
             setKosherLauncherEnabled(true, openImmediately = false) // No interrumpir al usuario al re-aplicar políticas
         }
+
+        // Kiosco real del SO. Se reaplica SIEMPRE (con el valor que corresponda), no solo
+        // cuando está encendido: la lista blanca de Lock Task es estado del sistema, no una
+        // preferencia nuestra, y si quedó puesta con el interruptor apagado el equipo
+        // seguiría anclado sin que el panel lo muestre. Ver applyKioskLockTask().
+        applyKioskLockTask(isKioskLockTaskEnabled())
 
 
 
@@ -1488,7 +1845,21 @@ class PolicyManager(private val context: Context) {
             // cambiar de idioma — justo lo contrario de "queda como si LockSuite no
             // estuviera instalado".
             UserManager.DISALLOW_CONFIG_LOCALE
-        )
+        ) + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }
+        // ⚠️ 2/9/2026 — Las del registro declarativo se suman acá SIEMPRE, y esto no es
+        // opcional: una restricción que se aplica y no se levanta convierte la suspensión
+        // en mentira. Es literalmente el defecto S-3 del 1/9 (DISALLOW_CONFIG_LOCALE
+        // estaba en reapply y no acá). Sumarlas desde la misma lista que las aplica hace
+        // que el bug no se pueda repetir por olvido.
+        // El kiosco se suelta SIEMPRE al suspender: si no, "queda como si LockSuite no
+        // estuviera instalado" sería mentira — el equipo seguiría sin poder abrir nada
+        // fuera de la lista blanca. Mismo razonamiento que S-3 con el idioma.
+        applyKioskLockTask(false)
+        // El táctil vuelve SIEMPRE al suspender. Un equipo "sin LockSuite" que no responde
+        // al dedo no es un equipo sin LockSuite. (El modo de pantalla se deja como está:
+        // es solo estético y no impide usar el equipo.)
+        PrefsHelper.getMdmPrefs(context).edit().putBoolean("nokia_touch_enabled", true).apply()
+
         allRestrictions.forEach { restriction ->
             try {
                 dpm.clearUserRestriction(adminComponent, restriction)
@@ -1596,7 +1967,23 @@ class PolicyManager(private val context: Context) {
             // Device Owner que pueda deshacerlo.
             UserManager.DISALLOW_CONFIG_DATE_TIME,
             UserManager.DISALLOW_CONFIG_LOCALE
-        )
+        ) + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }
+        // ⚠️ 2/9/2026 — Igual que en liftAllForSuspension(): las del registro se suman
+        // desde la MISMA lista que las aplica. Este es el defecto P-3 del 1/9 llevado a su
+        // conclusión: una restricción que la purga no limpia deja el equipo PEOR que antes
+        // de instalar LockSuite, y sin ninguna app con Device Owner que pueda deshacerlo.
+
+        // ⚠️ ANTES QUE NADA. Un equipo purgado que quede en Lock Task no puede abrir
+        // ninguna app fuera de la lista, y ya NO hay ninguna app con Device Owner que pueda
+        // soltarlo: quedaría inutilizable para siempre. Es el mismo error que P-3 con el
+        // idioma, pero peor. Va primero por si algo falla más abajo.
+        applyKioskLockTask(false)
+        // Igual que arriba, y por un motivo más fuerte: después de la purga ya no queda
+        // ninguna app con Device Owner que pueda devolver el táctil ni sacar el modo teclas.
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean("nokia_touch_enabled", true)
+            .putBoolean("nokia_keypad_mode", false)
+            .apply()
 
         restrictions.forEach { restriction ->
             try {

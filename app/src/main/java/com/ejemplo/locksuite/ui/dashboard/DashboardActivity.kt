@@ -568,8 +568,14 @@ fun PoliciesTabContent(context: Context) {
                         )
                         Button(
                             onClick = {
-                                prefs.edit().putString("device_name", deviceNameInput).apply()
-                                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                                // pushDeviceName() en vez de "guardar la preferencia y
+                                // sincronizar": desde el 2/9/2026 la sincronización normal
+                                // ya NO manda el nombre (mandarlo era lo que borraba el
+                                // nombre puesto desde el panel — ver
+                                // FirebaseDeviceSync.reconcileDeviceName). Este botón es
+                                // el único lugar donde el celular tiene que ganarle al
+                                // panel, así que usa la vía explícita.
+                                com.ejemplo.locksuite.util.FirebaseDeviceSync.pushDeviceName(context, deviceNameInput)
                                 android.widget.Toast.makeText(context, "Nombre guardado con éxito", android.widget.Toast.LENGTH_SHORT).show()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C))

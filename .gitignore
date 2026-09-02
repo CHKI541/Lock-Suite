@@ -27,3 +27,17 @@ node_modules/
 functions/node_modules/
 .runtimeconfig.json
 google-services.json
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Diagnosticos y material de trabajo (2/9/2026)
+#
+# `scratch/` tenia 2,1 MB de logcat EN VIVO del celular real del dueno
+# (`diagnostico_vpn_vivo/`), publicado en un repositorio publico: expone el
+# fingerprint exacto del equipo, todas las apps instaladas, su comportamiento de red
+# y el IMEI. No hay credenciales ahi, pero no tiene por que estar publicado.
+#
+# Los volcados de diagnostico son utiles y hay que seguir haciendolos -- lo que no
+# hay que hacer es commitearlos. Si haces uno nuevo, queda en tu disco y no en git.
+scratch/
+*.zip
+zizR3CfM

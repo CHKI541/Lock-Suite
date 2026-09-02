@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ResolveInfo
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -58,6 +59,41 @@ class KosherLauncherActivity : ComponentActivity() {
     private var batteryPercent by mutableIntStateOf(100)
     private var isBluetoothEnabled by mutableStateOf(false)
     private var currentTime by mutableStateOf("")
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MODO TELÉFONO DE TECLAS  (2/9/2026)
+    //
+    // Pedido del dueño: un modo kiosco al estilo KeyLauncher, manejado con botones, con
+    // opción de apagar el táctil. El estado vive acá y no en Compose porque las teclas
+    // físicas llegan por `onKeyDown()` de la Activity — ver el comentario de cabecera de
+    // NokiaKeypadScreen para el porqué completo.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** ¿Está el menú abierto? Si no, se ve la pantalla de inicio con el reloj. */
+    private var nokiaEnMenu by mutableStateOf(false)
+
+    /** Índice absoluto de la app seleccionada dentro de la lista completa. */
+    private var nokiaSeleccion by mutableIntStateOf(0)
+
+    /** Lista de apps que el modo teclas está mostrando. La llena la pantalla al componer. */
+    private var nokiaApps: List<AppItem> = emptyList()
+
+    private var nokiaFecha by mutableStateOf("")
+
+    /**
+     * Momento en que empezó una pulsación sostenida en la esquina superior derecha.
+     *
+     * ⚠️ ES LA SALIDA DE EMERGENCIA DEL MODO SIN TÁCTIL, Y NO HAY QUE SACARLA.
+     *
+     * Con el táctil apagado, un equipo **sin teclas físicas** —o sea cualquier celular
+     * táctil común— queda manejable solo desde el panel web. Si además se cae la red, no
+     * hay forma de recuperarlo en la mano. Por eso se conserva un gesto deliberadamente
+     * incómodo (mantener 3 segundos en la esquina superior derecha) que abre la pantalla
+     * de administrador: es imposible de hacer sin querer y suficiente para no quedarse
+     * afuera. Está documentado a propósito: una salida de emergencia secreta que nadie
+     * recuerda no sirve de nada.
+     */
+    private var toqueEsquinaDesde = 0L
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -113,17 +149,262 @@ class KosherLauncherActivity : ComponentActivity() {
         // Actualizar la hora inmediatamente
         updateTime()
 
-        setContent {
-            LauncherScreen(
-                batteryPercent = batteryPercent,
-                isBluetoothEnabled = isBluetoothEnabled,
-                currentTime = currentTime
-            )
+        // Modo teléfono de teclas: pantalla completamente distinta, mismo launcher.
+        // Se decide acá y no dentro de LauncherScreen para no meter una segunda interfaz
+        // entera dentro de una función que ya es grande.
+        val prefsLauncher = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+        if (prefsLauncher.getBoolean("nokia_keypad_mode", false)) {
+            // La lista de apps se arma UNA vez acá, no dentro del `setContent`: cargarla en
+            // la composición sería un efecto colateral que se repetiría en cada
+            // recomposición (y cada carga enumera todas las actividades del equipo).
+            actualizarFechaNokia()
+            nokiaApps = cargarAppsNokia()
+            val touchOn = prefsLauncher.getBoolean("nokia_touch_enabled", true)
+            setContent {
+                NokiaKeypadScreen(
+                    apps = nokiaApps,
+                    enMenu = nokiaEnMenu,
+                    seleccion = nokiaSeleccion,
+                    pagina = if (nokiaApps.isEmpty()) 0 else nokiaSeleccion / 9,
+                    hora = currentTime,
+                    fecha = nokiaFecha,
+                    bateria = batteryPercent,
+                    touchHabilitado = touchOn
+                )
+            }
+        } else {
+            setContent {
+                LauncherScreen(
+                    batteryPercent = batteryPercent,
+                    isBluetoothEnabled = isBluetoothEnabled,
+                    currentTime = currentTime
+                )
+            }
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MODO TELÉFONO DE TECLAS — carga de apps, teclado y bloqueo del táctil
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Apps visibles en el modo teclas.
+     *
+     * Se apoya en la MISMA regla que el launcher normal (apps con actividad de lanzador,
+     * menos las de sistema, menos las ocultas o suspendidas por el MDM). Repetir el
+     * criterio con otra lógica habría hecho que un equipo mostrara cosas distintas en cada
+     * modo, que es el tipo de diferencia que después nadie entiende de dónde sale.
+     */
+    private fun cargarAppsNokia(): List<AppItem> {
+        return try {
+            val pm = packageManager
+            val appController = AppController(this)
+            val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
+            @Suppress("DEPRECATION")
+            val resueltas = pm.queryIntentActivities(mainIntent, 0)
+            val ocultasDelSistema = setOf(
+                packageName, "com.android.systemui", "com.android.providers.telephony",
+                "com.android.packageinstaller", "com.google.android.packageinstaller",
+                "com.google.android.gms", "com.google.android.gsf"
+            )
+            resueltas.mapNotNull { ri ->
+                val pkg = ri.activityInfo.packageName
+                if (pkg in ocultasDelSistema) return@mapNotNull null
+                try {
+                    if (appController.isAppHidden(pkg) || appController.isAppSuspended(pkg)) {
+                        return@mapNotNull null
+                    }
+                } catch (_: Exception) {}
+                val label = ri.loadLabel(pm).toString()
+                val intent = pm.getLaunchIntentForPackage(pkg) ?: return@mapNotNull null
+                AppItem(pkg, label, intent, AppIconMapper.getMapping(pkg, label), ri)
+            }.distinctBy { it.packageName }
+                .sortedBy { NokiaIconSet.para(it.packageName, it.label).label.lowercase() }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+    }
+
+    private fun actualizarFechaNokia() {
+        nokiaFecha = try {
+            SimpleDateFormat("EEEE d 'de' MMMM", Locale("es", "AR")).format(Date())
+                .replaceFirstChar { it.uppercase() }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    private fun abrirSeleccionNokia() {
+        val app = nokiaApps.getOrNull(nokiaSeleccion) ?: return
+        try {
+            startActivity(app.launchIntent.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Teclas del modo teléfono.
+     *
+     * Se maneja en `onKeyDown` y no con el foco de Compose a propósito (ver el comentario
+     * de cabecera de `NokiaKeypadScreen`).
+     *
+     * Un detalle que importa: **el movimiento de la cruceta NO envuelve entre páginas por
+     * accidente**. La selección es un índice absoluto sobre la lista completa, así que
+     * bajar en la última fila pasa a la página siguiente de forma natural, y arriba en la
+     * primera fila no hace nada en vez de saltar al final. En un menú de teclas, un salto
+     * inesperado de página es lo que hace que el usuario se pierda.
+     */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+        if (!prefs.getBoolean("nokia_keypad_mode", false)) {
+            return super.onKeyDown(keyCode, event)
+        }
+        val total = nokiaApps.size
+
+        // Dígitos 1..9: atajo directo a la casilla de esa posición en la página actual.
+        if (keyCode in android.view.KeyEvent.KEYCODE_1..android.view.KeyEvent.KEYCODE_9) {
+            if (!nokiaEnMenu) nokiaEnMenu = true
+            val enPagina = keyCode - android.view.KeyEvent.KEYCODE_1
+            val destino = (nokiaSeleccion / 9) * 9 + enPagina
+            if (destino < total) {
+                nokiaSeleccion = destino
+                abrirSeleccionNokia()
+            }
+            return true
+        }
+
+        when (keyCode) {
+            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+            android.view.KeyEvent.KEYCODE_ENTER -> {
+                if (nokiaEnMenu) abrirSeleccionNokia() else nokiaEnMenu = true
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                if (nokiaEnMenu && nokiaSeleccion - 3 >= 0) nokiaSeleccion -= 3
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (nokiaEnMenu && nokiaSeleccion + 3 < total) nokiaSeleccion += 3
+                else if (!nokiaEnMenu) nokiaEnMenu = true
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                if (nokiaEnMenu && nokiaSeleccion > 0) nokiaSeleccion -= 1
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (nokiaEnMenu && nokiaSeleccion + 1 < total) nokiaSeleccion += 1
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_SOFT_LEFT,
+            android.view.KeyEvent.KEYCODE_MENU -> {
+                if (nokiaEnMenu) abrirSeleccionNokia() else nokiaEnMenu = true
+                return true
+            }
+            android.view.KeyEvent.KEYCODE_SOFT_RIGHT,
+            android.view.KeyEvent.KEYCODE_BACK -> {
+                // Atrás vuelve al inicio; desde el inicio no hace nada (el launcher es fijo).
+                nokiaEnMenu = false
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /**
+     * Bloqueo del táctil dentro del launcher.
+     *
+     * ⚠️ ALCANCE REAL, DICHO SIN ADORNOS: **esto apaga el táctil de ESTA pantalla, no del
+     * equipo.** Android no le da a una app —ni siquiera a un Device Owner— ninguna forma de
+     * desactivar el digitalizador para todo el sistema; eso necesita permisos de plataforma
+     * o root. O sea: con esto encendido, el launcher solo responde a teclas, pero si el
+     * usuario logra abrir otra app, dentro de esa app el táctil funciona.
+     *
+     * Lo que sí lo convierte en un modo de teclas de verdad es combinarlo con el kiosco
+     * (Lock Task): con los dos encendidos, el equipo solo abre las apps de la lista y el
+     * launcher no responde al dedo. Están pensados para usarse juntos.
+     *
+     * La salida de emergencia (3 segundos en la esquina superior derecha) está explicada
+     * en el campo `toqueEsquinaDesde`.
+     */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+        val modoTeclas = prefs.getBoolean("nokia_keypad_mode", false)
+        val touchOn = prefs.getBoolean("nokia_touch_enabled", true)
+        if (!modoTeclas || touchOn || ev == null) {
+            return super.dispatchTouchEvent(ev)
+        }
+
+        // Salida de emergencia: pulsación sostenida en la esquina superior derecha.
+        val enEsquina = ev.x > resources.displayMetrics.widthPixels * 0.8f &&
+            ev.y < resources.displayMetrics.heightPixels * 0.15f
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN ->
+                toqueEsquinaDesde = if (enEsquina) android.os.SystemClock.elapsedRealtime() else 0L
+            android.view.MotionEvent.ACTION_MOVE ->
+                if (!enEsquina) toqueEsquinaDesde = 0L
+            android.view.MotionEvent.ACTION_UP -> {
+                val sostenido = toqueEsquinaDesde > 0L &&
+                    android.os.SystemClock.elapsedRealtime() - toqueEsquinaDesde >= 3000L
+                toqueEsquinaDesde = 0L
+                if (sostenido) {
+                    try {
+                        startActivity(
+                            Intent(this, com.ejemplo.locksuite.ui.auth.LoginActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+        // Se consume el evento: el táctil queda inerte para el uso normal.
+        return true
     }
 
     override fun onResume() {
         super.onResume()
+
+        // ── KIOSCO REAL DEL SO (Lock Task, 2/9/2026) ──
+        //
+        // Copiado de A Bloq (`KioskActivity`). Con el interruptor encendido, esta Activity
+        // se ancla: a partir de acá el sistema **solo deja abrir los paquetes de la lista
+        // blanca** (ver PolicyManager.applyKioskLockTask), y lo hace cumplir Android, no
+        // LockSuite. Sin esto, la lista de apps permitidas del launcher es solo una
+        // decisión de interfaz: una notificación o un enlace profundo alcanza para abrir
+        // cualquier app.
+        //
+        // Va en onResume() y no en onCreate() a propósito: si el sistema saca la Activity
+        // del anclaje por cualquier motivo (una actualización, un fallo del sistema), al
+        // volver a primer plano se vuelve a anclar sola.
+        //
+        // Se comprueba `lockTaskModeState` antes de llamar: `startLockTask()` estando ya
+        // anclado tira excepción en algunas versiones.
+        try {
+            val pm = com.ejemplo.locksuite.mdm.PolicyManager(this)
+            if (pm.isKioskLockTaskEnabled() && !pm.isLockSuiteSuspended()) {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                val yaAnclada = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isInLockTaskMode
+                }
+                if (!yaAnclada) {
+                    startLockTask()
+                }
+            }
+        } catch (e: Exception) {
+            // Nunca dejar que esto impida que la pantalla de inicio se muestre: un launcher
+            // que no arranca es un equipo inutilizable.
+            e.printStackTrace()
+        }
+
         // Registrar receivers
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         registerReceiver(bluetoothReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))

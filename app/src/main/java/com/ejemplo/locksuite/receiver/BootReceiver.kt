@@ -168,8 +168,23 @@ class BootReceiver : BroadcastReceiver() {
             }
         }
 
-        fun ensureVpnRunning(context: Context) {
+        /**
+         * @param force `true` ignora el espejo `isTunnelRunning` y manda arrancar igual.
+         *   Es la red de seguridad para el caso en que el servicio esté vivo pero el túnel
+         *   roto (por ejemplo `establish()` devolvió null y nadie lo reintentó). El
+         *   Watchdog lo fuerza cada pocos minutos; el resto de las llamadas no.
+         */
+        @JvmOverloads
+        fun ensureVpnRunning(context: Context, force: Boolean = false) {
             try {
+                // 2/9/2026 (batería). Sin esta guarda se hacía un
+                // startForegroundService() cada 20 s durante todo el día para un servicio
+                // que ya estaba corriendo: puro IPC contra ActivityManagerService, más un
+                // onStartCommand → startVpn() que sale por su propio `if (running) return`.
+                // Ver KosherVpnService.isTunnelRunning.
+                if (!force && com.ejemplo.locksuite.service.KosherVpnService.isTunnelRunning) {
+                    return
+                }
                 if (shouldVpnBeRunning(context)) {
                     val vpnIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

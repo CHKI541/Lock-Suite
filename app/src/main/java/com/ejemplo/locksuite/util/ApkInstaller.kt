@@ -38,6 +38,36 @@ object ApkInstaller {
                 return "La aplicación $packageName no está permitida en la lista blanca de la administración."
             }
 
+            // ── VERIFICACIÓN DE FIRMA ANTES DE INSTALAR (B.6, 2/9/2026) ──
+            //
+            // Si el paquete ya está instalado, su firma tiene que coincidir. Android lo
+            // exige igual y rechazaría la instalación — pero lo hace al final, después de
+            // abrir la sesión de PackageInstaller, y con un error opaco. Comprobarlo acá
+            // convierte "falló la actualización" en un mensaje que dice qué pasó.
+            //
+            // Un paquete NO instalado (primera instalación desde la Tienda administrada)
+            // no tiene con qué compararse: ahí no se puede decidir nada por firma, y por eso
+            // B.6 sigue necesitando el `sha256` publicado en `storeApps`. Se deja pasar,
+            // porque negarlo rompería la Tienda administrada entera.
+            when (val v = ApkSignatureVerifier.verify(context, tempFile.absolutePath, packageName)) {
+                is ApkSignatureVerifier.Result.Mismatch -> {
+                    Log.e("ApkInstaller", "Firma distinta para $packageName: instalada=${v.expected} apk=${v.actual}")
+                    return "El archivo APK de $packageName está firmado por otro desarrollador " +
+                        "que el que ya está instalado. No se instaló: puede ser una versión falsificada."
+                }
+                is ApkSignatureVerifier.Result.Unknown -> {
+                    Log.w("ApkInstaller", "No se pudo verificar la firma de $packageName: ${v.reason}")
+                    return "No se pudo verificar la firma del APK de $packageName (${v.reason}). " +
+                        "No se instaló."
+                }
+                ApkSignatureVerifier.Result.NotInstalled -> {
+                    Log.i("ApkInstaller", "$packageName no está instalado: primera instalación, sin firma previa que comparar.")
+                }
+                ApkSignatureVerifier.Result.Match -> {
+                    Log.i("ApkInstaller", "Firma de $packageName verificada correctamente.")
+                }
+            }
+
             val packageInstaller = pm.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
             params.setAppPackageName(packageName)

@@ -121,15 +121,37 @@ function renderDevicesList(e) {
             d = field(t, "model", "Modelo desconocido"),
             s = field(t, "lastSeen", null),
             fcm = field(t, "fcmToken", ""),
-            o = s && Date.now() - s < 3e5;
+            secretMismatch = field(t, "commandSecretMismatch", false) === true,
+            // 2/9/2026 — POR QUÉ LA VENTANA PASÓ DE 5 MIN A 20, Y POR QUÉ HAY UN ESTADO
+            // INTERMEDIO. El latido del celular va en un Handler del servicio de primer
+            // plano, y los Handler NO CUENTAN mientras el equipo duerme (uptimeMillis se
+            // congela en sueño profundo). Con la pantalla apagada un rato el latido se
+            // espacia solo, y con 5 minutos de ventana el equipo aparecía "Desconectado"
+            // estando perfecto. Y "Desconectado" es engañoso además por otro motivo: un
+            // comando FCM de alta prioridad DESPIERTA al equipo igual, así que un celular
+            // dormido se puede administrar sin problema. Ahora: "En línea" hasta 20 min,
+            // "En reposo" (ámbar, se puede administrar) mientras haya token, y
+            // "Desconectado" recién cuando pasó más de un día o nunca latió.
+            fresco = s && Date.now() - s < 12e5,
+            visto = s && Date.now() - s < 864e5;
         n.querySelector(".device-name").textContent = i, n.querySelector(".device-model-label").textContent = d, n.querySelector(".device-id").textContent = e;
         const c = n.querySelector(".status-badge");
-        if (o && fcm) {
+        if (secretMismatch && fcm) {
+            // El equipo late y recibe, pero descarta cada comando por firma inválida.
+            // Es el peor estado posible de diagnosticar si no se nombra.
+            c.textContent = "Re-vincular";
+            c.className = "badge warning";
+            c.title = "El equipo perdió la credencial de comandos: recibe los comandos pero los descarta. Abrilo y usá «Re-vincular comandos».";
+        } else if (fresco && fcm) {
             c.textContent = "En línea";
             c.className = "badge active";
-        } else if (o && !fcm) {
+        } else if (fresco && !fcm) {
             c.textContent = "Sin FCM";
             c.className = "badge warning";
+        } else if (visto && fcm) {
+            c.textContent = "En reposo";
+            c.className = "badge warning";
+            c.title = "No late hace un rato (pantalla apagada). Los comandos igual llegan: FCM despierta el equipo.";
         } else {
             c.textContent = "Desconectado";
             c.className = "badge inactive";
@@ -192,9 +214,55 @@ async function verifyPinBackend(deviceId, pin, remember) {
     return { success: true };
 }
 
+/**
+ * Re-vincula la credencial de firma de comandos de un equipo.
+ *
+ * ⚠️ 2/9/2026 — QUÉ PROBLEMA RESUELVE ESTO (era invisible y dejaba el equipo sordo).
+ *
+ * Cada comando del panel viaja firmado con un HMAC cuyo secreto comparten el servidor
+ * (`deviceSecrets/<id>/commandSecret`) y el celular (en su almacén cifrado). El secreto
+ * del celular NO sobrevive a reinstalar la app ni a que se invalide la clave del Keystore
+ * — pero el deviceId (ANDROID_ID) SÍ. Cuando se desincronizan, la regla de seguridad le
+ * prohíbe al equipo pisar el valor viejo (es lo correcto: si no, cualquiera que adivine un
+ * deviceId se apropiaría del equipo). Resultado: el servidor firma con el secreto viejo,
+ * el celular verifica con el nuevo, y **descarta todos los comandos en silencio**. El
+ * panel dice "enviado" y en el celular no pasa nada. Sin este botón, la única salida que
+ * se encontraba por prueba y error era cambiar el PIN varias veces.
+ *
+ * Un administrador autorizado SÍ puede borrar el secreto del servidor. Borrado, la
+ * siguiente sincronización del equipo lo vuelve a escribir (ya con `!data.exists()`) y el
+ * canal queda alineado.
+ */
+async function relinkCommandSecret(deviceId) {
+    await database.ref(`deviceSecrets/${deviceId}/commandSecret`).remove();
+    await database.ref(`devices/${deviceId}/commandSecretMismatch`).set(false).catch(() => {});
+    await database.ref(`devices/${deviceId}/info/commandSecretMismatch`).set(false).catch(() => {});
+}
+
 async function openDeviceSidebar(e, t) {
     selectedDeviceId = e;
-    
+
+    // Antes que nada: si el equipo avisó que perdió la credencial de comandos, ofrecer
+    // arreglarlo. Si no, el administrador entra al panel, toca interruptores, y ninguno
+    // hace efecto — sin ningún cartel que explique por qué.
+    if (field(t, "commandSecretMismatch", false) === true) {
+        const nombreEquipo = t.deviceName || (t.info && t.info.deviceName) || t.model || e;
+        if (confirm(
+            `El equipo "${nombreEquipo}" perdió la credencial con la que se firman los comandos ` +
+            `(pasa al reinstalar LockSuite). Recibe los comandos del panel pero los descarta, ` +
+            `así que ningún cambio le hace efecto.\n\n` +
+            `¿Re-vincular ahora? El equipo vuelve a quedar administrable en cuanto sincronice ` +
+            `(hasta 15 minutos, o al instante si abrís LockSuite en el celular).`
+        )) {
+            try {
+                await relinkCommandSecret(e);
+                alert("✅ Credencial borrada. El equipo la va a volver a publicar en su próxima sincronización.");
+            } catch (err) {
+                alert("✗ No se pudo re-vincular: " + err.message);
+            }
+        }
+    }
+
     const trustedAdmins = t.trustedAdmins || (t.info && t.info.trustedAdmins) || {};
     const adminUid = auth.currentUser ? auth.currentUser.uid : null;
     const isTrusted = adminUid && trustedAdmins[adminUid] === true;
@@ -274,6 +342,46 @@ function updateSidebarUI(e, t) {
         const n = e.getAttribute("data-policy");
         e.checked = field(t, n, false) === true;
     });
+
+    // ── Filas que este equipo no soporta (2/9/2026) ──
+    // Android acepta y descarta en silencio una restricción que su versión no conoce, así
+    // que un interruptor encendido sobre un equipo viejo sería una mentira. El celular
+    // reporta un campo <id>Supported por cada restricción del registro; si dice que no,
+    // la fila se deshabilita y se explica por qué.
+    const sdk = field(t, "androidSdkInt", 0);
+    sidebar.querySelectorAll(".toggle-row[data-needs]").forEach(row => {
+        const clave = row.getAttribute("data-needs");
+        const sw = row.querySelector(".policy-switch");
+        // Si el equipo todavía no reportó el campo (versión vieja de la app), no se
+        // deshabilita nada: es mejor dejar probar que bloquear por una lectura ausente.
+        const reportado = field(t, clave, null);
+        const soportada = reportado === null || reportado === true;
+        row.style.opacity = soportada ? "" : "0.45";
+        row.title = soportada ? "" :
+            `La versión de Android de este equipo (API ${sdk || "?"}) no soporta esta restricción.`;
+        if (sw) sw.disabled = !soportada;
+    });
+
+    // ── Divergencia entre lo pedido y lo aplicado (2/9/2026) ──
+    // Ver PolicyManager.divergentRestrictions(). Esto es lo que convierte "el interruptor
+    // dice bloqueado pero el equipo está abierto" de invisible a visible.
+    const driftEl = document.getElementById("policy-drift");
+    if (driftEl) {
+        const drift = field(t, "policyDrift", "");
+        const driftCount = field(t, "policyDriftCount", 0);
+        if (drift && driftCount > 0) {
+            driftEl.style.display = "block";
+            driftEl.style.background = "rgba(255,159,10,0.12)";
+            driftEl.style.color = "var(--accent-orange, #ff9f0a)";
+            driftEl.textContent =
+                `⚠ ${driftCount} restricción(es) figuran activadas pero el sistema NO las tiene puestas: ` +
+                `${drift}. El equipo está menos protegido de lo que muestra esta lista. ` +
+                `Suele arreglarse solo en la próxima reaplicación (hasta 15 min); si persiste, ` +
+                `puede ser que el fabricante las ignore.`;
+        } else {
+            driftEl.style.display = "none";
+        }
+    }
 
     // ── Arranque protegido: mostrar cómo terminó el último arranque ──
     // Sin esto no hay forma de saber si el bloqueo preventivo se liberó porque el
@@ -952,6 +1060,36 @@ saveNameBtn.addEventListener("click", async () => {
     // Suspensión de LockSuite: no es un bloqueo más, apaga todos los demás.
     // Va aparte del mapa genérico porque necesita confirmación explícita y un
     // texto que diga con todas las letras qué implica.
+    // Kiosco real: es la unica opcion del panel que puede dejar un equipo sin forma de
+    // marcar el codigo de recuperacion. Se pide confirmacion explicita al ENCENDERLO.
+    // Apagar el tactil es la unica opcion que puede dejar un equipo sin forma de operarlo
+    // en la mano. Se confirma al APAGARLO (o sea cuando el interruptor queda en false).
+    if (n === "nokiaTouchEnabled" && !a) {
+        if (!confirm(
+            "¿Apagar el táctil del launcher en este equipo?\n\n" +
+            "La pantalla de inicio va a responder únicamente a las teclas físicas.\n\n" +
+            "⚠️ Si este celular NO tiene cruceta ni teclas de navegación, la pantalla de inicio " +
+            "va a quedar manejable solo desde este panel.\n\n" +
+            "Salida de emergencia en el equipo: mantener 3 segundos el dedo en la esquina " +
+            "superior derecha abre la pantalla de administrador."
+        )) {
+            t.checked = true;
+            return;
+        }
+    }
+    if (n === "kioskLockTaskEnabled" && a) {
+        if (!confirm(
+            "¿Anclar este equipo al launcher kosher?\n\n" +
+            "A partir de ahora Android va a permitir abrir ÚNICAMENTE las apps de la lista " +
+            "permitida. Ninguna notificación ni enlace va a poder abrir otra cosa.\n\n" +
+            "⚠️ IMPORTANTE: si el marcador telefónico NO está en la lista de apps permitidas, " +
+            "en este equipo no se va a poder marcar el código de recuperación *#*#9999#*#*.\n\n" +
+            "Revisá la lista de apps antes de continuar."
+        )) {
+            t.checked = false;
+            return;
+        }
+    }
     if (n === "locksuiteSuspended") {
         if (a && !confirm("¿Suspender LockSuite en este celular?\n\nSe van a levantar TODAS las restricciones y a desbloquear todas las aplicaciones, incluidas las protecciones que impiden desinstalar LockSuite y restaurar de fábrica. Mientras dure la suspensión el equipo queda sin ninguna protección.\n\nAl desactivarla, todo vuelve exactamente a como estaba.")) {
             t.checked = false;
@@ -1007,7 +1145,36 @@ saveNameBtn.addEventListener("click", async () => {
             bootGateWaitAccessibility: ["ENABLE_BOOT_GATE_ACCESSIBILITY", "DISABLE_BOOT_GATE_ACCESSIBILITY"],
             // Arranque protegido y filtro visual
             bootGateEnabled: ["ENABLE_BOOT_GATE", "DISABLE_BOOT_GATE"],
-            imageStrictScroll: ["ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL"]
+            imageStrictScroll: ["ENABLE_IMAGE_STRICT_SCROLL", "DISABLE_IMAGE_STRICT_SCROLL"],
+            // Kiosco real del SO (2/9/2026, copiado de A Bloq)
+            kioskLockTaskEnabled: ["ENABLE_KIOSK_LOCK_TASK", "DISABLE_KIOSK_LOCK_TASK"],
+            nokiaKeypadMode: ["ENABLE_NOKIA_MODE", "DISABLE_NOKIA_MODE"],
+            // Ojo con el sentido: el interruptor dice "táctil habilitado", asi que
+            // encenderlo manda ENABLE y apagarlo manda DISABLE, al reves que un "bloquear".
+            nokiaTouchEnabled: ["ENABLE_NOKIA_TOUCH", "DISABLE_NOKIA_TOUCH"],
+            // ── Restricciones del registro declarativo (app/mdm/PolicySpec.kt) ──
+            // Esta tabla se corresponde 1 a 1 con esa lista y con ALLOWED_COMMANDS de
+            // functions/index.js. Si agregás una restricción allá, agregala en los tres.
+            privateDnsBlocked: ["BLOCK_PRIVATE_DNS", "UNBLOCK_PRIVATE_DNS"],
+            smsBlocked: ["BLOCK_SMS", "UNBLOCK_SMS"],
+            outgoingCallsBlocked: ["BLOCK_OUTGOING_CALLS", "UNBLOCK_OUTGOING_CALLS"],
+            configLocationBlocked: ["BLOCK_CONFIG_LOCATION", "UNBLOCK_CONFIG_LOCATION"],
+            shareLocationBlocked: ["BLOCK_SHARE_LOCATION", "UNBLOCK_SHARE_LOCATION"],
+            autofillBlocked: ["BLOCK_AUTOFILL", "UNBLOCK_AUTOFILL"],
+            contentCaptureBlocked: ["BLOCK_CONTENT_CAPTURE", "UNBLOCK_CONTENT_CAPTURE"],
+            printingBlocked: ["BLOCK_PRINTING", "UNBLOCK_PRINTING"],
+            usbFileTransferBlocked: ["BLOCK_USB_FILE_TRANSFER", "UNBLOCK_USB_FILE_TRANSFER"],
+            dataRoamingBlocked: ["BLOCK_DATA_ROAMING", "UNBLOCK_DATA_ROAMING"],
+            airplaneModeBlocked: ["BLOCK_AIRPLANE_MODE", "UNBLOCK_AIRPLANE_MODE"],
+            ambientDisplayBlocked: ["BLOCK_AMBIENT_DISPLAY", "UNBLOCK_AMBIENT_DISPLAY"],
+            systemErrorDialogsBlocked: ["BLOCK_SYSTEM_ERROR_DIALOGS", "UNBLOCK_SYSTEM_ERROR_DIALOGS"],
+            setWallpaperBlocked: ["BLOCK_SET_WALLPAPER", "UNBLOCK_SET_WALLPAPER"],
+            setUserIconBlocked: ["BLOCK_SET_USER_ICON", "UNBLOCK_SET_USER_ICON"],
+            configCredentialsBlocked: ["BLOCK_CONFIG_CREDENTIALS", "UNBLOCK_CONFIG_CREDENTIALS"],
+            configCellBroadcastsBlocked: ["BLOCK_CONFIG_CELL_BROADCASTS", "UNBLOCK_CONFIG_CELL_BROADCASTS"],
+            outgoingBeamBlocked: ["BLOCK_OUTGOING_BEAM", "UNBLOCK_OUTGOING_BEAM"],
+            unmuteMicrophoneBlocked: ["BLOCK_UNMUTE_MICROPHONE", "UNBLOCK_UNMUTE_MICROPHONE"],
+            removeManagedProfileBlocked: ["BLOCK_REMOVE_MANAGED_PROFILE", "UNBLOCK_REMOVE_MANAGED_PROFILE"]
         } [n];
     if (!i) return;
     const d = a ? i[0] : i[1];
@@ -1547,10 +1714,20 @@ if (savePresetBtn) {
                 no_config_wifi: !!dev.wifiBlocked,
                 no_config_vpn: !!dev.vpnBlocked,
                 no_adjust_volume: !!dev.adjustVolumeBlocked,
-                no_apps_control: !!dev.appsControlBlocked,
+                // ⚠️ 2/9/2026 — LA CLAVE ERA "no_apps_control" Y ESA NO EXISTE EN ANDROID.
+                // La constante real es UserManager.DISALLOW_APPS_CONTROL == "no_control_apps".
+                // addUserRestriction() con una clave desconocida no da error: la acepta y
+                // no hace nada. O sea que "Bloquear control de apps" viajaba en todos los
+                // perfiles hechos desde el panel y no se aplicaba NUNCA, en silencio.
+                no_control_apps: !!dev.appsControlBlocked,
                 no_bluetooth_sharing: !!dev.bluetoothSharingBlocked,
                 no_physical_media: !!dev.externalMediaBlocked,
-                no_config_tethering: !!dev.tetheringBlocked
+                no_config_tethering: !!dev.tetheringBlocked,
+                // Faltaban, aunque la app las exporta y el panel las controla por comando:
+                // un perfil que no las nombra no las toca al aplicarse.
+                no_network_reset: !!dev.networkResetBlocked,
+                no_bluetooth: !!dev.bluetoothBlocked,
+                no_config_locale: !!dev.localeChangeBlocked
             },
             cameraDisabled: !!dev.cameraDisabled,
             screenCaptureBlocked: !!dev.screenCaptureBlocked,
@@ -1565,8 +1742,37 @@ if (savePresetBtn) {
             mercadoPagoBlockOffersVpn: !!dev.mercadoPagoBlockOffersVpn,
             blockMlInMp: !!dev.blockMlInMp,
             kosherLauncherEnabled: !!dev.kosherLauncherEnabled,
+            // 2/9/2026 — interruptores que el panel controla por comando pero que el
+            // perfil no guardaba. Los nombres de la izquierda son las claves del perfil
+            // (las que lee PolicyManager.importPolicyPresetJson); los de la derecha, los
+            // campos tal como los reporta el celular.
+            flashingBlocked: !!dev.flashingBlocked,
+            accessibilityProtection: !!dev.accessibilityProtected,
+            accBounceSettings: !!dev.accBounceSettings,
+            accNag: !!dev.accNag,
+            accSuspendAll: !!dev.accSuspendAll,
+            bootGateEnabled: !!dev.bootGateEnabled,
+            bootGateWaitAccessibility: !!dev.bootGateWaitAccessibility,
+            imageBlockStrictScroll: !!dev.imageStrictScroll,
             perAppInternetBlocked: Object.values(dev.apps || {}).filter(a => a.isInternetBlocked).map(a => a.packageName)
         };
+
+        // ⚠️ 2/9/2026 — ESTE ERA EL BUG DE "LOS PRESETS NO ANDAN".
+        //
+        // Realtime Database NO GUARDA arrays vacíos: son equivalentes a null y la clave
+        // desaparece del nodo. Antes se firmaba el objeto CON `perAppInternetBlocked: []`
+        // y después se guardaba, así que lo que quedaba en `presets/` ya no era lo que se
+        // había firmado. Al aplicarlo, el celular recalculaba el HMAC sobre el objeto sin
+        // esa clave, no coincidía nunca, y rechazaba el perfil con "archivo alterado".
+        //
+        // Y como la enorme mayoría de los equipos no tiene ninguna app con internet
+        // bloqueado, ESO PASABA CASI SIEMPRE: prácticamente todo perfil creado desde el
+        // panel era imposible de aplicar.
+        //
+        // Se borra la clave ANTES de firmar, para firmar exactamente lo que se guarda.
+        if (!dataObj.perAppInternetBlocked || dataObj.perAppInternetBlocked.length === 0) {
+            delete dataObj.perAppInternetBlocked;
+        }
 
         const dataStr = canonicalizeJson(dataObj);
         const signature = await computeHmacSha256(dataStr);

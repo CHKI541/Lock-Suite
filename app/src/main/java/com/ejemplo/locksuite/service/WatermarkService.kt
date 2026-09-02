@@ -31,6 +31,7 @@ class WatermarkService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
@@ -79,6 +80,7 @@ class WatermarkService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isRunning = false
         watermarkView?.let { view ->
             try {
                 windowManager?.removeView(view)
@@ -118,6 +120,23 @@ class WatermarkService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 2002
         private const val CHANNEL_ID = "kosher_watermark_channel"
+
+        /**
+         * ¿El servicio está vivo en este proceso?
+         *
+         * 2/9/2026 (batería). El Watchdog llamaba a `startForegroundService(WatermarkService)`
+         * en CADA ciclo de 20 s mientras el launcher kosher estuviera activo — 4.320 veces
+         * por día. Aunque `onStartCommand` no haga nada, cada llamada es una transacción
+         * Binder contra ActivityManagerService que despierta al proceso y lo obliga a
+         * reafirmar el primer plano. Con esta bandera el Watchdog solo arranca el servicio
+         * cuando de verdad no está corriendo (y, por las dudas, fuerza un reintento cada
+         * pocos minutos: ver WATERMARK_FORCE_MS en WatchdogForegroundService).
+         *
+         * Si el proceso muere, el campo vuelve a `false` solo, porque se reinicializa con
+         * la clase. O sea que no puede quedar mintiendo "está vivo" tras un reinicio.
+         */
+        @Volatile
+        var isRunning: Boolean = false
     }
 
     /**

@@ -37,13 +37,26 @@ class WatchdogForegroundService : Service() {
         private const val NAG_INTERVAL_MS = 18_000L
 
         /** Ritmo de la vigilancia de accesibilidad cuando todo está bien. */
-        private const val ENFORCER_IDLE_MS = 20_000L
+        private const val ENFORCER_IDLE_MS = 60_000L
 
         /**
          * Ritmo mientras la accesibilidad está caída. Más seguido porque es el momento
          * en que hay que corregir, y el equipo ya está inutilizado de todas formas.
+         *
+         * ⚠️ Este NO se tocó y no hay que tocarlo: es el que hace que la corrección sea
+         * rápida cuando de verdad hace falta. Lo que se subió el 2/9 (de 20 s a 60 s) es
+         * el ritmo del caso normal, ENFORCER_IDLE_MS, donde no está pasando nada.
          */
         private const val ENFORCER_FAST_MS = 5_000L
+
+        /**
+         * Cada cuánto se reintenta arrancar la VPN y la marca de agua IGNORANDO los
+         * espejos de estado en memoria. Cubre el caso raro de "el servicio está vivo pero
+         * no sirve" (el túnel nunca se estableció, la ventana de la marca se perdió), que
+         * un espejo booleano no puede ver. El caso común —el servicio se murió— lo detecta
+         * el espejo al instante, porque se reinicia junto con el proceso.
+         */
+        private const val FORCE_RESTART_MS = 5 * 60_000L
 
         // ── Claves de los interruptores de "Protecciones de Accesibilidad" ──
         const val KEY_ACC_BOUNCE_SETTINGS = "acc_protect_bounce_settings"
@@ -80,6 +93,12 @@ class WatchdogForegroundService : Service() {
     private var lastBlockLaunchTime = 0L
     private var lastSyncTime = 0L
     private var lastPrivateDnsEnforceTime = 0L
+
+    /**
+     * Último reintento FORZADO de arrancar VPN + marca de agua, ignorando los espejos de
+     * estado. Ver el bloque de batería dentro de `checkRunnable`.
+     */
+    private var lastForcedServiceRestart = 0L
     private var lastNagAt = 0L
     /** ¿El ciclo del aviso ya está encolado? Evita duplicar el ritmo al re-armarlo. */
     private var nagArmed = false
@@ -123,12 +142,22 @@ class WatchdogForegroundService : Service() {
      * cambio es barato: con la accesibilidad activa —el 99,9 % del tiempo— es una
      * consulta al AccessibilityManager y una comparación, y ni siquiera enumera apps.
      *
-     * El ritmo se adapta solo: 20 s cuando todo está bien, 5 s mientras la accesibilidad
-     * está caída, que es cuando conviene corregir rápido y el equipo está de todas
-     * formas inutilizable. Y además hay dos avisos instantáneos que no cuestan nada: el
-     * ContentObserver de este servicio y el propio servicio de accesibilidad, que avisa
+     * El ritmo se adapta solo: **60 s** cuando todo está bien, 5 s mientras la
+     * accesibilidad está caída, que es cuando conviene corregir rápido y el equipo está de
+     * todas formas inutilizable. Y además hay TRES avisos instantáneos que no cuestan nada:
+     * el ContentObserver de este servicio y el propio servicio de accesibilidad, que avisa
      * al conectarse y al destruirse. O sea que este ciclo es la red de seguridad, no el
      * mecanismo principal.
+     *
+     * ⚠️ 2/9/2026 — EL RITMO NORMAL PASÓ DE 20 s A 60 s, Y HAY QUE SER PRECISO SOBRE QUÉ
+     * SE PIERDE, PORQUE CONTRADICE EN APARIENCIA EL PEDIDO DEL 18/8 ("detectar todo el
+     * tiempo"). No se pierde nada de la detección: apagar la accesibilidad desde Ajustes
+     * dispara el `ContentObserver` sobre `ENABLED_ACCESSIBILITY_SERVICES` y el `onDestroy()`
+     * del propio servicio, y los dos son **instantáneos**. Este ciclo nunca fue el que
+     * detecta: es el que cubre el caso en que ninguna de esas dos señales llegue (el
+     * sistema mata el servicio sin avisar, por ejemplo). Para ESE caso residual, la ventana
+     * pasa de hasta 20 s a hasta 60 s — y en cuanto detecta, el ciclo se acelera solo a 5 s.
+     * A cambio se ahorran 2.880 consultas al AccessibilityManager por día.
      */
     private val enforcerRunnable = object : Runnable {
         override fun run() {
@@ -153,19 +182,42 @@ class WatchdogForegroundService : Service() {
                 e.printStackTrace()
             }
 
+            // ── BATERÍA (2/9/2026) ────────────────────────────────────────────────────
+            // Los dos bloques de abajo hacían un startForegroundService() en CADA ciclo de
+            // 20 s: 4.320 arranques por día de la VPN y otros tantos de la marca de agua,
+            // los dos para servicios que ya estaban corriendo. Cada uno es una transacción
+            // Binder contra ActivityManagerService que despierta al proceso y lo obliga a
+            // reafirmar el primer plano. Ahora se consulta primero un espejo en memoria
+            // (`isTunnelRunning` / `isRunning`), que no cuesta nada, y solo se arranca de
+            // verdad cuando hace falta.
+            //
+            // Se conserva un reintento FORZADO cada FORCE_RESTART_MS, para el caso en que
+            // el servicio esté vivo pero inútil (el túnel no llegó a establecerse, la
+            // ventana de la marca de agua se perdió). O sea: se ahorra el 97 % de los
+            // arranques sin perder la auto-reparación, solo dilatándola a lo sumo 5 min en
+            // ese caso raro — el caso común, "el servicio se murió", lo detecta el espejo
+            // al instante porque se reinicia con el proceso.
+            val nowUptime = android.os.SystemClock.elapsedRealtime()
+            val forceServiceRestart = nowUptime - lastForcedServiceRestart > FORCE_RESTART_MS
+            if (forceServiceRestart) lastForcedServiceRestart = nowUptime
+
             // Garantizar que la VPN Kosher siga ejecutándose si alguna política la requiere
-            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(applicationContext)
+            com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(
+                applicationContext, forceServiceRestart
+            )
 
             // Garantizar que la marca de agua flotante siga ejecutándose si el launcher está activo
             try {
-                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
-                if (!policyManager.isLockSuiteSuspended() &&
-                    policyManager.isKosherLauncherEnabled() && Settings.canDrawOverlays(applicationContext)) {
-                    val watermarkIntent = Intent(applicationContext, WatermarkService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        applicationContext.startForegroundService(watermarkIntent)
-                    } else {
-                        applicationContext.startService(watermarkIntent)
+                if (forceServiceRestart || !WatermarkService.isRunning) {
+                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+                    if (!policyManager.isLockSuiteSuspended() &&
+                        policyManager.isKosherLauncherEnabled() && Settings.canDrawOverlays(applicationContext)) {
+                        val watermarkIntent = Intent(applicationContext, WatermarkService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            applicationContext.startForegroundService(watermarkIntent)
+                        } else {
+                            applicationContext.startService(watermarkIntent)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -178,15 +230,44 @@ class WatchdogForegroundService : Service() {
             // el servicio VPN: si el usuario lo reactivaba después a mano desde
             // Ajustes, quedaba encendido indefinidamente (hasta el próximo reinicio
             // del servicio VPN) y el filtro dejaba de ver el tráfico DNS por completo.
+            //
+            // ── BATERÍA (2/9/2026): el intervalo ahora depende de si hace falta ──
+            //
+            // Reimponer el ajuste cada 60 s es un parche por no tener la restricción real.
+            // Desde el 2/9 existe el interruptor "Bloquear DNS privado"
+            // (`DISALLOW_CONFIG_PRIVATE_DNS`, API 29+, ver mdm/PolicySpec.kt): con ese
+            // interruptor encendido **el usuario directamente no puede tocar el ajuste**, y
+            // reimponerlo cada minuto no protege de nada — es una llamada al
+            // DevicePolicyManager cada 60 s durante todo el día, para nada.
+            //
+            // Así que: con la restricción activa y efectiva, se pasa a cada 30 minutos (se
+            // conserva un ritmo lento y no cero, porque el ajuste global lo pueden mover
+            // otras cosas: una restauración, un OEM, otra app de sistema). Sin ella, sigue
+            // cada 60 s como antes, porque ahí sí es la única defensa.
+            // La comprobación entra como mucho una vez por minuto (no en cada ciclo de 20 s),
+            // y recién ahí se construye el PolicyManager. Entre el minuto y los 30 minutos
+            // el costo es una construcción y dos lecturas de preferencias — mucho más
+            // barato que la escritura de ajuste global que se ahorra.
             val nowElapsed = android.os.SystemClock.elapsedRealtime()
-            if (nowElapsed - lastPrivateDnsEnforceTime > 60000) {
-                lastPrivateDnsEnforceTime = nowElapsed
+            if (nowElapsed - lastPrivateDnsEnforceTime > 60_000L) {
                 if (com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(applicationContext)) {
                     try {
-                        com.ejemplo.locksuite.mdm.PolicyManager(applicationContext).disablePrivateDns()
+                        val pm = com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+                        val spec = com.ejemplo.locksuite.mdm.PolicySpec.byId("privateDns")
+                        val cubierto = spec != null && spec.supportedHere &&
+                            pm.isExtraRestrictionEnabled(spec)
+                        val intervalo = if (cubierto) 30 * 60_000L else 60_000L
+                        if (nowElapsed - lastPrivateDnsEnforceTime > intervalo) {
+                            lastPrivateDnsEnforceTime = nowElapsed
+                            pm.disablePrivateDns()
+                        }
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
+                } else {
+                    // Sin VPN que proteger no hay nada que reimponer: se corre el reloj para
+                    // no reevaluar cada minuto mientras el filtro esté apagado.
+                    lastPrivateDnsEnforceTime = nowElapsed
                 }
             }
 

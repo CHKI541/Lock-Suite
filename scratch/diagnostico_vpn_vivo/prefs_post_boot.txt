@@ -1,5 +1,0 @@
-﻿=== SU ATTEMPT ===
-/system/bin/sh: su: inaccessible or not found
-
-=== RUN-AS ATTEMPT ===
-run-as: package not debuggable: com.ejemplo.locksuite

@@ -20,6 +20,27 @@ import java.security.MessageDigest
 
 class LockSuiteFirebaseService : FirebaseMessagingService() {
 
+    companion object {
+        /** Timestamp más alto ya aceptado. Piso monotónico anti-repetición. */
+        private const val KEY_LAST_CMD_TIMESTAMP = "last_command_timestamp"
+
+        /** Desorden tolerado en la entrega de FCM antes de considerar el mensaje repetido. */
+        private const val REORDER_SLACK_MS = 10 * 60 * 1000L
+
+        /**
+         * Ventana absoluta contra el reloj del equipo. Amplia a propósito: acá NO vive la
+         * protección anti-repetición (esa la dan commandId + el piso monotónico), así que
+         * apretarla solo sirve para dejar inadministrable un equipo con la hora mal.
+         */
+        private const val ABSOLUTE_WINDOW_MS = 24 * 60 * 60 * 1000L
+
+        /**
+         * 1/1/2024 en epoch. Por debajo de esto el reloj del equipo no arrancó nunca
+         * (no hubo hora de red ni RTC válido) y no sirve para comparar contra nada.
+         */
+        private const val CREDIBLE_CLOCK_FLOOR_MS = 1_704_067_200_000L
+    }
+
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
         val command = data["command"] ?: return
@@ -27,19 +48,61 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         
         val policyManager = PolicyManager(this)
 
+        // Latido oportunista. Si llegó un mensaje FCM, el equipo está despierto y con red
+        // AHORA MISMO: es el mejor momento posible para refrescar `lastSeen`, y no cuesta
+        // nada porque la conexión ya está abierta. Va ANTES de validar la firma a
+        // propósito: un equipo cuya credencial de comandos se desincronizó (ver
+        // FirebaseDeviceSync.pushCommandSecret) tiene que seguir apareciendo en línea en
+        // el panel, si no el diagnóstico apunta al lugar equivocado ("está desconectado")
+        // cuando en realidad recibe todo y lo descarta.
+        try {
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(this)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Todo comando exige firma HMAC por dispositivo + timestamp + commandId, venga del
         // panel web (vía Cloud Functions) o de cualquier otro origen — no existe una vía "de
         // confianza implícita" sin firmar; las condiciones de abajo lo exigen siempre.
         val signature = data["signature"]
         val timestamp = data["timestamp"]
-        if (commandId.isNullOrBlank() || signature.isNullOrBlank() || timestamp.isNullOrBlank() ||
-            !verifyFcmSignature(data, timestamp, signature) ||
-            isReplay(commandId)
-        ) {
-            android.util.Log.w("LockSuiteFCM", "Comando FCM rechazado: autenticación o replay inválido.")
+
+        // ⚠️ 2/9/2026 — POR QUÉ ESTO YA NO ES UN `if` GIGANTE QUE TERMINA EN `return` MUDO.
+        //
+        // Antes, cualquiera de estas cuatro causas descartaba el comando SIN dejar rastro
+        // en ningún lado: ni ack, ni campo en Firebase, solo un Log.w que hay que estar
+        // mirando por USB para ver. El panel, mientras tanto, escribía "status: sent" y
+        // daba el comando por bueno. Ese es exactamente el síntoma "mando cosas desde la
+        // web y en el celular no pasa nada" — y es indistinguible, desde el panel, de un
+        // equipo apagado. Ahora cada rechazo escribe un ack con su motivo.
+        val rejection: String? = when {
+            commandId.isNullOrBlank() -> "MISSING_COMMAND_ID"
+            signature.isNullOrBlank() -> "MISSING_SIGNATURE"
+            timestamp.isNullOrBlank() -> "MISSING_TIMESTAMP"
+            timestampOutOfWindow(timestamp) -> "TIMESTAMP_OUT_OF_WINDOW"
+            !verifyFcmSignature(data, timestamp, signature) -> "BAD_SIGNATURE"
+            isReplay(commandId) -> "REPLAY"
+            else -> null
+        }
+        if (rejection != null) {
+            android.util.Log.w("LockSuiteFCM", "Comando FCM rechazado ($rejection): $command")
+            // Un commandId ausente o en blanco no da dónde escribir el ack; el resto sí.
+            if (!commandId.isNullOrBlank()) {
+                writeRejectionAck(commandId, command, rejection)
+            }
+            // BAD_SIGNATURE es la firma de que el secreto de comandos se desincronizó.
+            // Marcarlo para que el panel lo muestre y ofrezca re-vincular, en vez de
+            // dejar al administrador adivinando por qué el equipo no obedece.
+            if (rejection == "BAD_SIGNATURE") {
+                try {
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.pushCommandSecret(this)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
             return
         }
-        recordCommand(commandId)
+        recordCommand(commandId!!)
 
         val packagesStr = data["packages"]
         val packagesList = packagesStr?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
@@ -157,6 +220,23 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "ENABLE_STATUSBAR" -> policyManager.setStatusBarDisabled(false)
                 "ENABLE_KOSHER_LAUNCHER" -> policyManager.setKosherLauncherEnabled(true)
                 "DISABLE_KOSHER_LAUNCHER" -> policyManager.setKosherLauncherEnabled(false)
+
+                // Kiosco real del sistema operativo (Lock Task). Ver PolicyManager.
+                // ⚠️ Con esto encendido, el equipo SOLO abre los paquetes de la lista de
+                // apps permitidas del launcher. Si el marcador telefónico no está en esa
+                // lista, el código de recuperación *#*#9999#*#* no se puede marcar.
+                "ENABLE_KIOSK_LOCK_TASK" -> policyManager.setKioskLockTaskEnabled(true)
+                "DISABLE_KIOSK_LOCK_TASK" -> policyManager.setKioskLockTaskEnabled(false)
+
+                // Modo teléfono de teclas (estilo Nokia). Ver ui/launcher/NokiaKeypadScreen.kt.
+                "ENABLE_NOKIA_MODE" -> policyManager.setNokiaKeypadMode(true)
+                "DISABLE_NOKIA_MODE" -> policyManager.setNokiaKeypadMode(false)
+                // ⚠️ Apagar el táctil solo afecta a la pantalla del launcher (Android no
+                // deja apagar el digitalizador del equipo entero). Y en un celular sin
+                // teclas físicas, deja el inicio manejable solo desde el panel o con el
+                // gesto de emergencia de 3 s en la esquina superior derecha.
+                "ENABLE_NOKIA_TOUCH" -> policyManager.setNokiaTouchEnabled(true)
+                "DISABLE_NOKIA_TOUCH" -> policyManager.setNokiaTouchEnabled(false)
 
                 "DISABLE_KEYGUARD" -> policyManager.setKeyguardDisabled(true)
                 "ENABLE_KEYGUARD" -> policyManager.setKeyguardDisabled(false)
@@ -312,6 +392,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                         .putStringSet("allowed_packages", packagesList.toSet())
                         .apply()
                     policyManager.refreshInstallRestriction()
+                    // 2/9/2026 — La lista de Lock Task se arma DESDE esta misma lista, así
+                    // que hay que reaplicarla acá. Sin esto, una app recién permitida desde
+                    // el panel no se podría abrir en un equipo con el kiosco encendido, y
+                    // el síntoma sería "agregué la app y no aparece / no abre" sin ningún
+                    // error a la vista.
+                    policyManager.applyKioskLockTask(policyManager.isKioskLockTaskEnabled())
                     true
                 }
                 "UPDATE_APP" -> {
@@ -464,8 +550,35 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     }
                 }
                 else -> {
-                    commandErrorReason = "Unknown command: $command"
-                    false
+                    // ── Registro declarativo de restricciones (2/9/2026) ──
+                    // Antes de dar el comando por desconocido, se busca en PolicySpec. Eso
+                    // hace que agregar una restricción nueva NO requiera tocar este archivo:
+                    // alcanza con sumarla a la lista de mdm/PolicySpec.kt. Es el patrón
+                    // FeatureRegistry de A Bloq, y existe justamente para que no vuelva a
+                    // pasar que una política quede a medio cablear entre los cinco lugares
+                    // que había que tocar a mano.
+                    val blockSpec = com.ejemplo.locksuite.mdm.PolicySpec.byBlockCommand(command)
+                    val unblockSpec = com.ejemplo.locksuite.mdm.PolicySpec.byUnblockCommand(command)
+                    when {
+                        blockSpec != null -> {
+                            if (!blockSpec.supportedHere) {
+                                // Se aplica igual (queda guardada y va a regir si el equipo
+                                // se actualiza), pero se dice que no rige HOY. Android
+                                // acepta y descarta en silencio una restricción que no
+                                // conoce: sin este aviso, el panel mostraría el interruptor
+                                // encendido sobre un equipo donde no hace nada.
+                                commandErrorReason = "Guardada, pero este equipo (Android API " +
+                                    "${android.os.Build.VERSION.SDK_INT}) no soporta " +
+                                    "${blockSpec.label}: requiere API ${blockSpec.minSdk}."
+                            }
+                            policyManager.setExtraRestriction(blockSpec, true)
+                        }
+                        unblockSpec != null -> policyManager.setExtraRestriction(unblockSpec, false)
+                        else -> {
+                            commandErrorReason = "Unknown command: $command"
+                            false
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -528,14 +641,71 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         }
     }
 
+    /** Ack de un comando que ni siquiera llegó a ejecutarse: no pasó la autenticación. */
+    private fun writeRejectionAck(commandId: String, command: String, reason: String) {
+        try {
+            val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(this)
+            val baseRef = FirebaseDatabase.getInstance().reference
+            val ackData = mapOf(
+                "status" to "rejected",
+                "command" to command,
+                "reason" to reason,
+                "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
+            )
+            baseRef.child("devices/$deviceId/commandAcks/$commandId").setValue(ackData)
+            baseRef.child("devices/$deviceId/info/commandAcks/$commandId").setValue(ackData)
+                .addOnFailureListener {}
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * ¿El timestamp del comando está fuera de la ventana aceptable?
+     *
+     * ⚠️ 2/9/2026 — POR QUÉ ESTO YA NO ES `abs(now - t) > 5 min`.
+     *
+     * El timestamp lo pone la Cloud Function, con el reloj de Google. La comparación se
+     * hacía contra `System.currentTimeMillis()`, que es el reloj de PARED DEL CELULAR.
+     * En un equipo kosher sin SIM, sin hora de red, o después de quedarse sin batería, ese
+     * reloj puede estar corrido horas o días — y entonces **TODOS los comandos del panel
+     * se rechazan**, en silencio, para siempre. El equipo aparece en línea, el panel dice
+     * "enviado", y no pasa nada. Es una de las causas de "no puedo controlarlo desde la
+     * web", y es la más difícil de sospechar porque nada apunta al reloj.
+     *
+     * La protección contra repetición NO depende de este chequeo: la dan
+     * `commandId` + `isReplay()` (registro de ids ya procesados) y, desde ahora, un piso
+     * MONOTÓNICO — se recuerda el timestamp más alto aceptado y se rechaza cualquiera
+     * muy anterior. Eso no necesita que el reloj del equipo esté bien, solo que el del
+     * servidor avance, que es lo único que un atacante no puede retroceder.
+     *
+     * El chequeo absoluto se conserva, pero con ventana amplia (24 h) y solo cuando el
+     * reloj del equipo es creíble. Si el reloj está claramente mal (anterior a 2024), se
+     * omite: mejor obedecer con el reloj roto que quedar inadministrable.
+     */
+    private fun timestampOutOfWindow(timestamp: String): Boolean {
+        val timeMs = timestamp.toLongOrNull() ?: return true
+        if (timeMs <= 0L) return true
+
+        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(this)
+        val lastAccepted = prefs.getLong(KEY_LAST_CMD_TIMESTAMP, 0L)
+        // FCM puede reordenar entregas, así que se tolera hasta REORDER_SLACK_MS de
+        // desorden; más viejo que eso es un mensaje reproducido.
+        if (lastAccepted > 0L && timeMs < lastAccepted - REORDER_SLACK_MS) return true
+
+        val now = System.currentTimeMillis()
+        val clockIsCredible = now > CREDIBLE_CLOCK_FLOOR_MS
+        if (clockIsCredible && Math.abs(now - timeMs) > ABSOLUTE_WINDOW_MS) return true
+
+        if (timeMs > lastAccepted) {
+            prefs.edit().putLong(KEY_LAST_CMD_TIMESTAMP, timeMs).apply()
+        }
+        return false
+    }
+
     private fun verifyFcmSignature(data: Map<String, String>, timestamp: String, signature: String): Boolean {
         return try {
-            val timeMs = timestamp.toLongOrNull() ?: return false
-            // Bloquear si el mensaje tiene más de 5 minutos (evita replay attacks)
-            if (Math.abs(System.currentTimeMillis() - timeMs) > 5 * 60 * 1000L) {
-                return false
-            }
-
+            // La ventana temporal ya la validó timestampOutOfWindow() antes de llegar acá.
             val secret = com.ejemplo.locksuite.util.FirebaseDeviceSync.getOrCreateCommandSecret(this)
             val mac = Mac.getInstance("HmacSHA256")
             val secretKey = SecretKeySpec(secret.toByteArray(), "HmacSHA256")

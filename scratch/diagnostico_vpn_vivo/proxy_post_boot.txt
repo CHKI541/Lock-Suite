@@ -1,3 +1,0 @@
-﻿global_http_proxy_host: 
-global_http_proxy_port: 0
-http_proxy: null

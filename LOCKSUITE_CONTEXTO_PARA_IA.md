@@ -662,78 +662,31 @@ El dueño pidió aplicar todas las recomendaciones. Estas dos **no** se aplicaro
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**2/9 — comparación con A Bloq, arreglo del canal de comandos / nombre / presets / consumo, y luego 20 restricciones nuevas + kiosco real + modo teléfono de teclas. Sesión de Claude por el puente al dispositivo: SÍ se tocó código (19 archivos, 4 nuevos), pero SIN compilar en Gradle, sin desplegar y SIN COMMITEAR (no hubo `device_bash`, o sea que no hubo `git`).**
+**2/9 (Noche) — Antigravity: corrección de compilación Gradle, atajo de emergencia de 15s por defecto, activación de DNS privado por defecto, compilación release, despliegue a Firebase (Hosting + Functions) y GitHub.**
 
-Documento de detalle: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-02_ABLOQ_PANEL_BATERIA.md`** — con el orden de prueba, el porqué de cada cambio y el mensaje de commit listo para copiar.
-
-1. **Qué se pidió:** (a) leer el repo de A Bloq y comparar; (b) presets que no andan; (c) que el panel web funcione y tenga todo lo que la app; (d) por qué los celulares no quedan en línea y por qué hay que cambiar el PIN varias veces; (e) el nombre de dispositivo de la web no se registra; (f) menos batería y CPU; (g) *(pedido durante la sesión)* seguridad y datos privados en GitHub.
-
-2. **El documento estaba una sesión atrasado, y conviene anotar cómo se detectó.** El HEAD real es `3d1174e` del **1/9 19:52 UTC**, no `65bc6da4` del 31/8: **Antigravity ya aplicó los parches de B.24, B.11 y B.25** que este archivo daba por pendientes. Se verificó comparando los tamaños de los 12 archivos clave contra `device_list_dir`: coinciden **byte por byte**. Corregido en B.11, B.24 y B.25 — lo que falta ahí es la prueba en equipo, no el código.
-
-3. **Hallazgo de método que ahorra una sesión entera: el repo público se puede CLONAR desde el contenedor.** `git clone https://github.com/CHKI541/Lock-Suite` funciona sin credenciales y esquiva de una el tope de 7 carpetas de `device_stage_files` y el truco de `.git/objects/` del 1/9. Verificar siempre que el clon corresponde al disco comparando tamaños contra `device_list_dir`. **Esto deja de funcionar el día que el repo pase a privado (B.2/B.32)** — ahí hay que pedir la carpeta `app\src\main\java\com\ejemplo\locksuite` desde el arranque. (En esta sesión `device_bash` volvió a no montar, por tercera vez consecutiva; ya se puede dar por sentado que no va a montar.)
-
-4. **(d) y (c) eran EL MISMO BUG, y es el hallazgo más importante de la sesión.** Tres causas encadenadas hacían que el celular descartara **todos** los comandos del panel **sin dejar ningún rastro** (`return` mudo, mientras la Function ya había escrito `status: "sent"`): el secreto de firma se desincroniza al reinstalar la app y las reglas no dejan resincronizarlo; ese rechazo se llevaba puesto **también el PIN**, porque viajaban en el mismo `updateChildren()` atómico —de ahí "hay que cambiar el pin varias veces"—; y la ventana de 5 minutos se comparaba contra el **reloj de pared del celular**, que en un equipo sin hora de red está corrido. Detalle y arreglos en **B.26**.
-
-5. **(e) El nombre de la web se borraba solo en segundos**, porque `syncDeviceInfo()` lo re-escribía desde la preferencia local (vacía) en cada sincronización. Ahora manda el panel. Ver **B.27**.
-
-6. **(b) Los presets fallaban por una razón que no se ve leyendo el código de a un lado por vez:** Realtime Database **no guarda arrays vacíos**, así que el `perAppInternetBlocked: []` sobre el que se firmaba desaparecía al guardar, y la firma no podía coincidir **nunca**. Casi ningún perfil hecho en el panel se podía aplicar. Más una restricción con la clave mal escrita que no se aplicó jamás. Ver **B.28**.
-
-7. **(c) La paridad de comandos panel↔app estaba BIEN**, medida con un script: `ALLOWED_COMMANDS` 106, la app maneja 105, el panel referencia 105, y la única diferencia (`VERIFY_PIN`) es correcta. **El problema del panel nunca fue que le faltaran comandos: era que los comandos se perdían en silencio** (punto 4). Se agregó lo que sí faltaba: acks con motivo, aviso de re-vinculación y estado "En reposo".
-
-8. **(f) Batería: 8.640 arranques de servicio por día tirados a la basura.** El ciclo de 20 s hacía `startForegroundService()` de la VPN y de la marca de agua **siempre**, corrieran o no. Ver **B.30**, incluida la explicación de por qué el cambio no debilita la auto-reparación (importante para que nadie lo "simplifique" después) y tres optimizaciones más grandes que quedaron **sugeridas y sin aplicar** porque cambian comportamiento.
-
-9. **(a) A Bloq: siete cosas que conviene copiar y cinco que no.** Ver **B.31**. Lo más valioso es el patrón `ProtectionFeature`/`FeatureRegistry` (una política = un objeto, en vez de mantener la lista a mano en cinco lugares) y `isPolicyActive()` leyendo el estado real del sistema en vez de la preferencia. **Y una respuesta definitiva a B.4:** A Bloq usa `lockdown = true` y le funciona **porque su VPN es un corta-internet con ruta por defecto, no un filtro** — o sea que sigue sin haber que copiarlo sobre `KosherVpnService`, pero sí conviene copiar ese servicio como una **segunda** VPN para que "bloquear internet" y el arranque protegido dejen de depender de un proxy *recomendado* que QUIC ignora.
-
-10. **(g) Seguridad: la buena noticia es que no hay credenciales filtradas.** Ni keystores, ni `google-services.json`, ni service accounts, ni en HEAD ni en el historial. Lo que sí hay que sacar es `scratch/diagnostico_vpn_vivo/` (2,1 MB de logcat del celular real). Y el problema de fondo sigue siendo que **el repo es público**, o sea que el mapa de evasión completo está publicado. Ver **B.32**. El resto de la cuenta de GitHub **no se pudo revisar** (la API está restringida a los repos de la sesión): falta que el dueño pase la lista.
-
-11. **Verificación hecha:** `kotlinc` 2.0.21 contra stubs escritos a mano, **0 errores / 0 warnings** sobre todo el código nuevo, con **cuatro controles negativos** que el chequeo detectó (sin eso, un "0 errores" puede ser simplemente que no compiló nada). Parseo limpio de los 9 `.kt` completos. `node --check` sobre `app.js` e `index.js`. **NO se corrió Gradle y NO se probó nada en equipo real.**
-
-12. **Segunda mitad de la sesión — el dueño pidió aplicar TODAS las recomendaciones y copiar más de A Bloq.** Se agregó: el registro declarativo de políticas con **20 restricciones nuevas** (**B.33**), la verificación de estado real contra `getUserRestrictions()` (**B.34**), el **kiosco real del SO** con Lock Task (**B.35**), el **modo teléfono de teclas estilo Nokia** con íconos propios y bloqueo de táctil (**B.36**), la **verificación de firma de APK** (**B.37**), y las tres optimizaciones de batería que habían quedado sugeridas (**B.30**). El panel pasó de 65 a **107 interruptores** y de 106 a **152 comandos**, todos verificados alineados entre app, Cloud Function y panel.
-
-13. **Un bug nuevo, encontrado con un chequeo automático que conviene conservar (B.38).** Comparando las cuatro listas de restricciones de `PolicyManager` apareció que `DISALLOW_CONFIG_DATE_TIME` se levantaba y se limpiaba pero **no se volvía a aplicar tras un reinicio**. Es el mismo defecto que S-3 y P-3, pero esta vez lo encontró un script en segundos en vez de una sesión de diagnóstico.
-
-14. **Dos recomendaciones NO se aplicaron, a propósito (B.39):** BCrypt para el PIN y la firma asimétrica de presets. Las dos tocan tres implementaciones que tienen que coincidir y necesitan desplegar Cloud Functions; hacerlas a ciegas puede dejar al dueño **sin poder entrar a sus propios equipos** o romper todos los presets existentes. Necesitan una sesión con terminal.
-
-15. **Limpieza de seguridad (B.32):** se sacaron del repo `scratch/` (2,1 MB de logcat del celular real), `zizR3CfM` y `Claude web 1.zip`, y se agregaron al `.gitignore`. ⚠️ Del lado del dueño hay que correr `git rm -r --cached scratch/` — el `.gitignore` NO deja de rastrear lo que ya estaba rastreado.
-
-16. **Lo que falta y no puede hacer una sesión por el puente:** compilar, desplegar el panel (`firebase deploy --only hosting,functions` — **esta vez SÍ hace falta `functions`**, porque `ALLOWED_COMMANDS` cambió; el cache-buster quedó en `app.js?v=24`) y **hacer el commit**.
+1. **Corrección de compilación Kotlin:**
+   - Al compilar con Gradle (`./gradlew compileDebugKotlin`), se detectó un error por falta de `import android.os.Build` en `KosherLauncherActivity.kt:391`. Se corrigió y el build quedó en `BUILD SUCCESSFUL`.
+2. **DNS Privado por defecto:**
+   - Se ajustó `PolicyManager.isRestrictionEnabled` para que `UserManager.DISALLOW_CONFIG_PRIVATE_DNS` esté activo por defecto en Android 10+ (API 29+), blindando el filtro DNS contra DoT (puerto 853) e impidiendo que el usuario lo active desde Ajustes.
+3. **Atajo de emergencia de 15 segundos en el launcher (activo por defecto):**
+   - Se implementó en `KosherLauncherActivity.kt` un detector que, al mantener pulsado durante 15 segundos en la esquina superior derecha de la pantalla, abre directamente `LoginActivity`.
+   - Está activo por defecto siempre en el launcher (sin interferir con toques o desplazamientos normales).
+   - En el modo teléfono de teclas con táctil bloqueado (`nokia_touch_enabled = false`), además se conserva el atajo rápido de 3 segundos.
+4. **Limpieza de repositorio:**
+   - Se desrastreó del seguimiento git `scratch/` (logs de 2.1 MB del celular real), `zizR3CfM` y `Claude web 1.zip`.
+5. **Compilación y Despliegue completados:**
+   - Se ejecutó `deploy_all.ps1`:
+     - Subió `:app` a **versionCode 97 / versionName 0.6.34**.
+     - Compiló APKs de Release con éxito (`clean + assembleRelease`).
+     - Desplegó Firebase Hosting (`version.json` 0.6.34 y APKs) y Realtime Database.
+     - Se resolvió el timeout de descubrimiento de Cloud Functions con `FUNCTIONS_DISCOVERY_TIMEOUT=60` y se desplegó exitosamente `sendCommandV8` con los **152 comandos permitidos** (URL: `https://sendcommandv8-5i52mt6h3q-uc.a.run.app`).
+     - Sincronización exitosa con GitHub (`git push` a `main`).
 
 ---
 
 ## Estado del repo (git)
 
-**2/9:** HEAD = `3d1174e` ("fix(red/suspension/borrado): reintento DNS ante ENETUNREACH, eleccion de red validada, y simetria de suspender/purgar"), del **1/9 19:52 UTC**. Antes de compilar, confirmá con `git log -1` y `git status`.
-
-**Sin commitear, escritos en disco por la sesión del 2/9 (15 modificados + 4 archivos Kotlin nuevos + 2 documentos):**
-
-- `app/src/main/java/com/ejemplo/locksuite/util/FirebaseDeviceSync.kt`
-- `app/src/main/java/com/ejemplo/locksuite/service/LockSuiteFirebaseService.kt`
-- `app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt`
-- `app/src/main/java/com/ejemplo/locksuite/service/WatchdogForegroundService.kt`
-- `app/src/main/java/com/ejemplo/locksuite/service/WatermarkService.kt`
-- `app/src/main/java/com/ejemplo/locksuite/service/KosherVpnService.kt`
-- `app/src/main/java/com/ejemplo/locksuite/receiver/BootReceiver.kt`
-- `app/src/main/java/com/ejemplo/locksuite/worker/WatchdogWorker.kt`
-- `app/src/main/java/com/ejemplo/locksuite/ui/dashboard/DashboardActivity.kt`
-- `admin-backend/public/app.js`
-- `admin-backend/public/index.html` (cache-buster a `app.js?v=24`)
-- `admin-backend/functions/index.js` — **`ALLOWED_COMMANDS` pasó de 106 a 152: hay que desplegar `functions`, si no el panel va a recibir "Comando no reconocido" en todo lo nuevo**
-- `app/src/main/java/com/ejemplo/locksuite/ui/launcher/KosherLauncherActivity.kt`
-- `app/src/main/java/com/ejemplo/locksuite/util/ApkInstaller.kt`
-- `.gitignore`
-- **Archivos Kotlin NUEVOS** (hay que agregarlos al repo, no solo modificarlos):
-  - `app/src/main/java/com/ejemplo/locksuite/mdm/PolicySpec.kt`
-  - `app/src/main/java/com/ejemplo/locksuite/util/ApkSignatureVerifier.kt`
-  - `app/src/main/java/com/ejemplo/locksuite/ui/launcher/NokiaIconSet.kt`
-  - `app/src/main/java/com/ejemplo/locksuite/ui/launcher/NokiaKeypadScreen.kt`
-- `INSTRUCCIONES_ANTIGRAVITY_2026-09-02_ABLOQ_PANEL_BATERIA.md` *(nuevo)*
-- este archivo
-
-**Borrados del repo (siguen en tu disco):** `scratch/`, `zizR3CfM`, `Claude web 1.zip`. Del lado tuyo: `git rm -r --cached scratch/ && git rm --cached zizR3CfM "Claude web 1.zip"`.
-
-**Ojo con `deploy_all.ps1`:** hace `git add .`, así que commitea junto TODO lo que esté sin commitear. Si querés el commit del 2/9 separado, hacelo **antes** de correr el script.
-
-- `:app` (MDM) sigue en **versionCode 95 / versionName 0.6.32**, igual que `admin-backend/public/version.json`. Esta sesión no lo tocó: **subilo antes de compilar** (o dejá que `deploy_all.ps1` lo haga).
-- `:admin-app` sigue en **versionCode 2 / 1.1.0**, compilado y desplegado, **sin probar en el celular** (B.22).
-
-**26/8:** el repositorio quedó sincronizado con `main` en GitHub tras el despliegue de **0.6.32 (código 95)**; APK release publicado en Firebase Hosting (`admin-backend/public/locksuite-latest.apk` y `version.json`), auto-updater OTA activo.
+**2/9:** HEAD sincronizado con `origin/main` en GitHub.
+- `:app` (MDM) en **versionCode 97 / versionName 0.6.34**, publicado en Firebase Hosting (`locksuite-latest.apk` y `version.json`).
+- Cloud Functions (`sendCommandV8`) actualizado en Google Cloud con los **152 comandos permitidos**.
+- Árbol de trabajo local limpio.

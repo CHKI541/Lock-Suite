@@ -94,6 +94,21 @@ class KosherLauncherActivity : ComponentActivity() {
      * recuerda no sirve de nada.
      */
     private var toqueEsquinaDesde = 0L
+    private val emergencyHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val openAdminRunnable = Runnable {
+        abrirAdminEmergencia()
+    }
+
+    private fun abrirAdminEmergencia() {
+        try {
+            startActivity(
+                Intent(this, com.ejemplo.locksuite.ui.auth.LoginActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -331,40 +346,65 @@ class KosherLauncherActivity : ComponentActivity() {
      * La salida de emergencia (3 segundos en la esquina superior derecha) está explicada
      * en el campo `toqueEsquinaDesde`.
      */
+    /**
+     * Detección de gestos de emergencia en el launcher:
+     *
+     * 1. **15 segundos en la esquina superior derecha (ACTIVO POR DEFECTO)**:
+     *    En cualquier modo (launcher normal o teclas), si se mantiene presionado durante
+     *    15 segundos en la esquina superior derecha, se abre LoginActivity.
+     *    Permite al administrador recuperar el acceso físico siempre.
+     *
+     * 2. **3 segundos en la esquina superior derecha (SOLO MODO TECLAS SIN TÁCTIL)**:
+     *    Si el modo teléfono de teclas está activo y el táctil fue apagado a propósito
+     *    (`nokia_touch_enabled = false`), 3 segundos alcanzan para no trabar el equipo.
+     */
     override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        if (ev == null) return super.dispatchTouchEvent(ev)
+
         val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
         val modoTeclas = prefs.getBoolean("nokia_keypad_mode", false)
-        val touchOn = prefs.getBoolean("nokia_touch_enabled", true)
-        if (!modoTeclas || touchOn || ev == null) {
-            return super.dispatchTouchEvent(ev)
-        }
+        val touchBloqueado = modoTeclas && !prefs.getBoolean("nokia_touch_enabled", true)
 
-        // Salida de emergencia: pulsación sostenida en la esquina superior derecha.
-        val enEsquina = ev.x > resources.displayMetrics.widthPixels * 0.8f &&
-            ev.y < resources.displayMetrics.heightPixels * 0.15f
+        val width = resources.displayMetrics.widthPixels
+        val height = resources.displayMetrics.heightPixels
+        val enEsquina = ev.x > width * 0.8f && ev.y < height * 0.15f
+        val tiempoRequerido = if (touchBloqueado) 3000L else 15000L
+
         when (ev.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN ->
-                toqueEsquinaDesde = if (enEsquina) android.os.SystemClock.elapsedRealtime() else 0L
-            android.view.MotionEvent.ACTION_MOVE ->
-                if (!enEsquina) toqueEsquinaDesde = 0L
-            android.view.MotionEvent.ACTION_UP -> {
-                val sostenido = toqueEsquinaDesde > 0L &&
-                    android.os.SystemClock.elapsedRealtime() - toqueEsquinaDesde >= 3000L
+            android.view.MotionEvent.ACTION_DOWN -> {
+                if (enEsquina) {
+                    toqueEsquinaDesde = android.os.SystemClock.elapsedRealtime()
+                    emergencyHandler.removeCallbacks(openAdminRunnable)
+                    emergencyHandler.postDelayed(openAdminRunnable, tiempoRequerido)
+                } else {
+                    toqueEsquinaDesde = 0L
+                    emergencyHandler.removeCallbacks(openAdminRunnable)
+                }
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                if (!enEsquina) {
+                    toqueEsquinaDesde = 0L
+                    emergencyHandler.removeCallbacks(openAdminRunnable)
+                }
+            }
+            android.view.MotionEvent.ACTION_UP,
+            android.view.MotionEvent.ACTION_CANCEL -> {
+                emergencyHandler.removeCallbacks(openAdminRunnable)
+                val duracion = if (toqueEsquinaDesde > 0L) {
+                    android.os.SystemClock.elapsedRealtime() - toqueEsquinaDesde
+                } else 0L
                 toqueEsquinaDesde = 0L
-                if (sostenido) {
-                    try {
-                        startActivity(
-                            Intent(this, com.ejemplo.locksuite.ui.auth.LoginActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                if (duracion >= tiempoRequerido) {
+                    abrirAdminEmergencia()
                 }
             }
         }
-        // Se consume el evento: el táctil queda inerte para el uso normal.
-        return true
+
+        return if (touchBloqueado) {
+            true
+        } else {
+            super.dispatchTouchEvent(ev)
+        }
     }
 
     override fun onResume() {
@@ -415,6 +455,8 @@ class KosherLauncherActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        emergencyHandler.removeCallbacks(openAdminRunnable)
+        toqueEsquinaDesde = 0L
         // Detener timer del reloj para no consumir recursos cuando no se ve
         clockTimer?.cancel()
         clockTimer = null

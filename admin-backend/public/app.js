@@ -761,6 +761,91 @@ function setCommandStatus(text) {
     }
 }
 
+// ──────────────────────────────────────────────
+// Seguimiento en vivo de una actualización de app (3/9/2026)
+//
+// Por qué existe: el ack de UPDATE_APP solo dice que el flujo ARRANCÓ. Todo lo
+// que le importa al administrador pasa después — y el celular ya lo publica en
+// `devices/<id>/updateFlow` (etapa, texto de estado, resultado y motivo), que es
+// literalmente el mismo texto que el usuario ve en la pantalla negra del
+// teléfono. Antes el panel no lo miraba: mostraba "✓ Comando enviado" a los 10 s
+// y no volvía a decir nada, aunque el celular terminara con "no hay espacio".
+//
+// El texto final sale de `lastResultReason`, que es donde vive la explicación
+// accionable ("faltan 180 MB"). Sin eso el administrador ve "ERROR" a secas.
+// ──────────────────────────────────────────────
+let activeUpdateFlowRef = null;
+let activeUpdateFlowHandler = null;
+
+function stopFollowingUpdateFlow() {
+    if (activeUpdateFlowRef && activeUpdateFlowHandler) {
+        activeUpdateFlowRef.off("value", activeUpdateFlowHandler);
+    }
+    activeUpdateFlowRef = null;
+    activeUpdateFlowHandler = null;
+}
+
+function updateResultText(result, reason) {
+    const detail = reason ? ` — ${reason}` : "";
+    switch (result) {
+        case "UPDATED":       return "✓ Actualización completada en el celular";
+        case "UP_TO_DATE":    return "✓ La app ya estaba actualizada";
+        case "NO_SPACE":      return "✗ No hay espacio en el celular" + detail;
+        case "NEEDS_ACCOUNT": return "✗ El celular no tiene cuenta de Google configurada" + detail;
+        case "NOT_AVAILABLE": return "✗ Google Play no ofrece esa actualización para este equipo" + detail;
+        case "STORE_ERROR":   return "✗ Error de Google Play" + detail;
+        case "CANCELLED":     return "Actualización cancelada";
+        case "TIMEOUT":       return "✗ La actualización tardó demasiado y se canceló" + detail;
+        case "ERROR":         return "✗ No se pudo actualizar" + detail;
+        default:              return "Actualización finalizada" + detail;
+    }
+}
+
+function followUpdateFlow(deviceId, buttonEl, onDone) {
+    stopFollowingUpdateFlow();
+    const startedAt = Date.now();
+    const ref = database.ref(`devices/${deviceId}/updateFlow`);
+    let sawRunning = false;
+
+    const finishWith = (text) => {
+        stopFollowingUpdateFlow();
+        clearTimeout(giveUpId);
+        setCommandStatus(text);
+        if (buttonEl) buttonEl.disabled = false;
+        if (onDone) onDone();
+    };
+
+    // El watchdog del celular corta a los 10 minutos. Un minuto más de margen y
+    // se suelta el listener: nunca se queda escuchando para siempre.
+    const giveUpId = setTimeout(() => {
+        finishWith("⚠ Se dejó de seguir la actualización (11 min sin terminar). Mirá el estado del dispositivo en el panel.");
+    }, 11 * 60 * 1000);
+
+    const handler = ref.on("value", (snap) => {
+        const f = snap.val();
+        if (!f) return;
+        if (f.running) {
+            sawRunning = true;
+            setCommandStatus(f.statusText || "Actualizando en el celular...");
+            return;
+        }
+        // Ya no está corriendo. Solo se cree el resultado si es de AHORA: el nodo
+        // conserva el último resultado histórico, y sin este chequeo el panel
+        // mostraría el desenlace de una actualización de la semana pasada.
+        const resultAt = f.lastResultAt || 0;
+        if (resultAt >= startedAt - 5000) {
+            finishWith(updateResultText(f.lastResult, f.lastResultReason));
+        } else if (!sawRunning && Date.now() - startedAt > 25000) {
+            // Arrancó (hubo ack "applied") pero el flujo nunca se publicó como
+            // corriendo. Casi siempre es que el celular perdió la red justo
+            // después de aceptar el comando.
+            finishWith("⚠ El celular aceptó el comando pero no reportó la actualización. Revisá que tenga red.");
+        }
+    });
+    activeUpdateFlowRef = ref;
+    activeUpdateFlowHandler = handler;
+}
+
 async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParams = null) {
     a && (a.disabled = !0), setCommandStatus("Enviando comando al celular...");
     let d = verifiedDevicePins[e] || null,
@@ -799,25 +884,54 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
         const resData = await response.json();
         const commandId = resData.commandId;
         if (commandId) {
-            const isUpdateCmd = (t === "UPDATE_LOCKSUITE");
-            const timeoutMs = isUpdateCmd ? 120000 : 10000;
-            setCommandStatus(isUpdateCmd ? "Esperando descarga y actualización del celular..." : "Comando enviado. Esperando respuesta del celular...");
+            const isSelfUpdateCmd = (t === "UPDATE_LOCKSUITE");
+            // 3/9/2026: UPDATE_APP quedaba fuera de esta bandera, asi que se le
+            // aplicaba el timeout corto y el mensaje generico. Ahora tiene su
+            // propio camino: sigue en vivo el nodo updateFlow que el celular
+            // publica, que es LO MISMO que el usuario ve en la pantalla del
+            // telefono. Era el pedido textual del dueno: "tiene que pasar lo
+            // mismo que si el usuario actualiza desde su cel".
+            const isAppUpdateCmd = (t === "UPDATE_APP");
+            const timeoutMs = isSelfUpdateCmd ? 120000 : 10000;
+            setCommandStatus(isSelfUpdateCmd ? "Esperando descarga y actualización del celular..." : "Comando enviado. Esperando respuesta del celular...");
             const ackRef = database.ref(`devices/${e}/commandAcks/${commandId}`);
             const timeoutId = setTimeout(() => {
                 ackRef.off();
-                setCommandStatus(isUpdateCmd ? "✓ Comando enviado. El celular se está actualizando en segundo plano." : "✓ Comando enviado (sin confirmación del celular)");
+                if (isSelfUpdateCmd) {
+                    setCommandStatus("✓ Comando enviado. El celular se está actualizando en segundo plano.");
+                } else {
+                    // ⚠️ NO PONER UN ✓ ACA. Esto NO es un exito: es silencio.
+                    //
+                    // Hasta el 3/9/2026 decia "✓ Comando enviado (sin confirmacion
+                    // del celular)", con tilde verde. Es indistinguible de que haya
+                    // funcionado, y es exactamente lo que el dueno reporto como
+                    // "mando actualizar desde la web y no pasa nada": el panel
+                    // decia que si. Un equipo que no contesta en 10 s esta dormido,
+                    // sin red, o con el canal de comandos desincronizado — y esa
+                    // ultima causa (B.26) se arregla con el boton "Re-vincular",
+                    // asi que hay que nombrarla donde el administrador la lee.
+                    setCommandStatus("⚠ El celular no confirmó en 10 s. Puede estar sin red o dormido. Si se repite, revisá el aviso de canal de comandos y probá \"Re-vincular\".");
+                }
                 if (a) a.disabled = false;
                 if (i) i();
             }, timeoutMs);
-            
+
             ackRef.on("value", (snap) => {
                 if (snap.exists()) {
                     const status = snap.val().status;
                     if (status === "applied") {
                         clearTimeout(timeoutId);
                         ackRef.off();
-                        setCommandStatus("✓ Comando aplicado con éxito en el celular");
-                        if (a) a.disabled = false;
+                        if (isAppUpdateCmd) {
+                            // El ack "applied" de UPDATE_APP solo dice que el flujo
+                            // ARRANCO. Lo que importa recien pasa despues, y el
+                            // celular lo publica en vivo: seguirlo.
+                            setCommandStatus("El celular abrió Google Play. Siguiendo la actualización...");
+                            followUpdateFlow(e, a, i);
+                        } else {
+                            setCommandStatus("✓ Comando aplicado con éxito en el celular");
+                            if (a) a.disabled = false;
+                        }
                     } else if (status === "failed" || status === "rejected") {
                         clearTimeout(timeoutId);
                         ackRef.off();

@@ -94,6 +94,63 @@ object FirebaseDeviceSync {
      * panel pueda mostrarlo en vivo (y ofrecer el botón de cancelar) sin tener
      * que sincronizar el dispositivo entero en cada cambio de etapa.
      */
+    /**
+     * Escribe el ACK de un comando FCM.
+     *
+     * ⚠️ POR QUÉ ESTO VIVE ACÁ Y NO EN `LockSuiteFirebaseService` (3/9/2026).
+     *
+     * Los tres escritores de ack del servicio FCM llamaban a
+     * `FirebaseDatabase.getInstance().reference...setValue()` **directo, sin pasar
+     * por `withAuth`**. Las reglas de `devices/$id` exigen `auth != null`, así que
+     * cuando el comando llegaba con el proceso recién levantado por FCM —o sea el
+     * caso NORMAL: el equipo estaba dormido y el mensaje lo despertó— la sesión
+     * anónima todavía no existía y la escritura se rechazaba por permisos. Encima
+     * el fallo era mudo: una de las dos escrituras no tenía `addOnFailureListener`
+     * y la otra lo tenía vacío.
+     *
+     * Desde el panel eso se veía como **"✓ Comando enviado (sin confirmación del
+     * celular)"** a los 10 segundos, que es indistinguible de un equipo apagado —
+     * y es, textual, el "mando actualizar desde la web y no pasa nada" que reportó
+     * el dueño. El comando podía haberse aplicado perfectamente en el celular: lo
+     * que no llegaba era la respuesta.
+     *
+     * `withAuth` hace la sesión anónima primero y recién después escribe. Es el
+     * mismo camino que usa todo el resto del archivo; los acks eran la excepción.
+     */
+    fun writeCommandAck(
+        context: Context,
+        commandId: String?,
+        command: String,
+        status: String,
+        reason: String?
+    ) {
+        if (commandId.isNullOrBlank()) return
+        val ctx = context.applicationContext
+        withAuth {
+            try {
+                val ackData = mutableMapOf<String, Any>(
+                    "status" to status,
+                    "command" to command,
+                    "timestamp" to ServerValue.TIMESTAMP
+                )
+                if (!reason.isNullOrBlank()) ackData["reason"] = reason
+                val base = FirebaseDatabase.getInstance().reference
+                val id = deviceId(ctx)
+                base.child("devices/$id/commandAcks/$commandId").setValue(ackData)
+                    .addOnFailureListener { e ->
+                        android.util.Log.e(
+                            "FirebaseDeviceSync",
+                            "No se pudo escribir el ack de $command ($status): ${e.message}", e
+                        )
+                    }
+                base.child("devices/$id/info/commandAcks/$commandId").setValue(ackData)
+                    .addOnFailureListener { }
+            } catch (e: Exception) {
+                android.util.Log.e("FirebaseDeviceSync", "Error armando el ack de $command: ${e.message}", e)
+            }
+        }
+    }
+
     fun syncUpdateFlow(context: Context) {
         val prefs = PrefsHelper.getMdmPrefs(context)
         val running = prefs.getBoolean(UpdateFlowManager.KEY_IN_PROGRESS, false) &&

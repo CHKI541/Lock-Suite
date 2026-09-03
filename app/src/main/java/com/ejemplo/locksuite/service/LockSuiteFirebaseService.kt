@@ -115,22 +115,7 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
         )
         if (requiresPackages.contains(command) && packagesList.isEmpty()) {
             android.util.Log.w("LockSuiteFCM", "Comando $command requiere una lista de paquetes, pero se recibió vacía.")
-            if (commandId != null) {
-                try {
-                    val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(this)
-                    val baseRef = FirebaseDatabase.getInstance().reference
-                    val ackData = mapOf(
-                        "status" to "failed",
-                        "command" to command,
-                        "reason" to "PACKAGES_LIST_EMPTY",
-                        "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
-                    )
-                    baseRef.child("devices/$deviceId/commandAcks/$commandId").setValue(ackData)
-                    baseRef.child("devices/$deviceId/info/commandAcks/$commandId").setValue(ackData).addOnFailureListener {}
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
+            sendCommandAck(commandId, command, false, "PACKAGES_LIST_EMPTY")
             return
         }
 
@@ -493,28 +478,14 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                         
                         progressRef.removeValue()
                         
-                        if (!idToAck.isNullOrBlank()) {
-                            val ackRef = baseRef.child("devices/$deviceId/commandAcks/$idToAck")
-                            val ackInfoRef = baseRef.child("devices/$deviceId/info/commandAcks/$idToAck")
-                            if (error == null) {
-                                val ackData = mapOf(
-                                    "status" to "applied",
-                                    "command" to "UPDATE_LOCKSUITE",
-                                    "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
-                                )
-                                ackRef.setValue(ackData)
-                                ackInfoRef.setValue(ackData).addOnFailureListener {}
-                            } else {
-                                val ackData = mapOf(
-                                    "status" to "failed",
-                                    "reason" to error,
-                                    "command" to "UPDATE_LOCKSUITE",
-                                    "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
-                                )
-                                ackRef.setValue(ackData)
-                                ackInfoRef.setValue(ackData).addOnFailureListener {}
-                            }
-                        }
+                        // Mismo camino autenticado que el resto de los acks: este
+                        // corre en un hilo de IO y puede llegar con la sesión
+                        // anónima todavía sin abrir. Ver FirebaseDeviceSync.writeCommandAck.
+                        com.ejemplo.locksuite.util.FirebaseDeviceSync.writeCommandAck(
+                            applicationContext, idToAck, "UPDATE_LOCKSUITE",
+                            if (error == null) "applied" else "failed",
+                            error
+                        )
                     }
                     true
                 }
@@ -587,27 +558,16 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
             success = false
         }
 
-        // Registrar confirmación de ejecución del comando (Command ACK)
-        if (!commandId.isNullOrBlank()) {
-            try {
-                val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(this)
-                val baseRef = FirebaseDatabase.getInstance().reference
-                val status = if (success) "applied" else "failed"
-                
-                val ackData = mutableMapOf<String, Any>(
-                    "status" to status,
-                    "command" to command,
-                    "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
-                )
-                if (commandErrorReason != null) {
-                    ackData["reason"] = commandErrorReason!!
-                }
-                baseRef.child("devices/$deviceId/commandAcks/$commandId").setValue(ackData)
-                baseRef.child("devices/$deviceId/info/commandAcks/$commandId").setValue(ackData).addOnFailureListener {}
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        // Registrar confirmación de ejecución del comando (Command ACK).
+        // Pasa por FirebaseDeviceSync.writeCommandAck, que autentica primero: sin
+        // eso el ack se perdía justo en el caso normal (proceso recién levantado
+        // por el propio FCM, sin sesión anónima todavía). Ver el comentario de esa
+        // función — era la causa de "sin confirmación del celular" en el panel.
+        com.ejemplo.locksuite.util.FirebaseDeviceSync.writeCommandAck(
+            this, commandId, command,
+            if (success) "applied" else "failed",
+            commandErrorReason
+        )
 
         // Reportar el nuevo estado resultante a la base de datos para que se refleje de inmediato en el panel web
         try {
@@ -624,40 +584,16 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
      * esperando una confirmación que nunca llegaba.
      */
     private fun sendCommandAck(commandId: String?, command: String, success: Boolean, reason: String?) {
-        if (commandId.isNullOrBlank()) return
-        try {
-            val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(this)
-            val baseRef = FirebaseDatabase.getInstance().reference
-            val ackData = mutableMapOf<String, Any>(
-                "status" to if (success) "applied" else "failed",
-                "command" to command,
-                "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
-            )
-            if (!reason.isNullOrBlank()) ackData["reason"] = reason
-            baseRef.child("devices/$deviceId/commandAcks/$commandId").setValue(ackData)
-            baseRef.child("devices/$deviceId/info/commandAcks/$commandId").setValue(ackData).addOnFailureListener {}
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        com.ejemplo.locksuite.util.FirebaseDeviceSync.writeCommandAck(
+            this, commandId, command, if (success) "applied" else "failed", reason
+        )
     }
 
     /** Ack de un comando que ni siquiera llegó a ejecutarse: no pasó la autenticación. */
     private fun writeRejectionAck(commandId: String, command: String, reason: String) {
-        try {
-            val deviceId = com.ejemplo.locksuite.util.FirebaseDeviceSync.deviceId(this)
-            val baseRef = FirebaseDatabase.getInstance().reference
-            val ackData = mapOf(
-                "status" to "rejected",
-                "command" to command,
-                "reason" to reason,
-                "timestamp" to com.google.firebase.database.ServerValue.TIMESTAMP
-            )
-            baseRef.child("devices/$deviceId/commandAcks/$commandId").setValue(ackData)
-            baseRef.child("devices/$deviceId/info/commandAcks/$commandId").setValue(ackData)
-                .addOnFailureListener {}
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        com.ejemplo.locksuite.util.FirebaseDeviceSync.writeCommandAck(
+            this, commandId, command, "rejected", reason
+        )
     }
 
     /**

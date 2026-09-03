@@ -239,3 +239,146 @@ y en B.41 de LOCKSUITE_CONTEXTO_PARA_IA.md.
 > ⚠️ **No uses `deploy_all.ps1` para esto todavía**: hace `git add .` y commitearía
 > junto todo lo que haya sin commitear (incluido lo del 2/9 noche que sigue
 > pendiente). Commiteá esto aparte primero.
+
+---
+
+# SEGUNDA TANDA (3/9, tarde) — "desde el panel web tampoco pasa nada"
+
+> **Lo de arriba ya está compilado y desplegado.** Antigravity commiteó la primera
+> tanda como `a78ae48` y construyó **0.6.38 / código 101** (`54cd11e`). Lo que
+> sigue es posterior a ese build y **no** está adentro.
+
+## 7.1 El síntoma
+
+El dueño mandó **Actualizar** sobre Calculadora desde el panel. El panel respondió
+**"✓ Comando enviado (sin confirmación del celular)"** — con tilde verde — y en el
+celular no pasó nada. Pedido textual: *"tiene que pasar lo mismo que si el usuario
+actualiza desde su cel"*.
+
+Dos bugs distintos que se sumaban, y el segundo hacía invisible al primero.
+
+## 7.2 El ack se perdía por falta de autenticación
+
+Los **cuatro** escritores de ack de `LockSuiteFirebaseService` llamaban a
+`FirebaseDatabase.getInstance().reference…setValue()` **directo, sin pasar por
+`withAuth`**. Las reglas de `devices/$id` exigen `auth != null`, así que cuando el
+comando llegaba con el proceso **recién levantado por el propio FCM** —el caso
+NORMAL: el equipo estaba dormido y el mensaje lo despertó— la sesión anónima
+todavía no existía y la escritura se rechazaba por permisos.
+
+Y el fallo era **mudo**: una de las dos escrituras no tenía `addOnFailureListener`
+y la otra lo tenía vacío.
+
+**Lo importante:** el comando podía haberse aplicado perfectamente en el celular.
+Lo que no llegaba era la respuesta. Por eso el síntoma era tan confuso.
+
+Es el complemento de **B.26**: aquel arregló *cuándo* se escribe el ack (que un
+rechazo también deje rastro), este arregla *que la escritura llegue*. Sin los dos,
+B.26 no se puede ni probar.
+
+Ahora los cuatro pasan por **`FirebaseDeviceSync.writeCommandAck()`**, que
+autentica primero y loguea el fallo real. Quedan ~100 líneas menos de duplicación.
+
+## 7.3 El panel llamaba "✓" al silencio
+
+Sin ack en 10 s, `app.js` mostraba *"✓ Comando enviado (sin confirmación del
+celular)"*. Con tilde verde eso es indistinguible de que haya funcionado, **y de un
+equipo apagado**. Ahora es un aviso ⚠ explícito que nombra las causas reales
+(dormido / sin red / canal desincronizado → botón **"Re-vincular"**).
+
+*(El hallazgo 1 de B.40 —que el panel descartaba los acks `rejected`— **ya estaba
+arreglado**: `app.js` línea 821 contempla `failed` y `rejected`. Bien ahí. Lo que
+faltaba era que el ack llegara.)*
+
+## 7.4 `UPDATE_APP` se sigue en vivo desde el panel
+
+`isUpdateCmd` cubría solo `UPDATE_LOCKSUITE`, así que `UPDATE_APP` se quedaba con
+el timeout de 10 s y el mensaje genérico, y el panel no volvía a decir nada nunca.
+
+Ahora `followUpdateFlow()` se engancha a `devices/<id>/updateFlow` y muestra **las
+mismas etapas que el usuario ve en la pantalla negra del teléfono**, y al terminar
+el resultado con su motivo: *"✗ No hay espacio en el celular — faltan 180 MB"*.
+
+**Tres detalles que no hay que "simplificar":** el listener se suelta solo al
+terminar y a los 11 min (el watchdog del celular corta a los 10); descarta
+resultados viejos comparando `lastResultAt` contra el momento del envío, porque el
+nodo conserva el último desenlace histórico; y si el celular ackeó pero nunca
+publicó el flujo, a los 25 s avisa que probablemente perdió la red.
+
+## 7.5 Pruebas de esta tanda
+
+1. Comando cualquiera desde el panel con el celular **dormido** (pantalla apagada,
+   un rato sin tocarlo): el ack tiene que llegar igual. **Es el caso que fallaba.**
+2. `UPDATE_APP`: el panel muestra las etapas en vivo y al final el motivo.
+3. Con el equipo sin espacio: termina en *"✗ No hay espacio en el celular"*, no "✓".
+4. Comando a un equipo **realmente apagado**: sale el aviso ⚠, no un "✓".
+5. `firebase deploy --only hosting` y abrir con **Ctrl+F5** (cache-buster ya en `v=27`).
+
+## 7.6 Archivos
+
+`util/FirebaseDeviceSync.kt`, `service/LockSuiteFirebaseService.kt`,
+`admin-backend/public/app.js`, `admin-backend/public/index.html`.
+
+Verificado: `kotlinc` 2.0.21 contra stubs, 0 errores / 0 warnings sobre la función
+nueva, con dos controles negativos, los dos detectados. `node --check` sobre
+`app.js`, con control negativo. **Sin Gradle y sin probar en equipo.**
+
+## 7.7 Commit de la segunda tanda
+
+```
+git add app/src/main/java/com/ejemplo/locksuite/util/FirebaseDeviceSync.kt \
+        app/src/main/java/com/ejemplo/locksuite/service/LockSuiteFirebaseService.kt \
+        admin-backend/public/app.js \
+        admin-backend/public/index.html \
+        LOCKSUITE_CONTEXTO_PARA_IA.md \
+        INSTRUCCIONES_ANTIGRAVITY_2026-09-03_ACTUALIZACION_APPS.md
+```
+
+```
+fix(panel/fcm): el ack de comandos se perdia sin autenticar, y el panel lo mostraba como exito
+
+Sintoma: actualizar una app desde el panel web no hacia nada visible y el panel
+decia "✓ Comando enviado (sin confirmacion del celular)". Son dos bugs distintos
+que se sumaban, y el segundo hacia invisible al primero.
+
+1. EL ACK NUNCA LLEGABA (causa de fondo). Los cuatro escritores de ack de
+   LockSuiteFirebaseService llamaban a FirebaseDatabase...setValue() DIRECTO, sin
+   pasar por withAuth. Las reglas de devices/$id exigen auth != null, asi que
+   cuando el comando llegaba con el proceso recien levantado por el propio FCM
+   —o sea el caso NORMAL: el equipo estaba dormido y el mensaje lo desperto— la
+   sesion anonima todavia no existia y la escritura se rechazaba por permisos.
+   Encima el fallo era mudo: una de las dos escrituras no tenia
+   addOnFailureListener y la otra lo tenia vacio. El comando podia haberse
+   aplicado perfectamente en el celular; lo que no llegaba era la respuesta.
+
+   Ahora los cuatro pasan por FirebaseDeviceSync.writeCommandAck(), que autentica
+   primero y loguea el fallo real. De paso quedan 100 lineas menos de codigo
+   duplicado.
+
+2. EL PANEL LLAMABA "✓" AL SILENCIO. Sin ack en 10 s, app.js mostraba
+   "✓ Comando enviado (sin confirmacion del celular)" con tilde verde: es
+   indistinguible de que haya funcionado, y es exactamente lo que el dueno
+   reporto como "mando actualizar desde la web y no pasa nada". Ahora es un aviso
+   explicito que nombra las causas reales (equipo dormido, sin red, o canal de
+   comandos desincronizado -> boton "Re-vincular", B.26).
+
+3. UPDATE_APP AHORA SE SIGUE EN VIVO DESDE EL PANEL. Pedido textual del dueno:
+   "tiene que pasar lo mismo que si el usuario actualiza desde su cel". El ack de
+   UPDATE_APP solo dice que el flujo ARRANCO; todo lo que importa pasa despues, y
+   el celular ya lo publica en devices/<id>/updateFlow. isUpdateCmd solo cubria
+   UPDATE_LOCKSUITE, asi que UPDATE_APP se quedaba con el timeout corto y el
+   mensaje generico. Ahora el panel se engancha a updateFlow y muestra las mismas
+   etapas que el usuario ve en la pantalla negra del telefono, y al terminar
+   muestra el resultado con su motivo (lastResultReason): "No hay espacio en el
+   celular - faltan 180 MB" en vez de nada. El listener se suelta solo al
+   terminar, a los 11 min, y descarta resultados viejos comparando lastResultAt.
+
+Cache-buster de app.js a v=27.
+
+Verificado: kotlinc 2.0.21 contra stubs, 0 errores / 0 warnings sobre la funcion
+nueva, con dos controles negativos, los dos detectados. node --check sobre app.js,
+con control negativo. SIN COMPILAR CON GRADLE Y SIN PROBAR EN EQUIPO.
+```
+
+> Esta tanda toca el panel, así que además del APK hay que correr
+> `firebase deploy --only hosting`.

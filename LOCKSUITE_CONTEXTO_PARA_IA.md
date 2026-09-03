@@ -715,7 +715,39 @@ El equipo importa y conviene tenerlo presente para el resto del proyecto, porque
 6. Repetir 2 y 3 en un teléfono normal, para confirmar que la franja más estricta (42 % contra el 62 % viejo) no dejó de encontrar el botón ahí.
 7. Confirmar que al terminar Play Store queda re-suspendida y las restricciones restauradas.
 
-**Lo que NO se tocó, a propósito:** el hallazgo 1 de **B.40** —que el panel descarta los acks `rejected` y por eso muestra "✓ Comando enviado" cuando el celular rechazó— sigue abierto, y **es el que hace visible todo esto desde el panel**. Los motivos nuevos de este punto viajan por `updateFlow.lastResultReason`, que el panel sí lee, así que la prueba 1 se puede hacer igual; pero conviene cerrar B.40-1 antes, no después.
+**Sobre la visibilidad desde el panel:** los motivos nuevos de este punto viajan por `updateFlow.lastResultReason`. El panel no lo dibujaba y el ack ni siquiera llegaba — las dos cosas se arreglaron el mismo día en **B.42**, que hay que aplicar junto con esto para poder probarlo.
+
+---
+
+**B.42 — "DESDE EL PANEL WEB NO PASA NADA": EL ACK SE PERDÍA POR FALTA DE AUTENTICACIÓN, Y EL PANEL LLAMABA "✓" AL SILENCIO. [ESCRITO Y VERIFICADO EL 3/9, SIN COMPILAR NI PROBAR]**
+
+Reporte del dueño, con captura: manda **Actualizar** sobre Calculadora desde el panel y el panel responde **"✓ Comando enviado (sin confirmación del celular)"** — con tilde verde — mientras en el celular no pasa nada. Pedido textual: *"tiene que pasar lo mismo que si el usuario actualiza desde su cel"*.
+
+Son **dos bugs distintos que se sumaban**, y el segundo hacía invisible al primero.
+
+**1. El ack nunca llegaba (causa de fondo).** Los cuatro escritores de ack de `LockSuiteFirebaseService` llamaban a `FirebaseDatabase.getInstance().reference…setValue()` **directo, sin pasar por `withAuth`**. Las reglas de `devices/$id` exigen `auth != null`, así que cuando el comando llegaba con el proceso **recién levantado por el propio FCM** —o sea el caso NORMAL: el equipo estaba dormido y el mensaje lo despertó— la sesión anónima todavía no existía y la escritura se rechazaba por permisos. Encima el fallo era **mudo**: una de las dos escrituras no tenía `addOnFailureListener` y la otra lo tenía vacío.
+
+**Lo importante de entender: el comando podía haberse aplicado perfectamente en el celular. Lo que no llegaba era la respuesta.** Por eso el síntoma era tan confuso — a veces algo pasaba en el equipo y a veces no, pero el panel decía lo mismo siempre. Es el mismo tipo de defecto que B.26 arregló para los rechazos (*"cada rechazo escribe un ack con su motivo"*): aquel arregló **cuándo** se escribe el ack, este arregla **que la escritura llegue**. Sin los dos, B.26 no se puede ni probar.
+
+Ahora los cuatro pasan por **`FirebaseDeviceSync.writeCommandAck()`**, que autentica primero (mismo `withAuth` que usa todo el resto del archivo — los acks eran la única excepción) y loguea el fallo real. De paso quedan ~100 líneas menos de código duplicado.
+
+**2. El panel llamaba "✓" al silencio.** Sin ack en 10 s, `app.js` mostraba *"✓ Comando enviado (sin confirmación del celular)"*. Con tilde verde, eso es indistinguible de que haya funcionado — **y es indistinguible de un equipo apagado**. Ahora es un aviso explícito que nombra las causas reales: equipo dormido, sin red, o canal de comandos desincronizado, con el puntero al botón **"Re-vincular"** de B.26. *(Nota: el hallazgo 1 de B.40 —que el panel descartaba los acks `rejected`— **ya estaba arreglado** en el árbol de trabajo cuando esta sesión lo miró: `app.js` línea 821 contempla `failed` y `rejected`. Antigravity lo cerró. Lo que faltaba era esto.)*
+
+**3. `UPDATE_APP` ahora se sigue en vivo desde el panel.** El ack de `UPDATE_APP` solo dice que el flujo **arrancó**; todo lo que le importa al administrador pasa después — y el celular ya lo publica en `devices/<id>/updateFlow`. Pero `isUpdateCmd` cubría solo `UPDATE_LOCKSUITE`, así que `UPDATE_APP` se quedaba con el timeout corto y el mensaje genérico, y el panel no volvía a decir nada nunca más. Ahora `followUpdateFlow()` se engancha a ese nodo y muestra **las mismas etapas que el usuario ve en la pantalla negra del teléfono**, y al terminar muestra el resultado con su motivo: *"✗ No hay espacio en el celular — faltan 180 MB"* en vez de nada. Eso es, literalmente, el pedido del dueño.
+
+Tres detalles del seguimiento que no hay que "simplificar": el listener **se suelta solo** al terminar y a los 11 minutos (el watchdog del celular corta a los 10); **descarta resultados viejos** comparando `lastResultAt` contra el momento en que se mandó el comando, porque el nodo conserva el último desenlace histórico y sin eso el panel mostraría el de la semana pasada; y si el celular ackeó pero nunca publicó el flujo, a los 25 s avisa que probablemente perdió la red.
+
+**Archivos:** `util/FirebaseDeviceSync.kt` (`writeCommandAck` nueva), `service/LockSuiteFirebaseService.kt` (los cuatro escritores), `admin-backend/public/app.js`, `admin-backend/public/index.html` (cache-buster a `v=27`).
+
+**Verificación:** `kotlinc` 2.0.21 contra stubs, **0 errores / 0 warnings** sobre la función nueva, con **dos controles negativos, los dos detectados**. `node --check` sobre `app.js`, también con control negativo. **Sin Gradle y sin probar en equipo.**
+
+**Falta probar en equipo real:**
+
+1. Mandar cualquier comando desde el panel con el celular **dormido** (pantalla apagada, un rato sin tocarlo): tiene que llegar el ack igual. Es el caso que fallaba.
+2. Mandar `UPDATE_APP` y confirmar que el panel muestra las **etapas en vivo** ("Abriendo Google Play…", "Descargando… 40 %") y al final el resultado con su motivo.
+3. Con el equipo sin espacio: el panel tiene que terminar mostrando *"✗ No hay espacio en el celular"*, no un "✓".
+4. Mandar un comando a un equipo **realmente apagado** y confirmar que ahora sale el aviso ⚠ y no un "✓".
+5. Desplegar el panel (`firebase deploy --only hosting`) y abrir con **Ctrl+F5** — el cache-buster ya está en `v=27`.
 
 ---
 
@@ -759,15 +791,21 @@ Pedido del dueño: revisar cómo la accesibilidad controla y ejecuta la actualiz
 10. **Método.** `device_bash` no montó (**quinta vez consecutiva**: 21/8, 31/8, 2/9, 2/9 noche, 3/9). Se clonó el repo público y se validó contra el disco comparando tamaños en bytes en los cinco archivos del flujo — coincidieron byte por byte, así que lo leído era el árbol de trabajo. Para escribir, `SendUserFile` → `device_commit_files` con ruta absoluta y `expectedMtimeMs`: los cinco archivos entraron sin rechazos, **con solo la carpeta raíz conectada** (o sea que el tope de 7 carpetas es de `device_stage_files`, no de `device_commit_files` — anotarlo, ahorra pedir carpetas de más).
 11. **Sin commit desde esta sesión:** sin `device_bash` no hay `git`. El mensaje de commit exacto está en `INSTRUCCIONES_ANTIGRAVITY_2026-09-03_ACTUALIZACION_APPS.md`, junto con el orden de prueba en equipo real.
 
+**Segunda tanda de la misma sesión (3/9, tarde) — "desde el panel web tampoco pasa nada".** Con una captura del panel diciendo *"✓ Comando enviado (sin confirmación del celular)"*, aparecieron dos bugs más, resumidos en **B.42**. El de fondo es que **los cuatro escritores de ack escribían en Firebase sin autenticar**, así que el ack se perdía justo en el caso normal (proceso recién levantado por el propio FCM, sin sesión anónima todavía) y el fallo era mudo. **El comando podía haberse aplicado bien en el celular: lo que no llegaba era la respuesta.** El segundo es que el panel llamaba "✓" a ese silencio, que es indistinguible de un equipo apagado. Y se agregó lo que el dueño pidió textualmente: el panel ahora **sigue en vivo** `updateFlow` para `UPDATE_APP` y muestra las mismas etapas que el usuario ve en la pantalla del teléfono, con el motivo al final.
+
+**Antigravity commiteó y desplegó la primera tanda mientras esta sesión seguía trabajando.** El commit `a78ae48` lleva el mensaje que dejó esta sesión, y `54cd11e` es el build **0.6.38 / código 101** con todo lo de B.41 adentro. O sea que **B.41 ya está compilado y desplegado**; lo que falta es probarlo. B.42 quedó escrito después y **no** entró en ese build.
+
 **Ojo con el orden de prueba:** la prueba más valiosa es la primera y hay que hacerla **antes** de liberar espacio — con el equipo todavía lleno, mandar la actualización desde el panel y confirmar que rebota al instante, sin tapar la pantalla, diciendo cuántos MB faltan.
 
-**Contexto de la sesión anterior (Claude, 2/9 noche), que sigue vigente:** la revisión de los 16 hallazgos de la auditoría de Antigravity quedó como **B.40** y **nada de eso está parcheado todavía**. El hallazgo 1 de esa lista —el panel descarta los acks `rejected`— es el que hace visible desde el panel todo lo de esta sesión: conviene cerrarlo primero.
+**Contexto de la sesión anterior (Claude, 2/9 noche):** la revisión de los 16 hallazgos de la auditoría de Antigravity quedó como **B.40**. **Corrección medida el 3/9: el hallazgo 1 (el panel descartaba los acks `rejected`) YA ESTÁ ARREGLADO** — `app.js` línea 821 contempla `failed` y `rejected`; lo cerró Antigravity. Lo que faltaba era que el ack **llegara**, que es B.42. Los otros 12 hallazgos confirmados **siguen sin parchear**.
 
 ---
 
 ## Estado del repo (git)
 
-**3/9:** el último commit conocido es `3d77cb7` ("Actualizacion automatica a version 0.6.37 (Codigo 100)", 2/9 22:37 -03), o sea que Antigravity siguió trabajando después del 0.6.34 que figuraba acá.
-- `:app` (MDM) en **versionCode 100 / versionName 0.6.37**. **Verificalo igual** con `git log -1` y `cat app/build.gradle.kts` antes de compilar: en este repo hay más de un agente tocando el número.
-- **3/9, sin commitear:** la sesión de Claude del 3/9 escribió en el disco **cinco archivos de código** (`util/PlayButtonFinder.kt`, `util/PlayUpdateSessionWatcher.kt`, `util/UpdateFlowManager.kt`, `util/FirebaseDeviceSync.kt`, `service/LockSuiteAccessibilityService.kt`) más este documento y `INSTRUCCIONES_ANTIGRAVITY_2026-09-03_ACTUALIZACION_APPS.md`. **No tenía `git`** (`device_bash` no montó). El mensaje de commit está listo en ese documento.
-- **Sigue pendiente de commit lo del 2/9 noche:** aquella sesión dejó este documento (B.40) y `INSTRUCCIONES_ANTIGRAVITY_2026-09-02_REVISION_AUDITORIA.md` sin commitear.
+**3/9:** HEAD sincronizado con `origin/main`.
+- `54cd11e` — **versionCode 101 / versionName 0.6.38**, compilado y desplegado por Antigravity el 3/9. **Incluye toda la primera tanda de B.41** (los ocho defectos del flujo de actualización).
+- `a78ae48` — la primera tanda de esta sesión, commiteada por Antigravity con el mensaje que dejó Claude.
+- **Sin commitear al cierre:** la **segunda tanda (B.42)** — `util/FirebaseDeviceSync.kt`, `service/LockSuiteFirebaseService.kt`, `admin-backend/public/app.js`, `admin-backend/public/index.html` — más este documento y el de instrucciones actualizados. El mensaje de commit está en la sección 7 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-03_ACTUALIZACION_APPS.md`.
+- **Sigue pendiente de commit lo del 2/9 noche:** `INSTRUCCIONES_ANTIGRAVITY_2026-09-02_REVISION_AUDITORIA.md`, si no entró en el `git add .` de `deploy_all.ps1`.
+- **Verificá igual** con `git log -1`, `git status` y `cat app/build.gradle.kts` al arrancar: en este repo hay más de un agente tocando el número de versión.

@@ -263,12 +263,11 @@ object NetworkForwarder {
                         sock = DatagramSocket()
                         socket = sock
                         vpnService.protect(sock)
-                        // V-5: volver a vincular a la red física si la tenemos. En un
-                        // equipo con la ruta ancha 100.0.0.0/8 del módem, no vincular es
-                        // justamente lo que desvía el paquete a la antena.
-                        upstreamResult.network?.let { net ->
-                            try { net.bindSocket(sock) } catch (ignored: Exception) { }
-                        }
+                        // En el reintento NO vinculamos a upstreamResult.network: si el primer
+                        // intento falló por red caída (ENETUNREACH), re-vincular al mismo
+                        // Network garantiza que el fallback a 8.8.8.8/1.1.1.1 falle también.
+                        // Sin vincular (pero protegido por vpnService.protect), el socket sale
+                        // por la ruta por defecto del sistema.
                         // Los reintentos van con menos paciencia que el primero: el
                         // objetivo es responderle rápido a la app, no insistir.
                         sock.soTimeout = RETRY_TIMEOUT_MS

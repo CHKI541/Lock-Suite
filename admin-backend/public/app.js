@@ -1723,7 +1723,30 @@ if (savePresetBtn) {
                 // un perfil que no las nombra no las toca al aplicarse.
                 no_network_reset: !!dev.networkResetBlocked,
                 no_bluetooth: !!dev.bluetoothBlocked,
-                no_config_locale: !!dev.localeChangeBlocked
+                no_config_locale: !!dev.localeChangeBlocked,
+                no_config_date_time: !!dev.dateTimeBlocked,
+                no_config_mobile_networks: !!dev.mobileNetworksBlocked,
+                // Restricciones de PolicySpec.EXTRA_RESTRICTIONS
+                no_config_private_dns: !!dev.privateDnsBlocked,
+                no_sms: !!dev.smsBlocked,
+                no_outgoing_calls: !!dev.outgoingCallsBlocked,
+                no_config_location: !!dev.configLocationBlocked,
+                no_share_location: !!dev.shareLocationBlocked,
+                no_autofill: !!dev.autofillBlocked,
+                no_content_capture: !!dev.contentCaptureBlocked,
+                no_printing: !!dev.printingBlocked,
+                no_usb_file_transfer: !!dev.usbFileTransferBlocked,
+                no_data_roaming: !!dev.dataRoamingBlocked,
+                no_airplane_mode: !!dev.airplaneModeBlocked,
+                no_ambient_display: !!dev.ambientDisplayBlocked,
+                no_system_error_dialogs: !!dev.systemErrorDialogsBlocked,
+                no_set_wallpaper: !!dev.setWallpaperBlocked,
+                no_set_user_icon: !!dev.setUserIconBlocked,
+                no_config_credentials: !!dev.configCredentialsBlocked,
+                no_config_cell_broadcasts: !!dev.configCellBroadcastsBlocked,
+                no_outgoing_beam: !!dev.outgoingBeamBlocked,
+                no_unmute_microphone: !!dev.unmuteMicrophoneBlocked,
+                no_remove_managed_profile: !!dev.removeManagedProfileBlocked
             },
             cameraDisabled: !!dev.cameraDisabled,
             screenCaptureBlocked: !!dev.screenCaptureBlocked,
@@ -1743,6 +1766,7 @@ if (savePresetBtn) {
             // (las que lee PolicyManager.importPolicyPresetJson); los de la derecha, los
             // campos tal como los reporta el celular.
             flashingBlocked: !!dev.flashingBlocked,
+            hideSuspendedApps: !!dev.hideSuspendedApps,
             accessibilityProtection: !!dev.accessibilityProtected,
             accBounceSettings: !!dev.accBounceSettings,
             accNag: !!dev.accNag,
@@ -1750,6 +1774,9 @@ if (savePresetBtn) {
             bootGateEnabled: !!dev.bootGateEnabled,
             bootGateWaitAccessibility: !!dev.bootGateWaitAccessibility,
             imageBlockStrictScroll: !!dev.imageStrictScroll,
+            kioskLockTask: !!(dev.kioskLockTask || dev.kioskLockTaskEnabled),
+            nokiaKeypadMode: !!dev.nokiaKeypadMode,
+            nokiaTouchEnabled: dev.nokiaTouchEnabled !== false,
             perAppInternetBlocked: Object.values(dev.apps || {}).filter(a => a.isInternetBlocked).map(a => a.packageName)
         };
 

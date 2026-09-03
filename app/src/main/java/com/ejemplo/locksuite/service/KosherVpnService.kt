@@ -353,7 +353,11 @@ class KosherVpnService : VpnService() {
 
             while (running) {
                 val length = tunnelInput.read(buffer)
-                if (length <= 0) {
+                if (length < 0) {
+                    android.util.Log.i("KosherVPN", "TUN EOF recibido (length < 0), saliendo del bucle")
+                    break
+                }
+                if (length == 0) {
                     try {
                         Thread.sleep(30) // Evitar ocupación inútil de CPU y salvar batería
                     } catch (e: InterruptedException) {

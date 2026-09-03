@@ -489,6 +489,7 @@ object FirebaseDeviceSync {
 
                     // Kiosco real del sistema operativo (Lock Task)
                     "kioskLockTaskEnabled" to policyManager.isKioskLockTaskEnabled(),
+                    "hideSuspendedApps" to policyManager.isHideSuspendedApps(),
 
                     // Modo teléfono de teclas
                     "nokiaKeypadMode" to policyManager.isNokiaKeypadMode(),

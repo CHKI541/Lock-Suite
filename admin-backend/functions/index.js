@@ -117,13 +117,12 @@ function canonicalCommandPayload(payload) {
     .join("\n");
 }
 
-// Helper para verificar admin por email
-async function checkAdminByEmail(email) {
-  if (!email) throw { status: 403, message: "Acceso denegado: correo inválido." };
-  const emailKey = email.toLowerCase().replace(/[.@]/g, "_");
-  const snap = await admin.database().ref(`authorizedAdmins/${emailKey}`).once("value");
+// Helper para verificar admin por UID (fuente de verdad alineada con database.rules.json)
+async function checkAdminByUid(uid) {
+  if (!uid) throw { status: 403, message: "Acceso denegado: UID inválido." };
+  const snap = await admin.database().ref(`authorizedAdminsUids/${uid}`).once("value");
   if (!snap.exists() || snap.val() !== true) {
-    throw { status: 403, message: `Acceso denegado: ${email} no está autorizado.` };
+    throw { status: 403, message: "Acceso denegado: administrador no autorizado." };
   }
 }
 
@@ -218,8 +217,8 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     const adminUid = decoded.uid;
     const adminEmail = decoded.email;
 
-    // Verificar que es admin autorizado
-    await checkAdminByEmail(adminEmail);
+    // Verificar que es admin autorizado por UID (fuente de verdad alineada con database.rules.json)
+    await checkAdminByUid(adminUid);
 
     const {
       deviceId, command, packages, devicePin, rememberDevice, newPin,

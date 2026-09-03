@@ -117,7 +117,13 @@ object FirebaseDeviceSync {
                 "lastResult" to (prefs.getString(UpdateFlowManager.KEY_LAST_RESULT, "") ?: ""),
                 "lastResultPackage" to (prefs.getString(UpdateFlowManager.KEY_LAST_RESULT_PKG, "") ?: ""),
                 "lastResultAt" to prefs.getLong(UpdateFlowManager.KEY_LAST_RESULT_AT, 0L),
-                "debugLabels" to (prefs.getString(UpdateFlowManager.KEY_DEBUG_LABELS, "") ?: "")
+                "debugLabels" to (prefs.getString(UpdateFlowManager.KEY_DEBUG_LABELS, "") ?: ""),
+                // 3/9/2026: sin estos dos campos, un fracaso de actualizacion se
+                // veia en el panel como "ERROR" a secas. El motivo es lo unico que
+                // convierte eso en algo accionable ("faltan 180 MB"), y el espacio
+                // libre permite ver el problema ANTES de mandar la actualizacion.
+                "lastResultReason" to (prefs.getString(UpdateFlowManager.KEY_LAST_RESULT_REASON, "") ?: ""),
+                "freeSpaceMb" to UpdateFlowManager.freeSpaceMb(context)
             )
             val payload = mutableMapOf<String, Any>(
                 "updateFlow" to flow,

@@ -6,11 +6,13 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.StatFs
 import android.os.SystemClock
 import android.os.UserManager
 import android.util.Log
@@ -64,6 +66,15 @@ object UpdateFlowManager {
     const val KEY_LAST_RESULT_PKG = "update_flow_last_result_pkg"
     const val KEY_DEBUG_LABELS = "update_flow_debug_labels"
 
+    /**
+     * Motivo legible del ultimo cierre. Es lo que hace la diferencia entre "no se
+     * pudo actualizar" (que no le sirve a nadie) y "faltan 180 MB de espacio libre"
+     * (que el dueno puede resolver sin pedir un ADB). Se publica en el panel.
+     */
+    const val KEY_LAST_RESULT_REASON = "update_flow_last_result_reason"
+    /** Espacio libre medido en la ultima verificacion previa, en MB. */
+    const val KEY_LAST_FREE_MB = "update_flow_last_free_mb"
+
     // ── Etapas ──
     const val STAGE_IDLE = "IDLE"
     const val STAGE_PREPARING = "PREPARING"
@@ -81,6 +92,84 @@ object UpdateFlowManager {
     const val RESULT_CANCELLED = "CANCELLED"
     const val RESULT_TIMEOUT = "TIMEOUT"
     const val RESULT_ERROR = "ERROR"
+
+    // Resultados nuevos (3/9/2026). Antes TODOS estos casos terminaban como
+    // RESULT_UP_TO_DATE ("la app ya esta actualizada") o como un RESULT_ERROR
+    // generico. Los dos son mentira y los dos hacen que el dueno busque el
+    // problema en el lugar equivocado: el sintoma "actualizo y no pasa nada" del
+    // 3/9 en el CAT S22 Flip era, medido en el equipo, falta de espacio.
+    /** No hay espacio suficiente en el almacenamiento del equipo. */
+    const val RESULT_NO_SPACE = "NO_SPACE"
+    /** Play Store pide iniciar sesion: el equipo no tiene cuenta de Google. */
+    const val RESULT_NEEDS_ACCOUNT = "NEEDS_ACCOUNT"
+    /** La ficha no existe, o Play Store dice que la app no es compatible. */
+    const val RESULT_NOT_AVAILABLE = "NOT_AVAILABLE"
+    /** Error de red o del servidor de Play Store. */
+    const val RESULT_STORE_ERROR = "STORE_ERROR"
+
+    // ──────────────────────────────────────────────
+    // Verificacion de espacio libre
+    //
+    // Nuevo el 3/9/2026. Es la comprobacion mas barata y la que mas sirve: se hace
+    // ANTES de tapar la pantalla y antes de levantar ninguna restriccion, asi que
+    // cuando falta espacio el equipo ni siquiera entra al flujo — el panel recibe
+    // el motivo exacto y el usuario no ve nunca una pantalla negra que no puede
+    // sacar. Play Store SI muestra su propio cartel de "liberar espacio", pero el
+    // overlay opaco del flujo lo tapaba al 100 %: el usuario no podia ni leerlo.
+    // ──────────────────────────────────────────────
+
+    /**
+     * Margen de trabajo del sistema, en MB. Play Store no baja el APK y lo instala
+     * y listo: descarga, verifica, y en Android 7-11 ademas compila el codigo con
+     * dex2oat, que necesita su propio espacio temporal. La regla practica es tener
+     * libre varias veces el tamano del paquete.
+     */
+    private const val INSTALL_HEADROOM_MB = 250L
+    /** Multiplicador sobre el tamano del APK ya instalado. */
+    private const val INSTALL_SIZE_FACTOR = 3L
+    /** Piso absoluto: por debajo de esto Play Store no actualiza nada, ni lo chico. */
+    private const val MIN_FREE_MB = 400L
+
+    class SpaceCheck(val freeMb: Long, val neededMb: Long) {
+        val ok: Boolean get() = freeMb >= neededMb
+        val missingMb: Long get() = if (ok) 0L else neededMb - freeMb
+    }
+
+    /** MB libres en la particion de datos, o -1 si no se pudo medir. */
+    fun freeSpaceMb(context: Context): Long = try {
+        val stat = StatFs(context.filesDir.absolutePath)
+        (stat.availableBlocksLong * stat.blockSizeLong) / (1024L * 1024L)
+    } catch (e: Exception) {
+        -1L
+    }
+
+    /** Tamano en MB del APK ya instalado del paquete, o -1 si no se pudo medir. */
+    private fun installedApkSizeMb(context: Context, packageName: String): Long = try {
+        val dir = context.packageManager.getApplicationInfo(packageName, 0).sourceDir
+        val len = java.io.File(dir).length()
+        if (len > 0L) len / (1024L * 1024L) else -1L
+    } catch (e: Exception) {
+        -1L
+    }
+
+    /**
+     * Cuanto espacio hace falta y cuanto hay. Se estima a partir del APK ya
+     * instalado porque el tamano de la version nueva no se puede saber sin abrir
+     * Play Store — y abrirla es justo lo que se quiere evitar cuando no va a poder.
+     * La estimacion es deliberadamente conservadora: es preferible pedirle al dueno
+     * que libere 300 MB de mas a dejarlo diez minutos mirando una pantalla negra.
+     */
+    fun checkSpace(context: Context, packageName: String): SpaceCheck {
+        val free = freeSpaceMb(context)
+        val apk = installedApkSizeMb(context, packageName)
+        val needed = if (apk > 0L) {
+            maxOf(MIN_FREE_MB, apk * INSTALL_SIZE_FACTOR + INSTALL_HEADROOM_MB)
+        } else {
+            MIN_FREE_MB
+        }
+        // free = -1 significa "no se pudo medir": no se bloquea el flujo por eso.
+        return SpaceCheck(if (free < 0L) Long.MAX_VALUE else free, needed)
+    }
 
     // ── Origenes ──
     const val SOURCE_PANEL = "panel"
@@ -227,6 +316,45 @@ object UpdateFlowManager {
         }
         if (!installed) return "La aplicacion $packageName no esta instalada en este equipo."
 
+        // ── Verificaciones previas (3/9/2026) ──
+        //
+        // Van ANTES de tapar la pantalla y antes de levantar una sola restriccion,
+        // a proposito: si el flujo no va a poder terminar, lo mejor que puede hacer
+        // es no empezar. Asi el panel recibe el motivo exacto, el equipo nunca queda
+        // con Play Store destapada y el usuario nunca ve una pantalla negra encima
+        // de un cartel de Play Store que no puede leer ni responder.
+
+        // 1. Play Store instalada y habilitada. Si el administrador la deshabilito
+        //    (no suspendida: DESHABILITADA), setPackagesSuspended(false) no la
+        //    revive y el flujo abriria la nada.
+        val storeState = try {
+            ctx.packageManager.getApplicationEnabledSetting(PKG_PLAY_STORE)
+        } catch (e: Exception) {
+            return "Google Play no esta instalada en este equipo, asi que no se puede actualizar por la tienda."
+        }
+        if (storeState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
+            storeState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER
+        ) {
+            return "Google Play esta deshabilitada en este equipo. Habilitala antes de actualizar."
+        }
+
+        // 2. Espacio libre. Esta es la que aparecio en el CAT S22 Flip del 3/9: el
+        //    equipo estaba sin lugar, Play Store creaba la sesion de instalacion y
+        //    la descartaba, y el flujo se quedaba diez minutos en "Descargando..."
+        //    sin decir nunca por que.
+        val space = checkSpace(ctx, packageName)
+        if (space.freeMb != Long.MAX_VALUE) {
+            PrefsHelper.getMdmPrefs(ctx).edit()
+                .putLong(KEY_LAST_FREE_MB, space.freeMb).apply()
+        }
+        if (!space.ok) {
+            val reason = "No hay espacio suficiente: quedan ${space.freeMb} MB libres y hacen " +
+                "falta al menos ${space.neededMb} MB. Liberá ${space.missingMb} MB y volvé a intentar."
+            recordResult(ctx, RESULT_NO_SPACE, packageName, reason)
+            Log.w(TAG, "Actualizacion de $packageName rechazada por espacio: $reason")
+            return reason
+        }
+
         val prefs = PrefsHelper.getMdmPrefs(ctx)
         finishing = false
 
@@ -279,8 +407,9 @@ object UpdateFlowManager {
         setStage(ctx, STAGE_OPENING_STORE)
         val opened = openStore(ctx, packageName)
         if (!opened) {
-            finish(ctx, RESULT_ERROR, "No se encontro Google Play ni un navegador para actualizar.")
-            return "No se encontro Google Play ni un navegador disponible en este equipo."
+            finish(ctx, RESULT_STORE_ERROR, "No se pudo abrir Google Play en este equipo.",
+                "startActivity(market://details) fallo para $packageName")
+            return "No se pudo abrir Google Play en este equipo."
         }
 
         setStage(ctx, STAGE_WAITING_STORE)
@@ -291,7 +420,19 @@ object UpdateFlowManager {
             ctx, packageName,
             onProgress = { pct -> setStage(ctx, STAGE_DOWNLOADING, "Descargando... $pct%") },
             onFinished = { ok ->
-                if (ok) finish(ctx, RESULT_UPDATED, null)
+                if (ok) {
+                    finish(ctx, RESULT_UPDATED, null)
+                } else {
+                    // success=false NO es concluyente: Play Store parte descargas
+                    // grandes en varias sesiones y descarta sesiones intermedias.
+                    // Por eso acá NO se cierra el flujo. Lo unico que se hace es
+                    // dejar la marca de tiempo (la escribe el watcher) para que el
+                    // ciclo de scanAndAct pueda distinguir "sigue bajando" de "el
+                    // sistema abortó la instalacion", que es lo que pasa cuando no
+                    // hay espacio. Antes esta rama estaba vacia y el flujo se
+                    // quedaba en "Descargando..." hasta el watchdog de 10 minutos.
+                    Log.w(TAG, "Sesion de instalacion abortada por el sistema para $packageName")
+                }
             }
         )
         LockSuiteAccessibilityService.instance?.startUpdateTicker()
@@ -299,8 +440,32 @@ object UpdateFlowManager {
         return null
     }
 
+    /**
+     * Deja Play Store en condiciones de abrirse: des-oculta y des-suspende.
+     *
+     * Se llama tambien en cada relanzamiento (3/9/2026), no solo al arrancar. Es
+     * barato —dos llamadas al DPM que son no-op si ya estaba libre— y cierra una
+     * carrera real: `setPackagesSuspended(false)` no es instantaneo, y el arranque
+     * hacia `startActivity` unos milisegundos despues. En un equipo lento
+     * (Snapdragon 215, 2 GB) eso alcanzaba para que el sistema mostrara el cartel
+     * de "app en pausa" en vez de la ficha, y el flujo se quedaba esperando una
+     * ventana de Play Store que nunca iba a llegar. Ademas el WatchdogWorker de 15
+     * minutos puede volver a suspenderla en medio de un flujo largo.
+     */
+    private fun unlockPlayStore(context: Context) {
+        try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val admin = ComponentName(context, DeviceAdminReceiver::class.java)
+            try { dpm.setApplicationHidden(admin, PKG_PLAY_STORE, false) } catch (e: Exception) { }
+            try { dpm.setPackagesSuspended(admin, arrayOf(PKG_PLAY_STORE), false) } catch (e: Exception) { }
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo destrabar Play Store: ${e.message}")
+        }
+    }
+
     fun openStore(context: Context, packageName: String): Boolean {
         val ctx = context.applicationContext
+        unlockPlayStore(ctx)
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -309,17 +474,28 @@ object UpdateFlowManager {
             ctx.startActivity(intent)
             return true
         } catch (e: Exception) {
-            Log.w(TAG, "market:// fallo (${e.message}); probando enlace web")
+            Log.w(TAG, "market:// con paquete fijo fallo (${e.message}); probando sin fijar paquete")
         }
+        // Segundo intento: el mismo esquema market:// pero dejando que lo resuelva
+        // el sistema. Cubre equipos donde Play Store vive con otro nombre de
+        // paquete o donde el filtro de visibilidad de Android 11 se pone raro.
+        //
+        // ⚠️ 3/9/2026: acá había un tercer intento que abría
+        // https://play.google.com/... en un NAVEGADOR. Se quitó a proposito y no
+        // hay que volver a ponerlo, por dos razones: (a) desde la web de Play
+        // Store no se puede instalar nada, o sea que no arreglaba nada; (b) este
+        // es un equipo kosher con los navegadores suspendidos, y el flujo levanta
+        // las restricciones de instalacion por hasta 10 minutos — abrir un
+        // navegador ahi es exactamente el agujero que todo el resto del proyecto
+        // se ocupa de cerrar. Si Play Store no abre, el camino correcto es fallar
+        // con un motivo claro, que es lo que hace start().
         return try {
-            val web = Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse("https://play.google.com/store/apps/details?id=$packageName")
-            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-            ctx.startActivity(web)
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
+                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            ctx.startActivity(intent)
             true
         } catch (e: Exception) {
-            Log.e(TAG, "No se pudo abrir ni Play Store ni el navegador: ${e.message}")
+            Log.e(TAG, "No se pudo abrir Play Store: ${e.message}")
             false
         }
     }
@@ -376,7 +552,14 @@ object UpdateFlowManager {
         finish(ctx, RESULT_CANCELLED, "Actualización cancelada.")
     }
 
-    fun finish(context: Context, result: String, message: String? = null) {
+    /**
+     * @param message lo que ve el usuario en la pantalla negra antes de que se
+     *   saque; puede ser null para el texto por omision del resultado.
+     * @param reason motivo tecnico para el panel. Se guarda aunque el usuario ya
+     *   no este mirando: es lo unico que queda despues, y es lo que evita la
+     *   siguiente sesion de diagnostico a ciegas.
+     */
+    fun finish(context: Context, result: String, message: String? = null, reason: String? = null) {
         val ctx = context.applicationContext
         val prefs = PrefsHelper.getMdmPrefs(ctx)
         val pkg = prefs.getString(KEY_PKG, null)
@@ -402,6 +585,7 @@ object UpdateFlowManager {
             .remove(KEY_BASE_VERSION)
             .putString(KEY_LAST_RESULT, result)
             .putString(KEY_LAST_RESULT_PKG, pkg ?: "")
+            .putString(KEY_LAST_RESULT_REASON, reason ?: message ?: "")
             .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
             .apply()
 
@@ -414,6 +598,13 @@ object UpdateFlowManager {
             RESULT_UPDATED -> message ?: "✓ Actualización completada con éxito."
             RESULT_CANCELLED -> message ?: "Actualización cancelada."
             RESULT_ERROR -> message ?: "No se pudo completar la actualización."
+            RESULT_TIMEOUT -> message ?: "La actualización tardó demasiado y se canceló."
+            RESULT_NO_SPACE -> message ?: "No hay espacio suficiente para actualizar $label."
+            RESULT_NEEDS_ACCOUNT -> message
+                ?: "Google Play pide iniciar sesión: este equipo no tiene una cuenta de Google configurada."
+            RESULT_NOT_AVAILABLE -> message
+                ?: "Google Play no ofrece una actualización de $label para este equipo."
+            RESULT_STORE_ERROR -> message ?: "Google Play devolvió un error. Probá de nuevo más tarde."
             else -> message
         }
 
@@ -427,7 +618,13 @@ object UpdateFlowManager {
             )
         }
 
-        val delayMs = if (showNoticeOnOverlay) 1800L else 0L
+        // Un aviso que explica QUE hacer (liberar espacio, configurar la cuenta)
+        // tiene que quedar en pantalla el tiempo suficiente para leerlo. 1,8 s
+        // alcanzan para "✓ listo" y no alcanzan para una frase de dos renglones.
+        val needsReading = result == RESULT_NO_SPACE || result == RESULT_NEEDS_ACCOUNT ||
+            result == RESULT_NOT_AVAILABLE || result == RESULT_STORE_ERROR ||
+            result == RESULT_ERROR
+        val delayMs = if (!showNoticeOnOverlay) 0L else if (needsReading) 5000L else 1800L
 
         mainHandler.postDelayed({
             service?.overlayManager?.hideBlockingMessageOverlay()
@@ -558,6 +755,23 @@ object UpdateFlowManager {
             // el wake lock puede haber vencido solo
         }
         wakeLock = null
+    }
+
+    /**
+     * Anota el resultado de un intento y lo publica. Se usa tambien para los
+     * rechazos previos, donde el flujo nunca llego a arrancar: sin esto, un
+     * "no hay espacio" desde el panel se veia solo como un comando fallido, sin
+     * que quedara registro de por que.
+     */
+    fun recordResult(context: Context, result: String, packageName: String?, reason: String?) {
+        val ctx = context.applicationContext
+        PrefsHelper.getMdmPrefs(ctx).edit()
+            .putString(KEY_LAST_RESULT, result)
+            .putString(KEY_LAST_RESULT_PKG, packageName ?: "")
+            .putString(KEY_LAST_RESULT_REASON, reason ?: "")
+            .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
+            .apply()
+        syncToPanel(ctx, force = true)
     }
 
     /** Publica el estado del flujo en Firebase para que el panel lo vea en vivo. */

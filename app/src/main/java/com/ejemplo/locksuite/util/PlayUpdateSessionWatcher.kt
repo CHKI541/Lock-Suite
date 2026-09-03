@@ -69,6 +69,39 @@ object PlayUpdateSessionWatcher {
     @Volatile var lastProgress = -1
         private set
 
+    // ──────────────────────────────────────────────
+    // Marcas de tiempo (nuevas el 3/9/2026)
+    //
+    // Por qué hacían falta: `sawSession` no vuelve nunca a false, y el ciclo del
+    // flujo salía por un `return` temprano apenas valía true. O sea que cuando
+    // Play Store creaba la sesión y después la DESCARTABA —falta de espacio es la
+    // causa clásica, y es la que se midió en el CAT S22 Flip el 3/9— el flujo se
+    // quedaba mostrando "Descargando..." para siempre: el freno por estancamiento
+    // estaba más abajo en la función y no se alcanzaba nunca. Recién lo destrababa
+    // el watchdog de 10 minutos, con un mensaje genérico.
+    //
+    // Con estas tres marcas el ciclo puede distinguir tres cosas que antes eran
+    // una sola: "está bajando bien", "arrancó y se quedó sin avanzar" y "arrancó
+    // y el sistema la abortó".
+    // ──────────────────────────────────────────────
+
+    /** `elapsedRealtime` de la última vez que el porcentaje cambió. 0 si nunca. */
+    @Volatile var lastProgressAt = 0L
+        private set
+
+    /** `elapsedRealtime` del último `onFinished(success=false)`. 0 si no hubo. */
+    @Volatile var sessionFailedAt = 0L
+        private set
+
+    /** `elapsedRealtime` de la primera sesión vista para el paquete. 0 si ninguna. */
+    @Volatile var sawSessionAt = 0L
+        private set
+
+    private fun markSeen() {
+        sawSession = true
+        if (sawSessionAt == 0L) sawSessionAt = android.os.SystemClock.elapsedRealtime()
+    }
+
     private var onProgressCb: ((Int) -> Unit)? = null
     private var onFinishedCb: ((Boolean) -> Unit)? = null
 
@@ -76,7 +109,7 @@ object PlayUpdateSessionWatcher {
 
         override fun onCreated(sessionId: Int) {
             if (matchesTarget(sessionId)) {
-                sawSession = true
+                markSeen()
                 Log.i(TAG, "Sesión de instalación creada para ${targetPackage} (id=$sessionId)")
             }
         }
@@ -85,19 +118,20 @@ object PlayUpdateSessionWatcher {
             // El appPackageName de una sesión de Play Store a veces recién queda
             // resuelto acá, no en onCreated. Sin este re-chequeo se perdía la
             // asociación entre la sesión y el paquete que estamos actualizando.
-            if (matchesTarget(sessionId)) sawSession = true
+            if (matchesTarget(sessionId)) markSeen()
         }
 
         override fun onActiveChanged(sessionId: Int, active: Boolean) {
-            if (active && matchesTarget(sessionId)) sawSession = true
+            if (active && matchesTarget(sessionId)) markSeen()
         }
 
         override fun onProgressChanged(sessionId: Int, progress: Float) {
             if (!matchesTarget(sessionId)) return
-            sawSession = true
+            markSeen()
             val pct = (progress * 100f).toInt().coerceIn(0, 100)
             if (pct == lastProgress) return
             lastProgress = pct
+            lastProgressAt = android.os.SystemClock.elapsedRealtime()
             val cb = onProgressCb ?: return
             mainHandler.post { cb(pct) }
         }
@@ -105,6 +139,7 @@ object PlayUpdateSessionWatcher {
         override fun onFinished(sessionId: Int, success: Boolean) {
             if (!matchesTarget(sessionId)) return
             Log.i(TAG, "Sesión terminada para ${targetPackage}: success=$success")
+            if (!success) sessionFailedAt = android.os.SystemClock.elapsedRealtime()
             val cb = onFinishedCb ?: return
             // OJO: success=false NO significa necesariamente que la actualización
             // falló. Play Store a veces crea y descarta sesiones intermedias, o
@@ -131,6 +166,9 @@ object PlayUpdateSessionWatcher {
         onFinishedCb = onFinished
         sawSession = false
         lastProgress = -1
+        lastProgressAt = 0L
+        sessionFailedAt = 0L
+        sawSessionAt = 0L
 
         val inst = ctx.packageManager.packageInstaller
         installer = inst

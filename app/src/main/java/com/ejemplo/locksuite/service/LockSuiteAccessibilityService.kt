@@ -128,6 +128,57 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         /** Cuántos padres se suben como máximo buscando quién acepta el clic. */
         private const val CLICK_PARENT_DEPTH = 6
 
+        // ── Correcciones del 3/9/2026 (CAT S22 Flip / Android 11) ──
+        //
+        // El equipo del reporte es un Snapdragon 215 con 2 GB de RAM y una pantalla
+        // de 480×640. Los tres números de abajo son los que estaban calibrados
+        // contra un teléfono normal y no contra ese.
+
+        /**
+         * Cuánto se espera a que la ficha de Play Store TERMINE DE DIBUJARSE antes
+         * de sacar cualquier conclusión.
+         *
+         * Antes había un solo número, 3,5 s, contados desde que aparecía la VENTANA
+         * de Play Store. Pero la ventana existe apenas arranca la Activity, cuando
+         * la ficha todavía es una pantalla en blanco: en un equipo lento la ficha
+         * tarda entre 4 y 8 s en tener botones. O sea que el flujo concluía "no hay
+         * ningún botón" sobre una pantalla que todavía no había dibujado ninguno, y
+         * cerraba informando "la app ya está actualizada". Un falso éxito, y encima
+         * el que hace que el dueño busque el problema donde no está.
+         *
+         * Ahora hay dos condiciones y las dos tienen que cumplirse: que haya pasado
+         * este tiempo Y que la ficha tenga contenido dibujado (`Result.rendered`).
+         */
+        private const val UPDATE_CARD_RENDER_MS = 9_000L
+
+        /**
+         * Tope duro para dejar de esperar a que la ficha se dibuje. Si pasó esto y
+         * la pantalla sigue vacía, el problema no es la lentitud: es que Play Store
+         * no está mostrando la ficha (sin red, sin cuenta, ficha inexistente).
+         */
+        private const val UPDATE_CARD_GIVEUP_MS = 30_000L
+
+        /**
+         * Cuánto puede quedarse la descarga sin avanzar un solo punto porcentual
+         * antes de darla por trabada. Cubre el caso "Play Store dejó la descarga
+         * esperando Wi-Fi" y el caso "no hay espacio y el sistema abortó la sesión".
+         * Antes no existía ningún tope acá: el ciclo salía por un `return` que
+         * estaba ANTES del freno por estancamiento, así que la única salida era el
+         * watchdog de 10 minutos.
+         */
+        private const val DOWNLOAD_STALL_MS = 150_000L
+
+        /**
+         * En una pantalla chica la fila de botones puede quedar debajo del borde
+         * visible, y Android no instancia en el árbol de accesibilidad lo que no
+         * está dibujado: el botón "Actualizar" simplemente no existe para nosotros.
+         * Cuando la ficha ya está dibujada y no aparece ningún candidato, se baja
+         * un poco antes de rendirse. Tope bajo a propósito: bajar de más lleva a
+         * los carruseles de "apps similares", que es el bug 4 de B.9.
+         */
+        private const val MAX_UPDATE_SCROLLS = 3
+        private const val SCROLL_COOLDOWN_MS = 1_200L
+
         // Paquetes que actúan como renderizadores de WebView del sistema
         private val WEBVIEW_PROVIDER_PACKAGES = setOf(
             "com.google.android.webview",
@@ -2021,6 +2072,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var updateSessionCandidatesTried = 0
     private val updateSessionTriedKeys = HashSet<String>(8)
     private var lastStoreRelaunchAt = 0L
+    /** Primera vez que la ficha tuvo contenido dibujado (no una pantalla en blanco). */
+    private var updateSessionRenderedAt = 0L
+    private var updateSessionScrolls = 0
+    private var updateSessionLastScrollAt = 0L
 
     /** Invalida el snapshot de flags. La usa UpdateFlowManager al arrancar/terminar. */
     fun invalidateFlagsCache() {
@@ -2035,6 +2090,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         updateSessionCandidatesTried = 0
         updateSessionTriedKeys.clear()
         lastStoreRelaunchAt = 0L
+        updateSessionRenderedAt = 0L
+        updateSessionScrolls = 0
+        updateSessionLastScrollAt = 0L
         releaseUpdateWakeLock()
     }
 
@@ -2068,6 +2126,140 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Tamaño real de la ventana de Play Store.
+     *
+     * 3/9/2026: antes se usaba `resources.displayMetrics` del propio servicio, que
+     * es lo que el documento de diseño del 16/8 (§1.3) ya marcaba como poco
+     * confiable: desde un Service no siempre refleja el área utilizable, y en
+     * pantallas raras (un flip de 2,8", una pantalla partida) puede no tener nada
+     * que ver con la ventana que estamos escaneando. Las coordenadas de los nodos
+     * vienen de `getBoundsInScreen()`, así que lo correcto es medir contra la
+     * ventana misma.
+     */
+    private val storeBoundsRect = Rect()
+    private fun playStoreBounds(root: AccessibilityNodeInfo): Pair<Int, Int> {
+        try {
+            root.getBoundsInScreen(storeBoundsRect)
+            val w = storeBoundsRect.width()
+            val h = storeBoundsRect.height()
+            // Un tamaño absurdo (0, o una franja) significa que el nodo raíz no
+            // representa la ventana: se cae a las métricas del sistema.
+            if (w > 100 && h > 100) return w to h
+        } catch (e: Exception) {
+            // sigue al camino de abajo
+        }
+        val dm = resources.displayMetrics
+        return dm.widthPixels to dm.heightPixels
+    }
+
+    /**
+     * Traduce lo que se reconoció en pantalla a un resultado con motivo.
+     * Devuelve null si no hay nada anormal que reportar.
+     *
+     * Todo esto es nuevo el 3/9/2026: antes, cualquiera de estas pantallas caía en
+     * el mismo saco de "no reconocí ningún botón" y el flujo cerraba con
+     * RESULT_UP_TO_DATE, o sea informando que la app ya estaba actualizada. Es la
+     * peor forma de fallar que puede tener este flujo, porque manda al dueño a
+     * buscar el problema a otro lado.
+     */
+    private fun diagnosisResult(
+        ctx: Context,
+        updatingPkg: String,
+        diagnosis: PlayButtonFinder.Diagnosis,
+        evidence: String?
+    ): Triple<String, String, String>? {
+        val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+        val ev = if (evidence.isNullOrBlank()) "" else " [$evidence]"
+        return when (diagnosis) {
+            PlayButtonFinder.Diagnosis.NO_SPACE -> {
+                val space = UpdateFlowManager.checkSpace(ctx, updatingPkg)
+                val libres = if (space.freeMb == Long.MAX_VALUE) "?" else space.freeMb.toString()
+                Triple(
+                    UpdateFlowManager.RESULT_NO_SPACE,
+                    "No hay espacio para actualizar $label. Quedan $libres MB libres. Liberá espacio y volvé a intentar.",
+                    "Play Store informó falta de espacio (libres=${libres}MB)$ev"
+                )
+            }
+            PlayButtonFinder.Diagnosis.NEED_SIGN_IN -> Triple(
+                UpdateFlowManager.RESULT_NEEDS_ACCOUNT,
+                "Google Play pide iniciar sesión. Este equipo no tiene una cuenta de Google configurada, así que no puede actualizar por la tienda.",
+                "Play Store pidió iniciar sesión$ev"
+            )
+            PlayButtonFinder.Diagnosis.NOT_COMPATIBLE -> Triple(
+                UpdateFlowManager.RESULT_NOT_AVAILABLE,
+                "Google Play dice que $label no es compatible con este equipo.",
+                "Play Store informó incompatibilidad$ev"
+            )
+            PlayButtonFinder.Diagnosis.NOT_FOUND -> Triple(
+                UpdateFlowManager.RESULT_NOT_AVAILABLE,
+                "Google Play no encuentra la ficha de $label en este equipo.",
+                "Ficha inexistente en Play Store$ev"
+            )
+            PlayButtonFinder.Diagnosis.NETWORK_ERROR -> Triple(
+                UpdateFlowManager.RESULT_STORE_ERROR,
+                "Google Play no tiene conexión. Revisá la red y volvé a intentar.",
+                "Play Store informó error de red$ev"
+            )
+            PlayButtonFinder.Diagnosis.WAITING_NETWORK -> Triple(
+                UpdateFlowManager.RESULT_STORE_ERROR,
+                "Google Play dejó la descarga esperando Wi-Fi. Conectá el equipo a Wi-Fi y volvé a intentar.",
+                "Descarga en espera de Wi-Fi$ev"
+            )
+            PlayButtonFinder.Diagnosis.STORE_ERROR -> Triple(
+                UpdateFlowManager.RESULT_STORE_ERROR,
+                "Google Play devolvió un error. Probá de nuevo más tarde.",
+                "Error de Play Store$ev"
+            )
+            PlayButtonFinder.Diagnosis.NONE -> null
+        }
+    }
+
+    /**
+     * Cierra el flujo con la mejor explicación disponible. El orden importa: se
+     * mide el espacio ANTES de creerle a la pantalla, porque medir es concluyente
+     * y leer la pantalla es una heurística.
+     */
+    private fun finishUpdateWithBestReason(
+        ctx: Context,
+        updatingPkg: String,
+        scan: PlayButtonFinder.Result?,
+        fallbackResult: String,
+        fallbackMessage: String,
+        fallbackReason: String
+    ) {
+        val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+
+        // 1. Medición dura: ¿alcanza el espacio? Es la causa que se confirmó en el
+        //    equipo del 3/9 y la única que se puede afirmar sin leer la pantalla.
+        val space = UpdateFlowManager.checkSpace(ctx, updatingPkg)
+        if (!space.ok) {
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+            UpdateFlowManager.finish(
+                ctx, UpdateFlowManager.RESULT_NO_SPACE,
+                "No hay espacio para actualizar $label. Quedan ${space.freeMb} MB libres y hacen falta ${space.neededMb} MB.",
+                "Espacio insuficiente medido al cerrar: libres=${space.freeMb}MB, necesarios=${space.neededMb}MB"
+            )
+            return
+        }
+
+        // 2. Lo que dijo la pantalla de Play Store.
+        val diag = scan?.let { diagnosisResult(ctx, updatingPkg, it.diagnosis, it.diagnosisEvidence) }
+        if (diag != null) {
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+            UpdateFlowManager.finish(ctx, diag.first, diag.second, diag.third)
+            return
+        }
+
+        // 3. Lo que haya quedado. Se adjuntan las etiquetas vistas, que es lo que
+        //    permite diagnosticar el equipo desde el panel sin pedir un ADB.
+        val labels = scan?.debugLabels.orEmpty()
+        val reason = if (labels.isEmpty()) fallbackReason
+        else "$fallbackReason | botones vistos: ${labels.joinToString(" · ").take(200)}"
+        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+        UpdateFlowManager.finish(ctx, fallbackResult, fallbackMessage, reason)
+    }
+
+    /**
      * Un ciclo del flujo. Lo llama el tick cada UPDATE_TICK_MS y también cada evento
      * de accesibilidad de Play Store (el evento es un despertador extra, no la única
      * fuente — ese era el bug).
@@ -2096,9 +2288,58 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         // ── 2. ¿Play Store ya está descargando? (por PackageInstaller) ──
+        //
+        // ⚠️ CORREGIDO EL 3/9/2026 — ACÁ ESTABA EL CUELGUE DE 10 MINUTOS.
+        //
+        // Este bloque salía con `return` apenas `sawSession` valía true. Y
+        // `sawSession` no vuelve nunca a false. O sea que si Play Store creaba la
+        // sesión y el sistema después la abortaba —falta de espacio es la causa
+        // clásica, y es la que se midió en el equipo el 3/9— el ciclo salía por acá
+        // en CADA tick, mostrando "Descargando..." para siempre. El freno por
+        // estancamiento del paso 7 está más abajo en esta misma función: no se
+        // alcanzaba nunca. La única salida era el watchdog de 10 minutos, con un
+        // mensaje genérico que no decía nada.
+        //
+        // Ahora el estado "descargando" tiene su propio reloj, y no puede quedarse
+        // ahí sin avanzar.
         val livePct = PlayUpdateSessionWatcher.currentProgressFor(ctx, updatingPkg)
         val pct = if (livePct >= 0) livePct else PlayUpdateSessionWatcher.lastProgress
         if (pct >= 0 || PlayUpdateSessionWatcher.sawSession) {
+            val sessionAlive = livePct >= 0 ||
+                PlayUpdateSessionWatcher.hasActiveSessionFor(ctx, updatingPkg)
+            val failedAt = PlayUpdateSessionWatcher.sessionFailedAt
+
+            // (a) El sistema abortó la sesión y no hay ninguna otra viva. Se le dan
+            //     unos segundos de gracia porque Play Store parte las descargas
+            //     grandes en varias sesiones y descarta las intermedias.
+            if (failedAt > 0L && !sessionAlive && now - failedAt > 6_000L) {
+                Log.w(TAG, "Sesión de instalación abortada y sin reemplazo para $updatingPkg")
+                finishUpdateWithBestReason(
+                    ctx, updatingPkg, safeScanPlayStore(),
+                    UpdateFlowManager.RESULT_ERROR,
+                    "La instalación de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} fue interrumpida por el sistema.",
+                    "PackageInstaller informó onFinished(success=false) y no quedó ninguna sesión activa"
+                )
+                return
+            }
+
+            // (b) Arrancó pero no avanza. Cubre "esperando Wi-Fi", "descarga
+            //     pausada" y el equipo que se quedó sin espacio a mitad de camino.
+            val lastMove = maxOf(
+                PlayUpdateSessionWatcher.lastProgressAt,
+                PlayUpdateSessionWatcher.sawSessionAt
+            )
+            if (lastMove > 0L && now - lastMove > DOWNLOAD_STALL_MS) {
+                Log.w(TAG, "Descarga sin avance por ${(now - lastMove) / 1000}s para $updatingPkg")
+                finishUpdateWithBestReason(
+                    ctx, updatingPkg, safeScanPlayStore(),
+                    UpdateFlowManager.RESULT_ERROR,
+                    "La descarga de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} no avanzó. Revisá la conexión y el espacio libre.",
+                    "Descarga estancada en ${if (pct >= 0) "$pct%" else "sin progreso"} durante ${(now - lastMove) / 1000}s"
+                )
+                return
+            }
+
             val progressText = if (pct >= 0) "Descargando... $pct%" else
                 (UpdateFlowManager.currentDetail(ctx) ?: "Descargando actualización...")
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING, progressText)
@@ -2116,20 +2357,47 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 lastStoreRelaunchAt = now
                 UpdateFlowManager.openStore(ctx, updatingPkg)
             }
+            // Si Play Store nunca aparece, el freno por estancamiento tiene que
+            // poder actuar igual. Antes este `return` también lo salteaba.
+            if (now - updateSessionStartTime > UPDATE_STALL_MS) {
+                finishUpdateWithBestReason(
+                    ctx, updatingPkg, null,
+                    UpdateFlowManager.RESULT_STORE_ERROR,
+                    "Google Play no se abrió en este equipo.",
+                    "La ventana de Play Store nunca apareció en ${UPDATE_STALL_MS / 1000}s"
+                )
+            }
             return
         }
         if (updateSessionTreeSeenAt == 0L) updateSessionTreeSeenAt = now
 
-        // Escanear el árbol de nodos de Play Store
-        val dm = resources.displayMetrics
-        val scan = PlayButtonFinder.scan(root, dm.widthPixels, dm.heightPixels)
+        // Escanear el árbol de nodos de Play Store, midiendo contra la ventana real
+        val (screenW, screenH) = playStoreBounds(root)
+        val scan = PlayButtonFinder.scan(root, screenW, screenH, resources.displayMetrics.density)
         UpdateFlowManager.reportDebugLabels(ctx, scan.debugLabels)
+
+        if (scan.rendered && updateSessionRenderedAt == 0L) updateSessionRenderedAt = now
 
         // Si Play Store muestra una barra de progreso, ya está descargando
         if (scan.sawProgressBar) {
             val progressText = UpdateFlowManager.currentDetail(ctx) ?: "Descargando actualización..."
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING, progressText)
             return
+        }
+
+        // ── 3-bis. Pantalla de error de Play Store reconocida ──
+        //
+        // Va antes de cualquier clic: en la pantalla de "sin espacio" el único
+        // botón grande abre el administrador de almacenamiento del sistema, y
+        // apretarlo saca al usuario de la tienda con la pantalla todavía tapada.
+        if (scan.diagnosis != PlayButtonFinder.Diagnosis.NONE) {
+            val diag = diagnosisResult(ctx, updatingPkg, scan.diagnosis, scan.diagnosisEvidence)
+            if (diag != null) {
+                Log.w(TAG, "Play Store: ${scan.diagnosis} para $updatingPkg (${scan.diagnosisEvidence})")
+                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+                UpdateFlowManager.finish(ctx, diag.first, diag.second, diag.third)
+                return
+            }
         }
 
         val cooledDown = now - updateSessionLastClickAt > CANDIDATE_WAIT_MS
@@ -2146,35 +2414,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
-        // ── 5. ¿Ya estaba al día? ──
-        val hasDefiniteUpdate = scan.actions.any { it.score >= 80 }
-        val hasOpenButton = scan.opens.isNotEmpty()
-
-        // Caso A: Hay botón "Abrir" y no hay botón "Actualizar" con score alto
-        if (!hasDefiniteUpdate && hasOpenButton && updateSessionTreeSeenAt > 0L &&
-            now - updateSessionTreeSeenAt > 1500L
-        ) {
-            val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
-            Log.i(TAG, "App $updatingPkg ya está al día (botón Abrir visible, sin Actualizar)")
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
-            UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UP_TO_DATE,
-                "$label ya está actualizada.")
-            return
-        }
-
-        // Caso B: No hay ningún botón reconocible tras 3.5s
-        if (!hasDefiniteUpdate && scan.actions.isEmpty() && !hasOpenButton &&
-            updateSessionTreeSeenAt > 0L && now - updateSessionTreeSeenAt > 3500L
-        ) {
-            val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
-            Log.i(TAG, "App $updatingPkg: no se encontró botón de actualización tras 3.5s")
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
-            UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UP_TO_DATE,
-                "$label ya está actualizada.")
-            return
-        }
-
-        // ── 6. Probar el próximo candidato a "Actualizar" ──
+        // ── 5. Probar el próximo candidato a "Actualizar" ──
+        //
+        // Este paso SUBIÓ de lugar el 3/9/2026: antes venía después de las dos
+        // salidas por "ya estaba al día", así que en una ficha que tardaba en
+        // dibujarse el flujo se iba por la salida falsa sin haber apretado nada.
+        // Primero se intenta actualizar; recién si no hay nada que apretar se
+        // razona sobre por qué.
         if (cooledDown && updateSessionCandidatesTried < MAX_CANDIDATES) {
             val next = scan.actions.firstOrNull { candidateKey(it) !in updateSessionTriedKeys }
             if (next != null) {
@@ -2190,16 +2436,133 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
         }
 
-        // ── 7. Freno por estancamiento ──
+        val hasDefiniteUpdate = scan.actions.any { it.score >= 80 }
+        val hasOpenButton = scan.opens.isNotEmpty()
+
+        // ── 6. La ficha todavía no terminó de dibujarse ──
+        //
+        // ⚠️ ESTA ES LA CORRECCIÓN CENTRAL DEL 3/9/2026.
+        //
+        // Antes, las dos salidas de "ya estaba al día" se disparaban a los 1,5 s y
+        // a los 3,5 s contados desde que aparecía la VENTANA de Play Store. Pero la
+        // ventana existe apenas arranca la Activity, cuando la ficha todavía está
+        // en blanco. En un Snapdragon 215 con 2 GB de RAM, la ficha tarda entre 4 y
+        // 8 s en tener botones: el flujo concluía "no hay ningún botón" sobre una
+        // pantalla vacía y cerraba diciendo "la app ya está actualizada". El equipo
+        // volvía al inicio, sin actualizar y sin ningún error. Es exactamente el
+        // síntoma reportado, y explica por qué en un teléfono rápido funcionaba.
+        //
+        // Ahora no se saca NINGUNA conclusión sobre una pantalla que no terminó de
+        // dibujarse: hacen falta contenido dibujado Y tiempo transcurrido.
+        val renderedFor = if (updateSessionRenderedAt > 0L) now - updateSessionRenderedAt else 0L
+        val waitedForCard = now - updateSessionTreeSeenAt
+        if (!scan.rendered && waitedForCard < UPDATE_CARD_GIVEUP_MS) {
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE,
+                "Esperando a Google Play...")
+            return
+        }
+
+        // ── 7. Bajar la pantalla: en un equipo chico el botón puede estar abajo ──
+        //
+        // Android no instancia en el árbol de accesibilidad lo que no está
+        // dibujado. En una pantalla de 2,8" la fila [Desinstalar] [Actualizar]
+        // puede quedar debajo del borde visible, y entonces para nosotros no
+        // existe. Un par de desplazamientos cortos la traen. Tope bajo a propósito:
+        // seguir bajando lleva a los carruseles de "apps similares", que es el bug
+        // 4 de B.9 (apretar el "Instalar" de OTRA app).
+        //
+        // Solo mientras NO se haya apretado nada todavía: después de un clic, la
+        // fila de botones se convierte en una fila de progreso y quedaría igual de
+        // "sin candidatos", pero ahí desplazar sería moverle la pantalla a una
+        // descarga que ya arrancó.
+        if (updateSessionCandidatesTried == 0 &&
+            !hasDefiniteUpdate && !hasOpenButton && scan.rendered &&
+            updateSessionScrolls < MAX_UPDATE_SCROLLS &&
+            now - updateSessionLastScrollAt > SCROLL_COOLDOWN_MS
+        ) {
+            val scrollable = scan.scrollable
+            if (scrollable != null) {
+                updateSessionScrolls++
+                updateSessionLastScrollAt = now
+                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
+                    "Buscando actualización...")
+                try {
+                    scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                    Log.i(TAG, "Desplazando la ficha ($updateSessionScrolls/$MAX_UPDATE_SCROLLS) para encontrar el botón")
+                } catch (e: Exception) {
+                    Log.w(TAG, "No se pudo desplazar la ficha: ${e.message}")
+                }
+                return
+            }
+        }
+
+        // ── 8. ¿Ya estaba al día? ──
+        //
+        // Solo se afirma con la ficha DIBUJADA y estable. "Abrir" sin "Actualizar"
+        // en una ficha completa es la señal legítima de que no hay actualización.
+        if (!hasDefiniteUpdate && hasOpenButton &&
+            updateSessionRenderedAt > 0L && renderedFor > UPDATE_UP_TO_DATE_GRACE_MS
+        ) {
+            val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+            Log.i(TAG, "App $updatingPkg ya está al día (botón Abrir visible, sin Actualizar)")
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+            UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_UP_TO_DATE,
+                "$label ya está actualizada.", "Ficha con 'Abrir' y sin 'Actualizar'")
+            return
+        }
+
+        // ── 9. La ficha se dibujó y no hay NINGÚN botón que reconozcamos ──
+        //
+        // Esto ya NO se informa como "ya está actualizada". Una ficha dibujada sin
+        // ningún botón no es una app al día: es una pantalla que no entendimos. Se
+        // cierra con un error honesto y con las etiquetas de lo que sí se vio, que
+        // es lo que permite agregar el idioma o el caso que falte sin pedir un ADB.
+        // La condición `candidatesTried == 0` es esencial: si ya se apretó algo, la
+        // fila de botones es ahora una fila de progreso y también se ve "sin
+        // candidatos" — cerrar acá abortaría una descarga que arrancó bien. Ese
+        // caso lo cubre el freno por estancamiento del paso 10, que sí espera.
+        if (updateSessionCandidatesTried == 0 && scan.actions.isEmpty() && !hasOpenButton &&
+            (renderedFor > UPDATE_CARD_RENDER_MS || waitedForCard > UPDATE_CARD_GIVEUP_MS)
+        ) {
+            Log.w(TAG, "Ficha de $updatingPkg sin botones reconocibles. Labels: ${scan.debugLabels}")
+            finishUpdateWithBestReason(
+                ctx, updatingPkg, scan,
+                UpdateFlowManager.RESULT_NOT_AVAILABLE,
+                "No se encontró el botón de actualizar de ${UpdateFlowManager.appLabel(ctx, updatingPkg)} en Google Play.",
+                "Ficha dibujada (${scan.renderedNodes} nodos con texto) sin candidatos reconocibles"
+            )
+            return
+        }
+
+        // ── 10. Freno por estancamiento ──
         if (now - updateSessionStartTime > UPDATE_STALL_MS) {
             Log.w(TAG, "Actualización estancada para $updatingPkg. Labels: ${scan.debugLabels}")
-            UpdateFlowManager.finish(ctx, UpdateFlowManager.RESULT_ERROR,
-                "No se pudo actualizar ${UpdateFlowManager.appLabel(ctx, updatingPkg)}.")
+            finishUpdateWithBestReason(
+                ctx, updatingPkg, scan,
+                UpdateFlowManager.RESULT_ERROR,
+                "No se pudo actualizar ${UpdateFlowManager.appLabel(ctx, updatingPkg)}.",
+                "Estancado ${UPDATE_STALL_MS / 1000}s tras probar $updateSessionCandidatesTried candidatos"
+            )
             return
         }
 
         UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_LOOKING_BUTTON,
             "Buscando actualización...")
+    }
+
+    /**
+     * Escaneo puntual de la pantalla de Play Store para adjuntar un diagnóstico a
+     * un cierre. Devuelve null si la ventana ya no está: cerrar sin diagnóstico es
+     * aceptable, quedarse colgado no.
+     */
+    private fun safeScanPlayStore(): PlayButtonFinder.Result? {
+        return try {
+            val root = findPlayStoreRoot() ?: return null
+            val (w, h) = playStoreBounds(root)
+            PlayButtonFinder.scan(root, w, h, resources.displayMetrics.density)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun handlePlayStoreAutoUpdate(event: AccessibilityEvent, updatingPkg: String) {

@@ -517,6 +517,8 @@ object FirebaseDeviceSync {
                     // supo clasificar: es el dato con el que se calibra el rebote en un
                     // equipo donde no dispara, en vez de adivinar (como `debugLabels`).
                     "googleAccountWebBlocked" to policyManager.isGoogleAccountWebBlocked(),
+                    "googleAccountBlockStrict" to policyManager.isGoogleAccountBlockStrict(),
+                    "googleAccountBlockMode" to policyManager.getGoogleAccountBlockMode(),
                     "googleAccountWebSeenClasses" to policyManager.getGoogleAccountWebSeenClasses(),
                     "contactPhotoPickerBlocked" to policyManager.isContactPhotoPickerBlocked(),
                     "kosherLauncherEnabled" to policyManager.isKosherLauncherEnabled(),

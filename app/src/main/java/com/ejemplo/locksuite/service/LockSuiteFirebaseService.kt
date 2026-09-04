@@ -453,6 +453,11 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 // Ver mdm/GoogleAccountWebPolicy.kt. Viene ENCENDIDO de fábrica.
                 "BLOCK_GOOGLE_ACCOUNT_WEB" -> policyManager.setGoogleAccountWebBlocked(true)
                 "UNBLOCK_GOOGLE_ACCOUNT_WEB" -> policyManager.setGoogleAccountWebBlocked(false)
+                // Modo del bloqueo de la cuenta (4/9 tarde). ESTRICTO rebota la pantalla
+                // entera de "Gestionar tu cuenta de Google"; NORMAL la deja abrir y
+                // bloquea solo el historial/actividad por dominio. Por defecto NORMAL.
+                "SET_GOOGLE_ACCOUNT_MODE_STRICT" -> policyManager.setGoogleAccountBlockStrict(true)
+                "SET_GOOGLE_ACCOUNT_MODE_NORMAL" -> policyManager.setGoogleAccountBlockStrict(false)
                 "BLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(true)
                 "UNBLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(false)
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)

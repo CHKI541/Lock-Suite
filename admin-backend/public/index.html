@@ -320,12 +320,15 @@
                 Estas opciones no la clavan: hacen que apagarla no sirva de nada.
                 <br /><strong>Bloquear ajustes de la cuenta de Google</strong> (4/9/2026, viene encendido) cierra un
                 agujero medido: desde Ajustes → Google → Datos y privacidad se veía el historial de YouTube y todas
-                las búsquedas, sin ningún navegador. Cierra la pantalla y además los dominios que la sirven.
+                las búsquedas, sin ningún navegador. En modo <strong>normal</strong> se puede seguir administrando la cuenta
+                (datos, seguridad, dispositivos) y se bloquean el historial, Mi Actividad, la cronología y Takeout;
+                en <strong>estricto</strong> no se abre ninguna pantalla de la cuenta desde el equipo.
                 <br /><strong>Bloquear cambio de idioma</strong> es la más importante de las que quedan: sin eso, cambiar
                 el idioma del equipo deja mudo a cualquier filtro que compare texto de pantalla.
               </p>
               <div class="toggle-list">
                 <label class="toggle-row"><span>Bloquear ajustes de la cuenta de Google (historial y actividad)</span><input type="checkbox" class="policy-switch" data-policy="googleAccountWebBlocked" /></label>
+                <label class="toggle-row"><span style="padding-left:14px;">↳ Modo <strong>estricto</strong>: no abrir NINGUNA pantalla de la cuenta</span><input type="checkbox" class="policy-switch" data-policy="googleAccountBlockStrict" /></label>
                 <label class="toggle-row"><span>Bloquear selector de fotos e ilustraciones de contactos</span><input type="checkbox" class="policy-switch" data-policy="contactPhotoPickerBlocked" /></label>
                 <label class="toggle-row"><span>Bloquear cambio de idioma del sistema</span><input type="checkbox" class="policy-switch" data-policy="localeChangeBlocked" /></label>
                 <label class="toggle-row"><span>Rebotar el menú de Accesibilidad de Ajustes</span><input type="checkbox" class="policy-switch" data-policy="accBounceSettings" /></label>
@@ -550,6 +553,7 @@
               <h3 style="margin-top: 0; font-size: 14px; color: var(--text-gray); margin-bottom: 12px;">Protecciones de Accesibilidad</h3>
               <div class="toggle-list">
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear ajustes de la cuenta de Google (historial y actividad)</span><input type="checkbox" class="group-policy-switch" data-policy="googleAccountWebBlocked" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span style="padding-left:14px;">↳ Modo <strong>estricto</strong>: no abrir NINGUNA pantalla de la cuenta</span><input type="checkbox" class="group-policy-switch" data-policy="googleAccountBlockStrict" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear selector de fotos e ilustraciones de contactos</span><input type="checkbox" class="group-policy-switch" data-policy="contactPhotoPickerBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear cambio de idioma del sistema</span><input type="checkbox" class="group-policy-switch" data-policy="localeChangeBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Rebotar el menú de Accesibilidad de Ajustes</span><input type="checkbox" class="group-policy-switch" data-policy="accBounceSettings" /></label>
@@ -714,6 +718,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=28"></script>
+  <script src="app.js?v=29"></script>
 </body>
 </html>

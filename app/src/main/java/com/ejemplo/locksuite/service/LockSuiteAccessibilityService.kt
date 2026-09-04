@@ -344,6 +344,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val accSettingsBounce: Boolean,
         /** Rebotar las pantallas web de la cuenta de Google (historial, actividad). */
         val googleAccountWeb: Boolean,
+        /** Modo estricto: rebota TAMBIÉN "Gestionar tu cuenta de Google" entera. */
+        val googleAccountStrict: Boolean,
         /** Rebotar el selector de foto de contacto / Google Illustrations / Google Fotos. */
         val contactPhotoPicker: Boolean,
         val takenAt: Long
@@ -380,6 +382,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             // Encendido por defecto: ver el comentario de PolicyManager sobre por qué
             // este interruptor es la excepción a "todo apagado de fábrica".
             googleAccountWeb = p.getBoolean("block_google_account_web", true),
+            // Por defecto NORMAL: el modo estricto rebota la pantalla entera de la
+            // cuenta y eso dejó al dueño sin poder administrarla (ver GoogleAccountWebPolicy).
+            googleAccountStrict = GoogleAccountWebPolicy.isStrict(
+                p.getString(GoogleAccountWebPolicy.KEY_MODE, GoogleAccountWebPolicy.MODE_NORMAL)
+            ),
             contactPhotoPicker = p.getBoolean("block_contact_photo_picker", true),
             takenAt = SystemClock.elapsedRealtime()
         )
@@ -659,7 +666,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             GoogleAccountWebPolicy.isCandidatePackage(packageName)
         ) {
-            if (handleGoogleAccountWebBounce(ev, packageName)) return
+            if (handleGoogleAccountWebBounce(ev, packageName, f.googleAccountStrict)) return
         }
 
         // ── Selector de foto de contacto / Google Illustrations (switch: block_contact_photo_picker) ──
@@ -685,11 +692,21 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         handleWebViewBlocking(packageName, eventType)
 
         // ── Rebote de Licencias y Términos Legales en Ajustes (Punto D) ──
+        //
+        // 4/9 (tarde): tenía un GLOBAL_ACTION_BACK a ciegas, sin antirrebote, sin
+        // excepción para el administrador y sin verificar nada. Eso es exactamente la
+        // forma del bug de B.15 punto 1 ("rebota mucho más cosas, casi no se puede
+        // abrir Ajustes"), que costó una sesión entera. Ahora tiene las dos guardas
+        // mínimas que tienen todos los demás rebotes del archivo.
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             (isSettingsPackage(packageName) || packageName == GoogleAccountWebPolicy.PKG_GMS)
         ) {
             val cls = ev.className?.toString() ?: ""
-            if (isLegalOrLicenseScreen(cls)) {
+            if (isLegalOrLicenseScreen(cls) &&
+                SystemClock.elapsedRealtime() >= legalBounceBackoffUntil &&
+                !com.ejemplo.locksuite.security.SessionManager.isActive()
+            ) {
+                legalBounceBackoffUntil = SystemClock.elapsedRealtime() + LEGAL_BOUNCE_BACKOFF_MS
                 Log.w(TAG, "🚫 Pantalla legal/licencias detectada: rebotando al usuario ($cls).")
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 return
@@ -1529,6 +1546,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      * Detección de pantallas de Licencias de Código Abierto y Términos Legales (Punto D).
      * Evita que el usuario abra las listas de licencias con hipervínculos web.
      */
+    private var legalBounceBackoffUntil = 0L
+    private val LEGAL_BOUNCE_BACKOFF_MS = 3_000L
+
     private fun isLegalOrLicenseScreen(cls: String): Boolean {
         if (cls.isEmpty()) return false
         val lower = cls.lowercase()
@@ -1563,9 +1583,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private val gAccMaxSeen = 12
 
     /** Devuelve true si rebotó (y por lo tanto el evento ya está atendido). */
-    private fun handleGoogleAccountWebBounce(ev: AccessibilityEvent, packageName: String): Boolean {
+    private fun handleGoogleAccountWebBounce(
+        ev: AccessibilityEvent,
+        packageName: String,
+        strict: Boolean
+    ): Boolean {
         val cls = ev.className?.toString()
-        if (!GoogleAccountWebPolicy.isAccountWebClass(cls)) {
+        if (!GoogleAccountWebPolicy.isAccountWebClass(cls, strict)) {
             recordUnknownGoogleClass(packageName, cls)
             return false
         }
@@ -1697,7 +1721,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private fun handleContactPhotoPickerBounce(cls: String, packageName: String): Boolean {
         val now = SystemClock.elapsedRealtime()
-        if (contactPhotoBounceInProgress || now < contactPhotoBounceBackoffUntil) return true
+        // 4/9 (tarde): esto devolvía `true` durante el antirrebote, o sea "evento ya
+        // atendido", y el `return` de arriba se comía el resto del pipeline —bloqueo de
+        // WebView, anti-evasión de Ajustes, tapado de imágenes— durante los 2 s
+        // siguientes a cada rebote. Devolver `false` cuando NO se hizo nada.
+        if (contactPhotoBounceInProgress || now < contactPhotoBounceBackoffUntil) return false
         if (com.ejemplo.locksuite.security.SessionManager.isActive()) return false
 
         contactPhotoBounceInProgress = true

@@ -533,8 +533,19 @@ class KosherVpnService : VpnService() {
         //    FORCE_ALLOW del administrador sigue ganando. Es la vía de escape para el
         //    caso raro en que haga falta abrir la cuenta desde el propio equipo.
         val isGoogleAccountWebBlocked = mdmPrefs.getBoolean("block_google_account_web", true)
+        // Modo NORMAL por defecto: bloquea el historial y la actividad, pero deja
+        // `myaccount.google.com` para que el administrador pueda seguir manejando la
+        // cuenta desde el equipo. El modo estricto suma ese dominio. Ver
+        // GoogleAccountWebPolicy: acá es donde el corte fino existe de verdad, porque
+        // el nombre de clase de la pantalla no distingue una mitad de la otra.
+        val googleAccountStrict = com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isStrict(
+            mdmPrefs.getString(
+                com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.KEY_MODE,
+                com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.MODE_NORMAL
+            )
+        )
         if (isGoogleAccountWebBlocked &&
-            com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isBlockedHost(queriedDomain)
+            com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isBlockedHost(queriedDomain, googleAccountStrict)
         ) {
             android.util.Log.i("KosherVPN", "🚫 BLOQUEADO CUENTA/ACTIVIDAD GOOGLE: $queriedDomain")
             com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)

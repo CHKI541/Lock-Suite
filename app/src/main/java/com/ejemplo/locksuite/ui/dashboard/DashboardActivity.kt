@@ -885,6 +885,16 @@ fun PoliciesTabContent(context: Context) {
                     isChecked = remember(refreshKey) { policyManager.isContactPhotoPickerBlocked() },
                     onCheckedChange = { policyManager.setContactPhotoPickerBlocked(it).also { refreshKey++ } }
                 )
+                // 4/9 (tarde) — el modo. En NORMAL se puede seguir administrando la
+                // cuenta (datos, seguridad, dispositivos) y se bloquea solo el
+                // historial/actividad; en ESTRICTO no se abre ninguna pantalla de la
+                // cuenta. Normal es el valor de fábrica: la primera versión venía en
+                // estricto de hecho y dejó al dueño sin poder tocar su cuenta.
+                PolicySwitchRow(
+                    label = "  ↳ Modo estricto (no abrir NINGUNA pantalla de la cuenta)",
+                    isChecked = remember(refreshKey) { policyManager.isGoogleAccountBlockStrict() },
+                    onCheckedChange = { policyManager.setGoogleAccountBlockStrict(it).also { refreshKey++ } }
+                )
                 PolicySwitchRow(
                     label = "Protección de Accesibilidad (maestro)",
                     isChecked = remember(refreshKey) { policyManager.isAccessibilityProtectionEnabled() },

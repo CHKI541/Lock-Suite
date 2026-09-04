@@ -1109,6 +1109,48 @@ class PolicyManager(private val context: Context) {
     }
 
     /**
+     * Modo del bloqueo de la cuenta de Google: "normal" (por defecto) o "strict".
+     *
+     * ⚠️ LEER ANTES DE CAMBIAR EL VALOR POR DEFECTO. La primera versión de este
+     * interruptor (4/9, mañana) rebotaba la pantalla entera de "Gestionar tu cuenta de
+     * Google", y el dueño reportó horas después que **ya no podía entrar a ninguna
+     * configuración de su cuenta**. El motivo está explicado en
+     * `GoogleAccountWebPolicy`: el módulo de Play services es UNA sola Activity para
+     * toda la cuenta, así que rebotar por clase es todo o nada.
+     *
+     * En "normal" el corte lo hace la Capa 2, que sí distingue: el historial viene de
+     * `myactivity.google.com` y la administración de la cuenta de `myaccount.google.com`.
+     * En "strict" se suma el rebote de la pantalla y el bloqueo de `myaccount`.
+     *
+     * **Por defecto "normal": cierra lo que se reportó y deja el equipo administrable.**
+     */
+    fun getGoogleAccountBlockMode(): String =
+        PrefsHelper.getMdmPrefs(context).getString(
+            GoogleAccountWebPolicy.KEY_MODE, GoogleAccountWebPolicy.MODE_NORMAL
+        ) ?: GoogleAccountWebPolicy.MODE_NORMAL
+
+    fun isGoogleAccountBlockStrict(): Boolean =
+        GoogleAccountWebPolicy.isStrict(getGoogleAccountBlockMode())
+
+    fun setGoogleAccountBlockStrict(strict: Boolean): Boolean {
+        val mode = if (strict) GoogleAccountWebPolicy.MODE_STRICT else GoogleAccountWebPolicy.MODE_NORMAL
+        if (isLockSuiteSuspended()) {
+            PrefsHelper.getMdmPrefs(context).edit().putString(GoogleAccountWebPolicy.KEY_MODE, mode).apply()
+            android.util.Log.i("PolicyManager", "LockSuite suspendido: modo de cuenta Google guardado sin aplicar")
+            return true
+        }
+        PrefsHelper.getMdmPrefs(context).edit().putString(GoogleAccountWebPolicy.KEY_MODE, mode).apply()
+        if (strict) {
+            try {
+                com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+            } catch (e: Exception) {
+                android.util.Log.w("PolicyManager", "ensureVpnRunning falló: ${e.message}")
+            }
+        }
+        return true
+    }
+
+    /**
      * Clases de ventana de Play services que el servicio de Accesibilidad vio y NO
      * supo clasificar. Es el dato con el que se calibra el rebote en un equipo donde
      * no dispara, en vez de adivinar (misma idea que `debugLabels` de B.41).
@@ -1211,6 +1253,8 @@ class PolicyManager(private val context: Context) {
         // conoce se acepta en silencio y no hace nada.
         dataObj.put("googleAccountWebBlocked", isGoogleAccountWebBlocked())
         dataObj.put("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
+        // El modo va como booleano para que el panel lo maneje como un switch más.
+        dataObj.put("googleAccountBlockStrict", isGoogleAccountBlockStrict())
         dataObj.put("kosherLauncherEnabled", isKosherLauncherEnabled())
         // 2/9/2026 — interruptores que existen en la app y en el panel pero que el perfil
         // no guardaba. Sin esto, "exportar el perfil de un equipo bien configurado y
@@ -1321,6 +1365,9 @@ class PolicyManager(private val context: Context) {
             )
             setContactPhotoPickerBlocked(
                 dataObj.optBoolean("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
+            )
+            setGoogleAccountBlockStrict(
+                dataObj.optBoolean("googleAccountBlockStrict", isGoogleAccountBlockStrict())
             )
             setKosherLauncherEnabled(dataObj.optBoolean("kosherLauncherEnabled", false))
 

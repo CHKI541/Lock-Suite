@@ -318,3 +318,133 @@ equipo.
 
 Después del commit: `firebase deploy --only hosting,functions` y abrir el panel con
 **Ctrl+F5**.
+
+---
+
+## 9. ⚠️ CORRECCIÓN DE LA MISMA TARDE: bloqueaba de más, ahora son dos modos
+
+**Reporte del dueño horas después de instalar 0.6.40:** *"ahora no puedo entrar a toda la
+configuración de mi cuenta de Google, ¿no hay manera de bloquear solo lo problemático? (o
+ponerlo como 2 opciones bloqueo normal/estricto)"*. Tenía razón.
+
+### La causa, que conviene entender antes de tocar nada
+
+`com.google.android.gms.accountsettings.*` es **UNA SOLA Activity** que dibuja todo
+"Gestionar tu cuenta de Google" —datos personales, seguridad, dispositivos, pagos— **y
+también** las pantallas de historial. Ir de "Seguridad" a "Historial de YouTube" **no cambia
+de Activity**: pasa dentro de la misma ventana.
+
+O sea que **rebotar por nombre de clase es todo o nada**, y la versión de la mañana eligió
+"todo". Sumado al bloqueo de `myaccount.google.com`, que sirve la interfaz entera, el
+resultado fue cerrar la habitación completa en vez del cajón.
+
+**Lección de método:** el rebote por clase se eligió porque era la señal estructural (regla
+de B.19) y eso sigue siendo correcto. Lo que faltó fue preguntarse **qué más vive detrás de
+esa misma clase**. Una señal estructural precisa puede seguir siendo demasiado ancha.
+
+### Dónde SÍ existe el corte fino: en la Capa 2
+
+Las dos mitades vienen de dominios distintos — el historial de `myactivity.google.com` y la
+administración de la cuenta de `myaccount.google.com`. De ahí salen los dos modos:
+
+| | **NORMAL** (por defecto) | **ESTRICTO** |
+|---|---|---|
+| Administrar la cuenta (datos, seguridad, dispositivos, pagos) | **funciona** | bloqueado |
+| Historial de YouTube / Mi Actividad / Cronología / Takeout / Fotos | bloqueado | bloqueado |
+| Configuración de anuncios y Uso y diagnóstico | rebotados | rebotados |
+| Cómo lo cierra | solo Capa 2 (dominios) | Capa 2 + rebote de la pantalla |
+
+Preferencia `google_account_block_mode`, comandos `SET_GOOGLE_ACCOUNT_MODE_NORMAL` /
+`SET_GOOGLE_ACCOUNT_MODE_STRICT`, sub-fila del interruptor maestro en la app y en el panel
+(por dispositivo y por grupo), clave `googleAccountBlockStrict` en el perfil exportable.
+**Los equipos que ya tienen 0.6.40 se arreglan solos al actualizar:** la clave ausente
+significa NORMAL.
+
+### ⚠️ Honestidad sobre el modo normal — esto es lo que hay que MEDIR
+
+El corte depende de que el módulo traiga el historial desde `myactivity.google.com`. **Si en
+la prueba el historial igual se ve en modo normal, la respuesta NO es mover `myaccount` a
+`BLOCKED_NORMAL`** — eso vuelve exactamente al problema de hoy — sino aceptar que ahí los dos
+modos son el mismo y que el corte fino no existe.
+
+**Cómo medirlo en vez de discutirlo** (misma lección que B.18 y B.41: *medir la capa antes de
+elegir la causa*): con el equipo conectado, `adb logcat -s KosherVPN`, abrir
+Ajustes → Google → Gestionar tu cuenta y navegar hasta el historial. El log dice, consulta por
+consulta, qué dominios pide cada pantalla. Con eso se sabe si el corte es real en dos minutos.
+
+### Los dos arreglos a los agregados del 4/9 (ver B.45)
+
+1. **`isLegalOrLicenseScreen` no tenía ninguna guarda:** `GLOBAL_ACTION_BACK` a ciegas en cada
+   `WINDOW_STATE_CHANGED` de Ajustes o GMS, sin antirrebote, sin verificación y sin excepción
+   para la sesión de administrador. Es la forma exacta del bug de B.15 punto 1 (*"rebota mucho
+   más cosas, casi no se puede abrir Ajustes"*). Se le agregaron backoff de 3 s y respeto de
+   `SessionManager.isActive()`.
+2. **`handleContactPhotoPickerBounce` devolvía `true` sin actuar** durante su antirrebote de
+   2 s, y el `return` del llamador se comía el resto del pipeline (WebView, anti-evasión de
+   Ajustes, tapado de imágenes) en esa ventana. Ahora devuelve `false` cuando no hizo nada.
+
+### Prueba en equipo real, en este orden
+
+1. **Con el modo NORMAL (el de fábrica): abrir Ajustes → Google → Gestionar tu cuenta.**
+   Tiene que abrir y dejar navegar datos personales, seguridad y dispositivos. *(Es la prueba
+   que motivó todo esto.)*
+2. **En NORMAL, ir a Datos y privacidad → Historial de YouTube → "Administrar toda la
+   actividad".** No tiene que cargar la lista de videos. Si carga, correr la medición de arriba.
+3. **Encender el modo ESTRICTO desde el panel** y confirmar que ahora la pantalla de la cuenta
+   rebota sola.
+4. **Volver a NORMAL** y confirmar que se vuelve a poder entrar (o sea, que el comando FCM
+   llega y el modo manda de verdad).
+5. **Que el equipo siga pudiendo agregar una cuenta de Google**, en los dos modos.
+6. **Que Play Store, el panel y los comandos FCM sigan andando.**
+7. **Ajustes → Acerca del teléfono → Licencias:** tiene que rebotar, pero **entrar a Ajustes y
+   navegar por otras secciones tiene que seguir siendo normal** (esa es la regresión que las
+   guardas nuevas evitan).
+
+### Mensaje de commit
+
+```
+fix(cuenta-google): partir el bloqueo en modo normal y estricto
+
+El interruptor de B.43 bloqueaba de mas. Reporte del dueno horas despues de
+instalar 0.6.40: "ahora no puedo entrar a toda la configuracion de mi cuenta de
+Google". Causa: com.google.android.gms.accountsettings.* es UNA SOLA Activity
+que dibuja todo "Gestionar tu cuenta de Google" -datos personales, seguridad,
+dispositivos, pagos- y tambien las pantallas de historial; navegar entre ellas
+no cambia de Activity. O sea que rebotar por nombre de clase es todo o nada, y
+la primera version eligio "todo". Sumado a bloquear myaccount.google.com, que
+sirve la interfaz entera, se cerraba la habitacion completa en vez del cajon.
+
+El corte fino existe en la capa 2 y no en la 3: el historial viene de
+myactivity.google.com y la administracion de la cuenta de myaccount.google.com.
+
+Modo NORMAL (por defecto): se administra la cuenta con normalidad y se bloquean
+historial, Mi Actividad, cronologia, Takeout, anuncios y fotos.
+Modo ESTRICTO: ademas rebota la pantalla y bloquea myaccount.google.com.
+Preferencia google_account_block_mode, comandos SET_GOOGLE_ACCOUNT_MODE_NORMAL
+y SET_GOOGLE_ACCOUNT_MODE_STRICT, sub-fila en la app y en el panel por
+dispositivo y por grupo, clave en el perfil exportable. Los equipos que ya
+tienen 0.6.40 se arreglan solos al actualizar: la clave ausente = NORMAL.
+
+De paso, dos arreglos a los agregados del 4/9 (B.45):
+- isLegalOrLicenseScreen hacia un GLOBAL_ACTION_BACK a ciegas en cada cambio de
+  ventana de Ajustes o GMS, sin antirrebote, sin verificacion y sin excepcion
+  para la sesion de administrador. Es la forma exacta del bug de B.15 punto 1.
+  Ahora tiene backoff de 3 s y respeta SessionManager.
+- handleContactPhotoPickerBounce devolvia true sin haber actuado durante su
+  antirrebote de 2 s, y el return del llamador se comia el resto del pipeline
+  (WebView, anti-evasion de Ajustes, tapado de imagenes) en esa ventana.
+
+Cache-buster de app.js a v=29.
+
+Verificado: kotlinc 2.0.21 con stubs y el codigo extraido del archivo real,
+0 errores / 0 warnings, con 5 controles negativos todos detectados; prueba de
+comportamiento de los dos modos ejecutada (60+ casos) con control negativo;
+chequeo de parseo antes/despues en los 7 archivos con su control negativo;
+simetria de restricciones (B.38) verde; node --check. Sin Gradle y sin probar
+en equipo.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XWJG4LXCD3KKSUbcvXZV7p
+```
+
+Después: `firebase deploy --only hosting,functions` y abrir el panel con **Ctrl+F5**.

@@ -757,7 +757,32 @@ Tres detalles del seguimiento que no hay que "simplificar": el listener **se sue
 
 ---
 
-**B.43 — AGUJERO EN EL FILTRO: EL HISTORIAL DE YOUTUBE Y MI ACTIVIDAD SE VEÍAN DESDE AJUSTES, SIN NAVEGADOR. [ESCRITO, TYPE-CHECKEADO Y CON PRUEBA DE COMPORTAMIENTO EJECUTADA EL 4/9; SIN COMPILAR NI PROBAR EN EQUIPO]**
+**B.43 — AGUJERO EN EL FILTRO: EL HISTORIAL DE YOUTUBE Y MI ACTIVIDAD SE VEÍAN DESDE AJUSTES, SIN NAVEGADOR. [COMPILADO Y DESPLEGADO 4/9 en 0.6.40; CORREGIDO LA MISMA TARDE porque bloqueaba de más — la corrección SIN COMPILAR]**
+
+⚠️ **CORRECCIÓN DEL 4/9 (tarde) — LA PRIMERA VERSIÓN BLOQUEABA DE MÁS, Y HAY QUE ENTENDER POR QUÉ ANTES DE TOCAR ESTO.**
+
+Reporte del dueño horas después de instalar 0.6.40: *"ahora no puedo entrar a toda la configuración de mi cuenta de Google, ¿no hay manera de bloquear solo lo problemático? (o ponerlo como 2 opciones bloqueo normal/estricto)"*. Tenía razón, y la causa es concreta y vale conservarla:
+
+**`com.google.android.gms.accountsettings.*` es UNA SOLA Activity** que dibuja todo "Gestionar tu cuenta de Google" — datos personales, seguridad, dispositivos, pagos, contraseñas — **y también** las pantallas de historial. Ir de "Seguridad" a "Historial de YouTube" **no cambia de Activity**: pasa dentro de la misma ventana. O sea que **rebotar por nombre de clase es todo o nada**, y la primera versión eligió "todo". Sumado a que bloqueaba `myaccount.google.com`, que sirve la interfaz entera, el resultado fue cerrar la habitación completa en vez del cajón.
+
+**Dónde SÍ existe el corte fino: en la Capa 2.** Las dos mitades vienen de dominios distintos — el historial de `myactivity.google.com` y la administración de la cuenta de `myaccount.google.com`. De ahí salen los dos modos:
+
+| | **NORMAL** (por defecto) | **ESTRICTO** |
+|---|---|---|
+| Administrar la cuenta (datos, seguridad, dispositivos, pagos) | **funciona** | bloqueado |
+| Historial de YouTube / Mi Actividad / Cronología / Takeout / Fotos | bloqueado | bloqueado |
+| Configuración de anuncios y Uso y diagnóstico | rebotados | rebotados |
+| Cómo lo cierra | solo Capa 2 (dominios) | Capa 2 + rebote de la pantalla |
+
+Interruptor `google_account_block_mode` (`SET_GOOGLE_ACCOUNT_MODE_NORMAL` / `SET_GOOGLE_ACCOUNT_MODE_STRICT`), en la app y en el panel como sub-fila del interruptor maestro. **Por defecto NORMAL**, incluidos los equipos que ya tienen 0.6.40 instalado: la clave nueva ausente significa normal, así que la actualización sola les devuelve el acceso a la cuenta.
+
+⚠️ **Honestidad sobre el modo normal, que es lo que hay que medir en la prueba:** el corte depende de que el módulo traiga el historial desde `myactivity.google.com`. **Si en la prueba el historial igual se ve en modo normal, la respuesta NO es mover `myaccount` al modo normal** —eso vuelve al problema de hoy— sino aceptar que ahí los dos modos son el mismo. La forma de medirlo, en vez de discutirlo: abrir la pantalla del historial y mirar en `adb logcat -s KosherVPN` qué dominios consulta.
+
+**Lección de método, que ya apareció dos veces en este proyecto:** el rebote por clase se eligió porque era la señal estructural (regla de B.19) y eso sigue siendo correcto — lo que faltó fue preguntarse **qué más vive detrás de esa misma clase**. Una señal estructural precisa puede seguir siendo demasiado ancha.
+
+---
+
+*(Lo de abajo es la versión original del 4/9 a la mañana. Sigue siendo cierta salvo por lo corregido arriba.)*
 
 Hallazgo del dueño, textual: *"estuve viendo los ajustes de mi cuenta de Google en mi celular, y al entrar a ajustes de privacidad logré entrar a mi historial de YouTube y ver los videos, eso afecta a que no sea tan kosher."* Detalle completo, auditoría de agujeros vecinos y orden de prueba: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-04_CUENTA_GOOGLE.md`**.
 
@@ -824,28 +849,50 @@ Salió de la pregunta del dueño: *"analizame bien si pueden llegar a haber más
 - Motor DNS (`KosherVpnService`/parsers): de los tres puntos que estaban acá, **dos se atacaron el 17/8** y se movieron a **B.18** — las respuestas grandes que se perdían por MTU (ahora 4000 con reintento a 1500) y el pool que trababa la lectura del túnel (ahora `DiscardPolicy`). **Queda abierto el tercero:** una consulta con dominio no parseable se reenvía sin filtrar — es la única regla del filtro que falla "abierto" en vez de "cerrado". No es urgente; queda documentado.
 
 ---
+---
+
+**B.45 — REVISIÓN DE LOS 5 CAMBIOS DE ANTIGRAVITY DEL 4/9. [REVISADO 4/9 tarde; 2 defectos ARREGLADOS, 2 hallazgos SIN TOCAR porque son decisión del dueño]**
+
+Antigravity integró B.43 y agregó cinco cosas por su cuenta (detalle suyo en `INSTRUCCIONES_PARA_CLAUDE_CAMBIOS_EXTRA_2026-09-04.md`). La integración de B.43 está bien hecha: `GoogleAccountWebPolicy.kt` quedó **intacto byte por byte** y las exclusiones de `MinuteMaidActivity` se respetaron. Sobre los cinco agregados:
+
+**Arreglado en esta sesión (los dos son defectos reales, chicos y de bajo riesgo):**
+
+1. **El rebote de Licencias/Legales no tenía NINGUNA guarda.** `isLegalOrLicenseScreen()` disparaba un `GLOBAL_ACTION_BACK` a ciegas en cada `WINDOW_STATE_CHANGED` de Ajustes o GMS: **sin antirrebote, sin verificación y sin excepción para la sesión de administrador.** Es exactamente la forma del bug de B.15 punto 1 (*"rebota mucho más cosas, casi no se puede abrir Ajustes"*), que ya costó una sesión entera. Se le agregaron las dos guardas mínimas que tienen todos los demás rebotes del archivo: backoff de 3 s y respeto de `SessionManager.isActive()`.
+2. **`handleContactPhotoPickerBounce()` devolvía `true` sin haber hecho nada.** Durante el antirrebote de 2 s devolvía "evento ya atendido", y el `return` del llamador **se comía el resto del pipeline** —bloqueo de WebView, anti-evasión de Ajustes, tapado de imágenes— durante esos 2 s después de cada rebote. Ahora devuelve `false` cuando no actuó.
+
+**Hallazgos que NO se tocaron, porque cambiarlos es decisión de producto:**
+
+3. **La protección del Portal Cautivo probablemente no se ejecuta nunca, y además no hace lo que dice.** Dos cosas distintas: (a) el bloque vive dentro de `if (logPackage != "desconocido")`, y las consultas DNS de Android salen por `netd`, no por la app — es el problema de atribución documentado en B.10 y es la razón por la que el bloqueo de B.43 se puso como lista negra **global**. O sea que ese `else if` seguramente no entra nunca; (b) aunque entrara, `isCaptivePortalEscapeDomain()` es una **lista negra de 16 dominios**, no la lista blanca que describe el informe (*"permitiendo solo la IP local del router y los dominios de comprobación"*). Con una lista negra, una ventana de portal cautivo sigue siendo un navegador libre para todo lo que no esté en esos 16. **Medirlo primero** (`adb logcat -s KosherVPN` con un portal cautivo real) antes de reescribirlo: si nunca entra, discutir la lista es discutir código muerto.
+4. **Agregar `googlequicksearchbox` a `KNOWN_BROWSER_PACKAGES` no "expulsa al usuario"**, como dice el informe. En `handleWebViewBlocking()`, que un paquete sea "navegador" significa que se mira el `originApp` y se bloquea **solo si esa otra app** tiene el bloqueo de WebView encendido; y `trackPackage()` directamente saltea los navegadores. Lo que sí bloquea la app de Google es `DEFAULT_BLOCKED_PACKAGES` (la suspensión), que está bien. **Efecto lateral que conviene saber:** ahora también entra en `getInstalledBrowserPackages()`, así que donde LockSuite "suspende navegadores" (emergencia de accesibilidad, arranque protegido) va a suspender también la app de Google. Probablemente deseable, pero no era lo anunciado.
+
+**Bien hecho y sin observaciones:** `DEFAULT_BLOCKED_PACKAGES` con el patrón "preferencia ausente = suspendida" (deja que el administrador la desactive y que eso persista, que es lo correcto); `DISALLOW_SET_WALLPAPER` por defecto siguiendo el mismo patrón que `DISALLOW_CONFIG_PRIVATE_DNS`; y la simetría de las cuatro listas de restricciones sigue verde en el chequeo de B.38.
+
+**Nota de producto:** el dueño **rechazó** la lista blanca global de WebView que proponía B.44 (*"lista blanca no quiero"*). Queda registrado para que no se vuelva a proponer; los agujeros de B.44 se siguen cerrando de a uno.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**4/9 — Antigravity: B.43 integrado + 5 ajustes adicionales a pedido del dueño (Google App, Licencias, Fondos, Portal Cautivo, Selector de Fotos/Ilustraciones de Contactos). Compilado y desplegado.**
+**4/9 (tarde) — Claude: el interruptor de B.43 bloqueaba de más y se partió en dos modos; más la revisión de los 5 agregados de Antigravity. Escrito y verificado; SIN COMPILAR NI PROBAR.**
 
-Continuación de la sesión de Claude del 4/9:
-
-1. **B.43 (Ajustes de la cuenta de Google) integrado completamente:** `GoogleAccountWebPolicy.kt`, dominios bloqueados en `KosherVpnService`, rebote de Accesibilidad con exclusión de `MinuteMaidActivity`, comandos FCM y panel `v=28`.
-2. **Rechazo explícito de la Lista Blanca Global:** El dueño rechazó la sugerencia de invertir el MDM a una lista blanca general de WebViews (*"Lista blanca no quiero"*). Se mantiene el diseño actual de LockSuite.
-3. **App de Google / Asistente / Lens (`com.google.android.googlequicksearchbox`):** Agregada a `KNOWN_BROWSER_PACKAGES` y a `DEFAULT_BLOCKED_PACKAGES` en `AppController.kt`. Por omisión, el sistema la suspende desde el inicio y aparece en "Bloqueadas" del panel y del celular. Si se intenta abrir, Capa 3 la rebota como navegador.
-4. **Rebote de Licencias y Términos Legales en Ajustes (Punto D):** Detecta pantallas con `"license"`, `"legalsettings"`, `"opensource"` o `"copyright"` en Ajustes o GMS y ejecuta `GLOBAL_ACTION_BACK` inmediato.
-5. **Selector de Fondos de Pantalla de Google y `DISALLOW_SET_WALLPAPER` (Punto E):** Restricción de `UserManager.DISALLOW_SET_WALLPAPER` activa por omisión en `PolicyManager.isRestrictionEnabled()` y paquete `com.google.android.apps.wallpaper` en `DEFAULT_BLOCKED_PACKAGES`.
-6. **Protección contra Fugas en Portal Cautivo (`com.android.captiveportallogin`) (Punto B):** Se permite su funcionamiento para que el usuario pueda autenticarse al Wi-Fi de hoteles/aeropuertos, pero `KosherVpnService` bloquea cualquier escape a entretenimiento, redes sociales o video (`youtube`, `facebook`, `instagram`, `twitter`, `tiktok`, `netflix`, etc.).
-7. **Selector de fotos e ilustraciones de contactos / Google Fotos (Punto 5):** Interruptor `block_contact_photo_picker` ENCENDIDO POR DEFECTO (`true`). Intercepta y rebota inmediatamente en Capa 3 (`LockSuiteAccessibilityService`) al detectar el selector de avatares/fotos (`user.profile.photopicker`, `avatarpicker`, `illustration`, `artpicker`) en Contactos de Google o apps del sistema, impidiendo entrar a la galería de ilustraciones y a Google Fotos. Sincronizado con FCM, panel y perfiles.
-8. **Documentación cruzada generada:** `INSTRUCCIONES_PARA_CLAUDE_CAMBIOS_EXTRA_2026-09-04.md` con el detalle de cada problema y solución para sincronizar con Claude.
-9. **Despliegue automatizado:** Compilado release y publicado vía `deploy_all.ps1`.
+1. **El reporte del dueño fue inmediato y correcto:** *"ahora no puedo entrar a toda la configuración de mi cuenta de Google"*. La causa es de diseño de la sesión de la mañana, no de la integración de Antigravity: **el módulo de la cuenta de Play services es UNA sola Activity para toda la cuenta**, así que rebotar por nombre de clase es todo o nada — y encima se bloqueaba `myaccount.google.com`, que sirve la interfaz entera.
+2. **Dos modos, que es lo que el propio dueño propuso.** NORMAL (por defecto): se administra la cuenta con normalidad y se bloquean historial, Mi Actividad, cronología, Takeout, anuncios y fotos. ESTRICTO: no se abre ninguna pantalla de la cuenta. El corte fino existe en la Capa 2 y no en la Capa 3, porque las dos mitades vienen de dominios distintos. Detalle en **B.43**.
+3. **Los equipos que ya tienen 0.6.40 se arreglan solos al actualizar:** la clave nueva ausente significa NORMAL.
+4. **Lección de método:** el rebote por clase se eligió por ser la señal estructural (regla de B.19) y eso sigue siendo correcto — lo que faltó fue preguntarse **qué más vive detrás de esa misma clase**. Una señal estructural precisa puede seguir siendo demasiado ancha.
+5. **Honestidad sobre el modo normal:** depende de que el historial venga de `myactivity.google.com`. Si en la prueba igual se ve, la respuesta **no** es mover `myaccount` a normal (vuelve al problema de hoy) sino aceptar que ahí los dos modos son el mismo. Se mide con `adb logcat -s KosherVPN`, no se discute.
+6. **Revisión de los 5 agregados de Antigravity (B.45).** La integración de B.43 está bien: `GoogleAccountWebPolicy.kt` quedó intacto byte por byte y las exclusiones del alta de cuenta se respetaron. **Se arreglaron dos defectos reales:** el rebote de Licencias no tenía antirrebote, ni verificación, ni excepción de administrador (la forma exacta del bug de B.15 punto 1), y el rebote del selector de fotos devolvía "evento atendido" sin hacer nada, comiéndose el resto del pipeline 2 s después de cada rebote.
+7. **Dos hallazgos que quedaron sin tocar porque son decisión de producto:** la protección del Portal Cautivo **probablemente no se ejecuta nunca** (vive detrás de `logPackage != "desconocido"` y las consultas salen por `netd` — el problema de B.10) y además es una lista negra de 16 dominios, no la lista blanca que describe el informe; y agregar la app de Google a `KNOWN_BROWSER_PACKAGES` **no la expulsa** como dice el informe (lo que la bloquea es la suspensión por `DEFAULT_BLOCKED_PACKAGES`, que sí está bien).
+8. **Queda registrado que el dueño rechazó la lista blanca global de WebView** de B.44. Los agujeros de B.44 se siguen cerrando de a uno.
+9. **Verificación:** `kotlinc` 2.0.21 contra stubs con el código extraído del archivo real, **0 errores / 0 warnings**, con **5 controles negativos, los 5 detectados**; **prueba de comportamiento ejecutada de los dos modos** (60+ casos verdes, con control negativo), incluyendo que en modo normal `myaccount.google.com` pase y que en los dos modos pasen `accounts.google.com`, `play.google.com`, `mtalk.google.com`, `fcm.googleapis.com` y el `MinuteMaidActivity`; chequeo de parseo antes/después en los 7 archivos (0 y 0) con su control negativo; chequeo de simetría de B.38 verde; `node --check`. **Sin Gradle y sin probar en equipo.**
 
 ---
 
 ## Estado del repo (git)
 
-**4/9:**
-- Todo B.43 y los 5 ajustes adicionales integrados en `:app` y `admin-backend`.
-- Documentos de referencia para Claude: `INSTRUCCIONES_ANTIGRAVITY_2026-09-04_CUENTA_GOOGLE.md` y `INSTRUCCIONES_PARA_CLAUDE_CAMBIOS_EXTRA_2026-09-04.md`.
+**4/9 (tarde):**
+- `833e9d7` / `e131034` — **versionCode 103 / versionName 0.6.40**, compilado y desplegado por Antigravity: B.43 (primera versión) + los 5 agregados de B.45.
+- **Sin commitear al cierre:** los dos modos de B.43 y los dos arreglos de B.45 — `mdm/GoogleAccountWebPolicy.kt`, `mdm/PolicyManager.kt`, `service/LockSuiteAccessibilityService.kt`, `service/KosherVpnService.kt`, `service/LockSuiteFirebaseService.kt`, `util/FirebaseDeviceSync.kt`, `ui/dashboard/DashboardActivity.kt`, `admin-backend/public/index.html` (cache-buster a **`v=29`**), `admin-backend/public/app.js`, `admin-backend/functions/index.js` — más este documento y `INSTRUCCIONES_ANTIGRAVITY_2026-09-04_CUENTA_GOOGLE.md` (sección 9 nueva). **Sin `device_bash` no hay `git`**: el mensaje de commit exacto está en la sección 9 de ese documento.
+- Después de commitear: `firebase deploy --only hosting,functions` y abrir el panel con **Ctrl+F5**.
+- **Verificá igual** con `git log -1`, `git status` y `cat app/build.gradle.kts` al arrancar: en este repo hay más de un agente tocando el número de versión.

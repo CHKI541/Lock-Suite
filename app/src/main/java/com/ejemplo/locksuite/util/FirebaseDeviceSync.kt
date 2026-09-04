@@ -516,6 +516,17 @@ object FirebaseDeviceSync {
                     // campo son las clases de Play services que el servicio vio y no
                     // supo clasificar: es el dato con el que se calibra el rebote en un
                     // equipo donde no dispara, en vez de adivinar (como `debugLabels`).
+                    // Portal cautivo: el interruptor y, sobre todo, la VISIBILIDAD.
+                    // Como no se puede impedir del todo navegar ahí (la ventana esquiva
+                    // la VPN), lo que sí se puede es que el administrador VEA cuántas
+                    // veces se abrió y cuánto tiempo estuvo abierta.
+                    "captivePortalGuard" to policyManager.isCaptivePortalGuardEnabled(),
+                    "captivePortalOpens" to policyManager.getCaptivePortalOpens(),
+                    "captivePortalTotalMs" to policyManager.getCaptivePortalTotalMs(),
+                    "captivePortalLastOpenAt" to policyManager.getCaptivePortalLastOpenAt(),
+                    // Clases de selector de fotos vistas y no clasificadas: es el dato
+                    // para calibrar el rebote en un equipo donde no dispare.
+                    "photoPickerSeenClasses" to policyManager.getPhotoPickerSeenClasses(),
                     "googleAccountWebBlocked" to policyManager.isGoogleAccountWebBlocked(),
                     "googleAccountBlockStrict" to policyManager.isGoogleAccountBlockStrict(),
                     "googleAccountBlockMode" to policyManager.getGoogleAccountBlockMode(),

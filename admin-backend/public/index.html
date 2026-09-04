@@ -323,12 +323,16 @@
                 las búsquedas, sin ningún navegador. En modo <strong>normal</strong> se puede seguir administrando la cuenta
                 (datos, seguridad, dispositivos) y se bloquean el historial, Mi Actividad, la cronología y Takeout;
                 en <strong>estricto</strong> no se abre ninguna pantalla de la cuenta desde el equipo.
+                <br /><strong>Portal cautivo:</strong> esa ventana esquiva la VPN por diseño de Android, así que NO se puede
+                filtrar por dominios. Lo que hace el interruptor es taparle las imágenes, cerrarla apenas la red valida y
+                ponerle un tope de 3 minutos — y contar aperturas y tiempo, abajo, para que veas si alguien la usa de navegador.
                 <br /><strong>Bloquear cambio de idioma</strong> es la más importante de las que quedan: sin eso, cambiar
                 el idioma del equipo deja mudo a cualquier filtro que compare texto de pantalla.
               </p>
               <div class="toggle-list">
                 <label class="toggle-row"><span>Bloquear ajustes de la cuenta de Google (historial y actividad)</span><input type="checkbox" class="policy-switch" data-policy="googleAccountWebBlocked" /></label>
                 <label class="toggle-row"><span style="padding-left:14px;">↳ Modo <strong>estricto</strong>: no abrir NINGUNA pantalla de la cuenta</span><input type="checkbox" class="policy-switch" data-policy="googleAccountBlockStrict" /></label>
+                <label class="toggle-row"><span>Vigilar la ventana de inicio de sesión de Wi-Fi (portal cautivo)</span><input type="checkbox" class="policy-switch" data-policy="captivePortalGuard" /></label>
                 <label class="toggle-row"><span>Bloquear selector de fotos e ilustraciones de contactos</span><input type="checkbox" class="policy-switch" data-policy="contactPhotoPickerBlocked" /></label>
                 <label class="toggle-row"><span>Bloquear cambio de idioma del sistema</span><input type="checkbox" class="policy-switch" data-policy="localeChangeBlocked" /></label>
                 <label class="toggle-row"><span>Rebotar el menú de Accesibilidad de Ajustes</span><input type="checkbox" class="policy-switch" data-policy="accBounceSettings" /></label>
@@ -554,6 +558,7 @@
               <div class="toggle-list">
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear ajustes de la cuenta de Google (historial y actividad)</span><input type="checkbox" class="group-policy-switch" data-policy="googleAccountWebBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span style="padding-left:14px;">↳ Modo <strong>estricto</strong>: no abrir NINGUNA pantalla de la cuenta</span><input type="checkbox" class="group-policy-switch" data-policy="googleAccountBlockStrict" /></label>
+                <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Vigilar la ventana de inicio de sesión de Wi-Fi (portal cautivo)</span><input type="checkbox" class="group-policy-switch" data-policy="captivePortalGuard" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear selector de fotos e ilustraciones de contactos</span><input type="checkbox" class="group-policy-switch" data-policy="contactPhotoPickerBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Bloquear cambio de idioma del sistema</span><input type="checkbox" class="group-policy-switch" data-policy="localeChangeBlocked" /></label>
                 <label class="toggle-row" style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; cursor: pointer;"><span>Rebotar el menú de Accesibilidad de Ajustes</span><input type="checkbox" class="group-policy-switch" data-policy="accBounceSettings" /></label>
@@ -718,6 +723,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=29"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>

@@ -1150,6 +1150,44 @@ class PolicyManager(private val context: Context) {
         return true
     }
 
+    // ─────────────────────────────────────────────
+    // PORTAL CAUTIVO  (ver mdm/CaptivePortalPolicy.kt)              [5/9/2026]
+    //
+    // ⚠️ LO PRIMERO, PORQUE CAMBIA LO QUE SE PUEDE ESPERAR DE ESTO: la ventana de
+    // "Iniciar sesión en la red" llama a `bindProcessToNetwork()` y esquiva la VPN
+    // POR DISEÑO DE ANDROID. La Capa 2 no ve ni una consulta de esa ventana, así que
+    // ninguna lista de dominios puede protegerla. Esto es Capa 3 y nada más.
+    // ─────────────────────────────────────────────
+
+    /** Encendido por defecto: no cuesta nada cuando no hay ningún portal cautivo. */
+    fun isCaptivePortalGuardEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean(CaptivePortalPolicy.KEY_ENABLED, true)
+
+    fun setCaptivePortalGuard(enabled: Boolean): Boolean {
+        if (deferIfSuspended(CaptivePortalPolicy.KEY_ENABLED, enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean(CaptivePortalPolicy.KEY_ENABLED, enabled).apply()
+        return true
+    }
+
+    /** Cuántas veces se abrió la ventana del portal. Visibilidad, no bloqueo. */
+    fun getCaptivePortalOpens(): Int =
+        PrefsHelper.getMdmPrefs(context).getInt("captive_portal_opens", 0)
+
+    /** Tiempo total que estuvo abierta, en milisegundos. */
+    fun getCaptivePortalTotalMs(): Long =
+        PrefsHelper.getMdmPrefs(context).getLong("captive_portal_total_ms", 0L)
+
+    fun getCaptivePortalLastOpenAt(): Long =
+        PrefsHelper.getMdmPrefs(context).getLong("captive_portal_last_open_at", 0L)
+
+    /**
+     * Clases que el servicio vio en paquetes de selector de fotos y no clasificó.
+     * Es el dato con el que se calibra el rebote en un equipo donde no dispare.
+     */
+    fun getPhotoPickerSeenClasses(): String =
+        PrefsHelper.getMdmPrefs(context).getString("photo_picker_seen", "") ?: ""
+
     /**
      * Clases de ventana de Play services que el servicio de Accesibilidad vio y NO
      * supo clasificar. Es el dato con el que se calibra el rebote en un equipo donde
@@ -1253,6 +1291,7 @@ class PolicyManager(private val context: Context) {
         // conoce se acepta en silencio y no hace nada.
         dataObj.put("googleAccountWebBlocked", isGoogleAccountWebBlocked())
         dataObj.put("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
+        dataObj.put("captivePortalGuard", isCaptivePortalGuardEnabled())
         // El modo va como booleano para que el panel lo maneje como un switch más.
         dataObj.put("googleAccountBlockStrict", isGoogleAccountBlockStrict())
         dataObj.put("kosherLauncherEnabled", isKosherLauncherEnabled())
@@ -1365,6 +1404,9 @@ class PolicyManager(private val context: Context) {
             )
             setContactPhotoPickerBlocked(
                 dataObj.optBoolean("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
+            )
+            setCaptivePortalGuard(
+                dataObj.optBoolean("captivePortalGuard", isCaptivePortalGuardEnabled())
             )
             setGoogleAccountBlockStrict(
                 dataObj.optBoolean("googleAccountBlockStrict", isGoogleAccountBlockStrict())

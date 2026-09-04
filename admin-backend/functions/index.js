@@ -74,6 +74,10 @@ const ALLOWED_COMMANDS = new Set([
   // Modo del bloqueo de la cuenta: normal (deja administrarla, bloquea el
   // historial por dominio) o estricto (no abre ninguna pantalla de la cuenta).
   "SET_GOOGLE_ACCOUNT_MODE_STRICT", "SET_GOOGLE_ACCOUNT_MODE_NORMAL",
+  // Portal cautivo: la ventana de "Iniciar sesion en la red" esquiva la VPN por
+  // diseno de Android, asi que no se puede filtrar por dominios. El interruptor
+  // le tapa las imagenes, la cierra al validar la red y le pone tope de 3 min.
+  "ENABLE_CAPTIVE_PORTAL_GUARD", "DISABLE_CAPTIVE_PORTAL_GUARD",
   // Selector de foto de contactos / Google Illustrations (4/9/2026)
   "BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER",
   "ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS",

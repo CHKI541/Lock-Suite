@@ -1252,6 +1252,7 @@ saveNameBtn.addEventListener("click", async () => {
             // 4/9/2026 — ajustes/actividad de la cuenta de Google (historial de YouTube).
             googleAccountWebBlocked: ["BLOCK_GOOGLE_ACCOUNT_WEB", "UNBLOCK_GOOGLE_ACCOUNT_WEB"],
             googleAccountBlockStrict: ["SET_GOOGLE_ACCOUNT_MODE_STRICT", "SET_GOOGLE_ACCOUNT_MODE_NORMAL"],
+            captivePortalGuard: ["ENABLE_CAPTIVE_PORTAL_GUARD", "DISABLE_CAPTIVE_PORTAL_GUARD"],
             contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
@@ -1892,6 +1893,7 @@ if (savePresetBtn) {
             // Una clave que la app no conoce se acepta y no hace nada (bug de B.28).
             googleAccountWebBlocked: dev.googleAccountWebBlocked !== false,
             googleAccountBlockStrict: !!dev.googleAccountBlockStrict,
+            captivePortalGuard: dev.captivePortalGuard !== false,
             contactPhotoPickerBlocked: dev.contactPhotoPickerBlocked !== false,
             accBounceSettings: !!dev.accBounceSettings,
             accNag: !!dev.accNag,
@@ -2451,6 +2453,7 @@ if (groupSidebar) {
             // 4/9/2026 — ajustes/actividad de la cuenta de Google (historial de YouTube).
             googleAccountWebBlocked: ["BLOCK_GOOGLE_ACCOUNT_WEB", "UNBLOCK_GOOGLE_ACCOUNT_WEB"],
             googleAccountBlockStrict: ["SET_GOOGLE_ACCOUNT_MODE_STRICT", "SET_GOOGLE_ACCOUNT_MODE_NORMAL"],
+            captivePortalGuard: ["ENABLE_CAPTIVE_PORTAL_GUARD", "DISABLE_CAPTIVE_PORTAL_GUARD"],
             contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],

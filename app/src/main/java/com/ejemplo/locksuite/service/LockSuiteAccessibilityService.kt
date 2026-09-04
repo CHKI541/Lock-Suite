@@ -21,7 +21,9 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import com.ejemplo.locksuite.mdm.CaptivePortalPolicy
 import com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy
+import com.ejemplo.locksuite.mdm.PhotoPickerPolicy
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.mdm.WebViewBlockManager
 import com.ejemplo.locksuite.mdm.ImageBlockManager
@@ -348,6 +350,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val googleAccountStrict: Boolean,
         /** Rebotar el selector de foto de contacto / Google Illustrations / Google Fotos. */
         val contactPhotoPicker: Boolean,
+        /** Vigilar la ventana de "Iniciar sesión en la red" (portal cautivo). */
+        val captivePortalGuard: Boolean,
         val takenAt: Long
     )
 
@@ -388,6 +392,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 p.getString(GoogleAccountWebPolicy.KEY_MODE, GoogleAccountWebPolicy.MODE_NORMAL)
             ),
             contactPhotoPicker = p.getBoolean("block_contact_photo_picker", true),
+            captivePortalGuard = p.getBoolean(CaptivePortalPolicy.KEY_ENABLED, true),
             takenAt = SystemClock.elapsedRealtime()
         )
         cachedFlags = fresh
@@ -671,10 +676,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         // ── Selector de foto de contacto / Google Illustrations (switch: block_contact_photo_picker) ──
         if (f.contactPhotoPicker && eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val cls = ev.className?.toString() ?: ""
-            if (isContactPhotoPickerScreen(packageName, cls)) {
-                if (handleContactPhotoPickerBounce(cls, packageName)) return
-            }
+            if (handleContactPhotoPickerBounce(ev.className?.toString(), packageName)) return
+        }
+
+        // ── Ventana de "Iniciar sesión en la red" (portal cautivo) ──
+        // Ver mdm/CaptivePortalPolicy.kt: esta ventana esquiva la VPN por diseño, así
+        // que la Capa 2 no puede hacer NADA ahí. Esto es lo único que puede.
+        if (f.captivePortalGuard && eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            updateCaptivePortalState(packageName, ev.className?.toString())
         }
 
         // Debounce para CONTENT_CHANGED (se dispara muy seguido)
@@ -818,7 +827,19 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val isMaps = activePkg == "com.google.android.apps.maps"
         val mapsBlocking = isMaps && ImageBlockManager.isMapsImageBlockingEnabled(applicationContext)
 
-        val mode = if (mapsBlocking) "both" else ImageBlockManager.getMode(applicationContext, activePkg)
+        // Portal cautivo: mientras esa ventana está al frente se tapan sus imágenes.
+        // Queda el texto y los formularios —o sea que iniciar sesión sigue andando—
+        // pero deja de ser un visor de contenido. Es lo único que la Capa 1 puede
+        // aportar ahí, porque la Capa 2 no ve esa ventana (ver CaptivePortalPolicy).
+        // El chequeo es una comparación de strings contra un campo ya cacheado.
+        val portalCautivo = captiveOpenedAt != 0L &&
+            CaptivePortalPolicy.isCaptivePortalWindow(activePkg, null)
+
+        val mode = when {
+            mapsBlocking -> "both"
+            portalCautivo -> "layer1"
+            else -> ImageBlockManager.getMode(applicationContext, activePkg)
+        }
 
         // 1. Capa 1: Bloqueo por Nodos
         if (mode == "layer1" || mode == "both") {
@@ -1676,65 +1697,50 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var contactPhotoBounceBackoffUntil = 0L
     private val contactPhotoBounceBackoffMs = 2_000L
 
-    private fun isContactPhotoPickerScreen(packageName: String, cls: String): Boolean {
-        if (cls.isEmpty()) return false
-        val lowerCls = cls.lowercase()
-        val lowerPkg = packageName.lowercase()
-
-        // 1. Paquete dedicado de avatar picker
-        if (lowerPkg == "com.android.avatarpicker" || lowerPkg == "com.google.android.avatarpicker") {
-            return true
+    /**
+     * ¿Alguna de las últimas ventanas fue una app de contactos?
+     *
+     * Se mira el stack y no solo la anterior porque el camino real puede tener un
+     * salto en el medio: Contactos → selector → catálogo de ilustraciones. Con tres
+     * niveles alcanza y sigue siendo un recorrido de tres strings en memoria.
+     */
+    private fun cameFromContacts(): Boolean {
+        var i = 0
+        for (pkg in appPackageStack) {
+            if (PhotoPickerPolicy.isContactsPackage(pkg)) return true
+            if (++i >= 3) break
         }
-
-        // 2. Biblioteca Google Profile Photo Picker (usada por Contactos, GMS, etc.)
-        // Contiene las pestañas de Ilustraciones y Google Fotos
-        if (lowerCls.contains("user.profile.photopicker") ||
-            lowerCls.contains("libraries.user.profile") ||
-            lowerCls.contains("photopickerintentactivity")
-        ) {
-            return true
-        }
-
-        // 3. Catálogo de ilustraciones y arte de Google
-        if (lowerCls.contains("illustration") ||
-            lowerCls.contains("artpicker") ||
-            lowerCls.contains("artactivity")
-        ) {
-            return true
-        }
-
-        // 4. Actividades de selección de avatar o recorte de fotos dentro de apps de contactos
-        val isContactsApp = lowerPkg.contains("contacts") || lowerPkg.contains("people")
-        if (isContactsApp) {
-            if (lowerCls.contains("avatarpicker") ||
-                lowerCls.contains("photopicker") ||
-                lowerCls.contains("photoselection") ||
-                lowerCls.contains("attachimage") ||
-                lowerCls.contains("photoeditor")
-            ) {
-                return true
-            }
-        }
-
         return false
     }
 
-    private fun handleContactPhotoPickerBounce(cls: String, packageName: String): Boolean {
+    /**
+     * Devuelve true si rebotó (y por lo tanto el evento ya está atendido).
+     *
+     * ⚠️ NO tiene excepción por sesión de administrador, y es a propósito: esa era la
+     * causa número uno del "a veces no rebota" que reportó el dueño. La sesión dura
+     * 5 minutos desde que se ingresa el PIN, que es exactamente lo que hay que hacer
+     * para encender el interruptor y después ir a probarlo — o sea que el rebote se
+     * apagaba solo justo mientras alguien lo probaba. Es el mismo bug que B.15
+     * primera corrección puntos 3 y 4 ("no estaban rotas: estaban calladas"). Y acá
+     * no hace falta la excepción: un administrador no necesita abrir un selector de
+     * fotos. **No volver a agregarla.**
+     */
+    private fun handleContactPhotoPickerBounce(className: String?, packageName: String): Boolean {
+        if (!PhotoPickerPolicy.shouldBounce(packageName, className, cameFromContacts())) {
+            recordUnmatchedPickerClass(packageName, className)
+            return false
+        }
+
         val now = SystemClock.elapsedRealtime()
-        // 4/9 (tarde): esto devolvía `true` durante el antirrebote, o sea "evento ya
-        // atendido", y el `return` de arriba se comía el resto del pipeline —bloqueo de
-        // WebView, anti-evasión de Ajustes, tapado de imágenes— durante los 2 s
-        // siguientes a cada rebote. Devolver `false` cuando NO se hizo nada.
         if (contactPhotoBounceInProgress || now < contactPhotoBounceBackoffUntil) return false
-        if (com.ejemplo.locksuite.security.SessionManager.isActive()) return false
 
         contactPhotoBounceInProgress = true
         contactPhotoBounceBackoffUntil = now + contactPhotoBounceBackoffMs
-        Log.w(TAG, "🚫 Selector de foto de contacto detectado ($cls en $packageName): rebotando al usuario.")
+        Log.w(TAG, "🚫 Selector de foto detectado ($className en $packageName): rebotando.")
         mainHandler.post {
             Toast.makeText(
                 applicationContext,
-                "🚫 Selección de foto de contacto bloqueada por LockSuite",
+                "🚫 Selección de foto bloqueada por LockSuite",
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -1742,8 +1748,152 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         mainHandler.postDelayed({
             contactPhotoBounceInProgress = false
-        }, 1_000L)
+        }, 900L)
         return true
+    }
+
+    /**
+     * Anota las clases que se vieron en paquetes de selector/contactos y NO se
+     * clasificaron. Es el dato con el que se calibra en un equipo donde el rebote no
+     * dispare, en vez de adivinar — la misma idea que `debugLabels` de B.41 y que
+     * `googleAccountWebSeenClasses` de B.43. **Sin esto, "a veces no rebota" es una
+     * sesión entera de adivinanza**, que es exactamente lo que pasó.
+     */
+    private val pickerSeenClasses = HashSet<String>(16)
+    private val pickerMaxSeen = 12
+
+    private fun recordUnmatchedPickerClass(packageName: String, className: String?) {
+        if (className.isNullOrEmpty()) return
+        if (!PhotoPickerPolicy.isRelevantPackage(packageName)) return
+        if (pickerSeenClasses.size >= pickerMaxSeen) return
+        if (!pickerSeenClasses.add(className)) return
+        try {
+            mdmPrefs.edit()
+                .putString("photo_picker_seen", pickerSeenClasses.joinToString(","))
+                .apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo anotar la clase del selector: ${e.message}")
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // Portal cautivo  (switch: captive_portal_guard)   [5/9/2026]
+    //
+    // Leer primero el comentario de cabecera de `mdm/CaptivePortalPolicy.kt`: esa
+    // ventana llama a `bindProcessToNetwork()` y esquiva la VPN por diseño, así que
+    // la Capa 2 no puede filtrar NADA ahí. Esto es lo único que sí puede.
+    // ──────────────────────────────────────────────
+
+    /** elapsedRealtime en que se vio la ventana del portal por primera vez, o 0. */
+    private var captiveOpenedAt = 0L
+    private var captiveBounceInProgress = false
+
+    private val captiveTickRunnable = object : Runnable {
+        override fun run() {
+            if (captiveOpenedAt == 0L) return  // sin re-encolar: la ventana ya no está
+            val abierta = SystemClock.elapsedRealtime() - captiveOpenedAt
+
+            // 1. La red validó: la ventana ya no tiene razón de existir.
+            if (abierta >= CaptivePortalPolicy.VALIDATED_GRACE_MS && isNetworkValidated()) {
+                closeCaptivePortal("la red ya está conectada")
+                return
+            }
+            // 2. Tope duro.
+            if (abierta >= CaptivePortalPolicy.MAX_OPEN_MS) {
+                closeCaptivePortal("se agotó el tiempo de inicio de sesión")
+                return
+            }
+            mainHandler.postDelayed(this, CaptivePortalPolicy.TICK_MS)
+        }
+    }
+
+    private fun updateCaptivePortalState(packageName: String, className: String?) {
+        val esPortal = CaptivePortalPolicy.isCaptivePortalWindow(packageName, className)
+        if (esPortal) {
+            if (captiveOpenedAt == 0L) {
+                captiveOpenedAt = SystemClock.elapsedRealtime()
+                captiveBounceInProgress = false
+                try {
+                    val p = mdmPrefs
+                    p.edit()
+                        .putInt("captive_portal_opens", p.getInt("captive_portal_opens", 0) + 1)
+                        .putLong("captive_portal_last_open_at", System.currentTimeMillis())
+                        .apply()
+                } catch (e: Exception) {
+                    Log.w(TAG, "No se pudo anotar la apertura del portal: ${e.message}")
+                }
+                Log.i(TAG, "Portal cautivo abierto: vigilando (tope ${CaptivePortalPolicy.MAX_OPEN_MS} ms).")
+                mainHandler.removeCallbacks(captiveTickRunnable)
+                mainHandler.postDelayed(captiveTickRunnable, CaptivePortalPolicy.TICK_MS)
+            }
+        } else if (captiveOpenedAt != 0L) {
+            // Se fue a otra ventana: cerrar el ciclo y sumar el tiempo que estuvo abierta.
+            finishCaptivePortalSession()
+        }
+    }
+
+    private fun finishCaptivePortalSession() {
+        val abierta = if (captiveOpenedAt == 0L) 0L else SystemClock.elapsedRealtime() - captiveOpenedAt
+        captiveOpenedAt = 0L
+        mainHandler.removeCallbacks(captiveTickRunnable)
+        if (abierta <= 0L) return
+        try {
+            val p = mdmPrefs
+            p.edit()
+                .putLong("captive_portal_total_ms", p.getLong("captive_portal_total_ms", 0L) + abierta)
+                .apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo anotar el tiempo del portal: ${e.message}")
+        }
+    }
+
+    private fun closeCaptivePortal(motivo: String) {
+        if (captiveBounceInProgress) return
+        captiveBounceInProgress = true
+        Log.w(TAG, "🚫 Cerrando la ventana del portal cautivo: $motivo.")
+        mainHandler.post {
+            Toast.makeText(
+                applicationContext,
+                "🚫 Ventana de la red cerrada por LockSuite: $motivo",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        finishCaptivePortalSession()
+    }
+
+    /**
+     * ¿La red Wi-Fi ya está validada (o sea, el login del portal funcionó)?
+     *
+     * Se recorren las redes y se descartan las de transporte VPN. **No se usa
+     * `cm.activeNetwork` a secas, a propósito:** con la VPN levantada eso devuelve la
+     * red del propio túnel, que es exactamente la trampa que causó la causa 1 de B.18
+     * (el resolutor terminaba siendo `fd00::1` y todo daba timeout). La señal buena
+     * son dos banderas del sistema sobre la red física: VALIDATED puesta y
+     * CAPTIVE_PORTAL sacada.
+     */
+    private fun isNetworkValidated(): Boolean {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE)
+                as android.net.ConnectivityManager
+            @Suppress("DEPRECATION")
+            for (net in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(net) ?: continue
+                if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue
+                if (!caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) continue
+                val validada = caps.hasCapability(
+                    android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED
+                )
+                val siguePortal = caps.hasCapability(
+                    android.net.NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL
+                )
+                if (validada && !siguePortal) return true
+            }
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo consultar el estado de la red: ${e.message}")
+            false
+        }
     }
 
     private fun handleSettingsAntiEvasion() {
@@ -2893,6 +3043,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         return false
     }
 
+    /** Que no quede el ciclo del portal cautivo girando si el servicio se va. */
+    private fun stopCaptiveWatch() {
+        mainHandler.removeCallbacks(captiveTickRunnable)
+        captiveOpenedAt = 0L
+    }
+
     override fun onInterrupt() {
         Log.w(TAG, "⚠️ LockSuiteAccessibilityService interrumpido")
     }
@@ -2918,6 +3074,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        stopCaptiveWatch()
 
         // Aviso INSTANTÁNEO de que la accesibilidad se cayó. Es la señal más confiable
         // que existe —la da el propio servicio que se está muriendo— y llega antes que

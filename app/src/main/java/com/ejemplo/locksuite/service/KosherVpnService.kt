@@ -588,15 +588,17 @@ class KosherVpnService : VpnService() {
                         otherPolicyDecided = true
                     }
                 }
-            } else if (logPackage == "com.android.captiveportallogin") {
-                // Protección de Portal Cautivo (Punto B): permite autenticar Wi-Fi en hoteles/aeropuertos,
-                // pero bloquea cualquier intento de fuga hacia entretenimiento, redes sociales o video.
-                if (isCaptivePortalEscapeDomain(queriedDomain)) {
-                    isBlocked = true
-                    otherPolicyDecided = true
-                    android.util.Log.w("KosherVPN", "🚫 BLOQUEADO ESCAPE EN PORTAL CAUTIVO: $queriedDomain")
-                }
             }
+            // ⚠️ ACÁ HUBO UNA RAMA PARA `com.android.captiveportallogin` Y SE QUITÓ EL
+            // 5/9/2026. NO VOLVER A PONERLA: no es que estuviera mal escrita, es que
+            // NO PUEDE FUNCIONAR. `CaptivePortalLoginActivity` llama a
+            // `bindProcessToNetwork()` (y a `setDelegateUid()` en modo Custom Tabs), o
+            // sea que fija su tráfico a la red física y esquiva la VPN por diseño de
+            // Android — ni una sola consulta suya llega a este túnel. Encima la rama
+            // vivía detrás de `logPackage != "desconocido"`, y las consultas salen por
+            // `netd` (B.10), así que tenía dos motivos independientes para no
+            // ejecutarse nunca. Lo que sí se puede hacer está en
+            // `mdm/CaptivePortalPolicy.kt` y es todo Capa 3. Ver B.46.
         } else {
             // Fallback: Si no se pudo obtener el UID del socket (carrera de hilos), aplicamos la blacklist global
             if (policyManager.isMercadoPagoBlockOffersVpnEnabled() && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
@@ -847,23 +849,6 @@ class KosherVpnService : VpnService() {
         android.util.Log.w("KosherVPN", "onRevoke(): la VPN fue revocada externamente. Reintentando de inmediato.")
         stopVpn()
         startVpn()
-    }
-
-    /**
-     * Dominios de entretenimiento, redes sociales y video que se bloquean dentro de la
-     * ventana del Portal Cautivo para evitar fugas de navegación.
-     */
-    private fun isCaptivePortalEscapeDomain(domain: String): Boolean {
-        val lower = domain.lowercase().trimEnd('.')
-        val escapeKeywords = listOf(
-            "youtube.com", "googlevideo.com", "ytimg.com",
-            "facebook.com", "fbcdn.net", "instagram.com",
-            "twitter.com", "x.com", "twimg.com",
-            "tiktok.com", "tiktokcdn.com",
-            "netflix.com", "spotify.com",
-            "reddit.com", "twitch.tv"
-        )
-        return escapeKeywords.any { lower == it || lower.endsWith(".$it") }
     }
 
     override fun onDestroy() {

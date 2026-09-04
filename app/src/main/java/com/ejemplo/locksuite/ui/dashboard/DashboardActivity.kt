@@ -895,6 +895,15 @@ fun PoliciesTabContent(context: Context) {
                     isChecked = remember(refreshKey) { policyManager.isGoogleAccountBlockStrict() },
                     onCheckedChange = { policyManager.setGoogleAccountBlockStrict(it).also { refreshKey++ } }
                 )
+                // 5/9 — la ventana de "Iniciar sesión en la red" (portal cautivo).
+                // No se puede filtrar por DNS: esquiva la VPN por diseño de Android.
+                // Esto tapa sus imágenes, la cierra apenas la red valida y le pone un
+                // tope de 3 minutos.
+                PolicySwitchRow(
+                    label = "Vigilar la ventana de inicio de sesión de Wi-Fi (portal cautivo)",
+                    isChecked = remember(refreshKey) { policyManager.isCaptivePortalGuardEnabled() },
+                    onCheckedChange = { policyManager.setCaptivePortalGuard(it).also { refreshKey++ } }
+                )
                 PolicySwitchRow(
                     label = "Protección de Accesibilidad (maestro)",
                     isChecked = remember(refreshKey) { policyManager.isAccessibilityProtectionEnabled() },

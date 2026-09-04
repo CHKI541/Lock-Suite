@@ -458,6 +458,10 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 // bloquea solo el historial/actividad por dominio. Por defecto NORMAL.
                 "SET_GOOGLE_ACCOUNT_MODE_STRICT" -> policyManager.setGoogleAccountBlockStrict(true)
                 "SET_GOOGLE_ACCOUNT_MODE_NORMAL" -> policyManager.setGoogleAccountBlockStrict(false)
+                // Portal cautivo (5/9). Ver mdm/CaptivePortalPolicy.kt: esa ventana
+                // esquiva la VPN por diseño, así que esto es Capa 3 y nada más.
+                "ENABLE_CAPTIVE_PORTAL_GUARD" -> policyManager.setCaptivePortalGuard(true)
+                "DISABLE_CAPTIVE_PORTAL_GUARD" -> policyManager.setCaptivePortalGuard(false)
                 "BLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(true)
                 "UNBLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(false)
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)

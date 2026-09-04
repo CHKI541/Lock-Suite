@@ -522,6 +522,26 @@ class KosherVpnService : VpnService() {
             }
         }
 
+        // 3. Ajustes/actividad de la cuenta de Google  (4/9/2026, interruptor por
+        //    defecto ENCENDIDO — ver mdm/GoogleAccountWebPolicy.kt).
+        //
+        //    Va como lista negra GLOBAL, junto a anuncios y GIFs, y NO como regla por
+        //    app, porque las consultas DNS de Android salen por `netd` y no se pueden
+        //    atribuir a la app que las pidió (B.10). Una regla por app no regiría.
+        //
+        //    Va DESPUÉS del `when(customRule)` de arriba a propósito: así una regla
+        //    FORCE_ALLOW del administrador sigue ganando. Es la vía de escape para el
+        //    caso raro en que haga falta abrir la cuenta desde el propio equipo.
+        val isGoogleAccountWebBlocked = mdmPrefs.getBoolean("block_google_account_web", true)
+        if (isGoogleAccountWebBlocked &&
+            com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isBlockedHost(queriedDomain)
+        ) {
+            android.util.Log.i("KosherVPN", "🚫 BLOQUEADO CUENTA/ACTIVIDAD GOOGLE: $queriedDomain")
+            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
+            NetworkForwarder.sendBlockedDnsResponse(packet, output)
+            return
+        }
+
         var isBlocked = false
         // Marca si alguna politica especifica (no las reglas DNS "normales")
         // ya tomo una decision real para este dominio. Una regla BLOCK/ALLOW
@@ -556,6 +576,14 @@ class KosherVpnService : VpnService() {
                         isBlocked = true
                         otherPolicyDecided = true
                     }
+                }
+            } else if (logPackage == "com.android.captiveportallogin") {
+                // Protección de Portal Cautivo (Punto B): permite autenticar Wi-Fi en hoteles/aeropuertos,
+                // pero bloquea cualquier intento de fuga hacia entretenimiento, redes sociales o video.
+                if (isCaptivePortalEscapeDomain(queriedDomain)) {
+                    isBlocked = true
+                    otherPolicyDecided = true
+                    android.util.Log.w("KosherVPN", "🚫 BLOQUEADO ESCAPE EN PORTAL CAUTIVO: $queriedDomain")
                 }
             }
         } else {
@@ -808,6 +836,23 @@ class KosherVpnService : VpnService() {
         android.util.Log.w("KosherVPN", "onRevoke(): la VPN fue revocada externamente. Reintentando de inmediato.")
         stopVpn()
         startVpn()
+    }
+
+    /**
+     * Dominios de entretenimiento, redes sociales y video que se bloquean dentro de la
+     * ventana del Portal Cautivo para evitar fugas de navegación.
+     */
+    private fun isCaptivePortalEscapeDomain(domain: String): Boolean {
+        val lower = domain.lowercase().trimEnd('.')
+        val escapeKeywords = listOf(
+            "youtube.com", "googlevideo.com", "ytimg.com",
+            "facebook.com", "fbcdn.net", "instagram.com",
+            "twitter.com", "x.com", "twimg.com",
+            "tiktok.com", "tiktokcdn.com",
+            "netflix.com", "spotify.com",
+            "reddit.com", "twitch.tv"
+        )
+        return escapeKeywords.any { lower == it || lower.endsWith(".$it") }
     }
 
     override fun onDestroy() {

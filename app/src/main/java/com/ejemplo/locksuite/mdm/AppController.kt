@@ -16,7 +16,16 @@ import com.ejemplo.locksuite.util.PrefsHelper
 
 class AppController(private val context: Context) {
 
-    private companion object {
+    companion object {
+        /**
+         * Paquetes bloqueados/suspendidos por defecto en LockSuite.
+         * Si el administrador no los desbloqueó explícitamente, quedan suspendidos desde el inicio.
+         */
+        val DEFAULT_BLOCKED_PACKAGES = setOf(
+            "com.google.android.googlequicksearchbox", // App de Google / Asistente / Lens (Punto 1)
+            "com.google.android.apps.wallpaper"        // Selector de fondos online de Google (Punto E)
+        )
+
         /**
          * `ApplicationInfo.FLAG_SUSPENDED`. Es API pública desde Android 7 (API 24) pero
          * la constante está marcada como oculta en algunas versiones del SDK, así que se
@@ -179,9 +188,12 @@ class AppController(private val context: Context) {
 
                 // Estado que DEBERÍA tener: durante la emergencia, suspendida; fuera de
                 // la emergencia, lo que el administrador haya decidido para esa app.
+                // Si la app está en DEFAULT_BLOCKED_PACKAGES y no fue configurada explícitamente, va suspendida.
                 // Con LockSuite suspendido, nada: ver la guarda de arriba.
-                val deberia = !locksuiteSuspendido &&
-                    (emergencyActive || prefs.getBoolean("suspend_$pkg", false))
+                val defaultSuspended = DEFAULT_BLOCKED_PACKAGES.contains(pkg)
+                val prefValue = if (!prefs.contains("suspend_$pkg") && defaultSuspended) true
+                                else prefs.getBoolean("suspend_$pkg", false)
+                val deberia = !locksuiteSuspendido && (emergencyActive || prefValue)
 
                 // Estado REAL, sin una llamada extra: viene en los flags.
                 val esta = (app.flags and FLAG_SUSPENDED) != 0
@@ -303,7 +315,13 @@ class AppController(private val context: Context) {
     }
 
     fun isAppSuspended(packageName: String): Boolean {
-        val prefsSuspended = PrefsHelper.getMdmPrefs(context).getBoolean("suspend_$packageName", false)
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val defaultSuspended = DEFAULT_BLOCKED_PACKAGES.contains(packageName)
+        val prefsSuspended = if (!prefs.contains("suspend_$packageName") && defaultSuspended) {
+            true
+        } else {
+            prefs.getBoolean("suspend_$packageName", false)
+        }
         val osSuspended = try {
             dpm.isPackageSuspended(adminComponent, packageName)
         } catch (e: Exception) {

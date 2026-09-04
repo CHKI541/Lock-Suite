@@ -67,6 +67,12 @@ const ALLOWED_COMMANDS = new Set([
   // defensa mas barata contra la evasion por idioma: cualquier filtro que compare
   // texto de pantalla queda mudo si el equipo cambia a un idioma no previsto.
   "BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE",
+  // Ajustes/actividad de la cuenta de Google (4/9/2026). Cierra el camino
+  // Ajustes -> Google -> Datos y privacidad -> Historial de YouTube, que mostraba
+  // los videos vistos dentro de Ajustes, sin ningun navegador de por medio.
+  "BLOCK_GOOGLE_ACCOUNT_WEB", "UNBLOCK_GOOGLE_ACCOUNT_WEB",
+  // Selector de foto de contactos / Google Illustrations (4/9/2026)
+  "BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER",
   "ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS",
   "ENABLE_ACC_NAG", "DISABLE_ACC_NAG",
   "ENABLE_ACC_SUSPEND_ALL", "DISABLE_ACC_SUSPEND_ALL",

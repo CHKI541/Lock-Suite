@@ -511,6 +511,14 @@ object FirebaseDeviceSync {
                     "mercadoPagoBlockOffersAccessibility" to policyManager.isMercadoPagoBlockOffersAccessibilityEnabled(),
                     "mercadoPagoBlockOffersVpn" to policyManager.isMercadoPagoBlockOffersVpnEnabled(),
                     "blockMlInMp" to policyManager.isMercadoLibreInMpBlocked(),
+
+                    // Ajustes/actividad de la cuenta de Google (4/9/2026). El segundo
+                    // campo son las clases de Play services que el servicio vio y no
+                    // supo clasificar: es el dato con el que se calibra el rebote en un
+                    // equipo donde no dispara, en vez de adivinar (como `debugLabels`).
+                    "googleAccountWebBlocked" to policyManager.isGoogleAccountWebBlocked(),
+                    "googleAccountWebSeenClasses" to policyManager.getGoogleAccountWebSeenClasses(),
+                    "contactPhotoPickerBlocked" to policyManager.isContactPhotoPickerBlocked(),
                     "kosherLauncherEnabled" to policyManager.isKosherLauncherEnabled(),
                     "stealthModeEnabled" to isStealth,
 

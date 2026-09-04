@@ -448,6 +448,13 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "BLOCK_LOCALE_CHANGE" -> policyManager.setLocaleChangeBlocked(true)
                 "UNBLOCK_LOCALE_CHANGE" -> policyManager.setLocaleChangeBlocked(false)
 
+                // 4/9/2026 — agujero de "Ajustes de la cuenta de Google": el historial
+                // de YouTube y Mi Actividad se veían dentro de Ajustes, sin navegador.
+                // Ver mdm/GoogleAccountWebPolicy.kt. Viene ENCENDIDO de fábrica.
+                "BLOCK_GOOGLE_ACCOUNT_WEB" -> policyManager.setGoogleAccountWebBlocked(true)
+                "UNBLOCK_GOOGLE_ACCOUNT_WEB" -> policyManager.setGoogleAccountWebBlocked(false)
+                "BLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(true)
+                "UNBLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(false)
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)
                 "DISABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(false)
                 "ENABLE_ACC_NAG" -> policyManager.setAccNag(true)

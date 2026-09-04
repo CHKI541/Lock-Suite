@@ -340,7 +340,8 @@ function updateSidebarUI(e, t) {
     sidebarDeviceName.textContent = n || a || "Celular sin nombre", sidebarDeviceId.textContent = e, sidebarDeviceVersion.textContent = vText, document.activeElement !== deviceNameInput && (deviceNameInput.value = n);
     sidebar.querySelectorAll(".policy-switch").forEach(e => {
         const n = e.getAttribute("data-policy");
-        e.checked = field(t, n, false) === true;
+        const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked");
+        e.checked = field(t, n, defVal) === true;
     });
 
     // ── Filas que este equipo no soporta (2/9/2026) ──
@@ -1248,6 +1249,9 @@ saveNameBtn.addEventListener("click", async () => {
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
             // Protecciones de Accesibilidad (17/8/2026)
+            // 4/9/2026 — ajustes/actividad de la cuenta de Google (historial de YouTube).
+            googleAccountWebBlocked: ["BLOCK_GOOGLE_ACCOUNT_WEB", "UNBLOCK_GOOGLE_ACCOUNT_WEB"],
+            contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],
@@ -1882,6 +1886,11 @@ if (savePresetBtn) {
             flashingBlocked: !!dev.flashingBlocked,
             hideSuspendedApps: !!dev.hideSuspendedApps,
             accessibilityProtection: !!dev.accessibilityProtected,
+            // 4/9/2026 — la clave tiene que llamarse igual que en
+            // PolicyManager.importPolicyPresetJson(): "googleAccountWebBlocked".
+            // Una clave que la app no conoce se acepta y no hace nada (bug de B.28).
+            googleAccountWebBlocked: dev.googleAccountWebBlocked !== false,
+            contactPhotoPickerBlocked: dev.contactPhotoPickerBlocked !== false,
             accBounceSettings: !!dev.accBounceSettings,
             accNag: !!dev.accNag,
             accSuspendAll: !!dev.accSuspendAll,
@@ -2437,6 +2446,9 @@ if (groupSidebar) {
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
             // Protecciones de Accesibilidad (17/8/2026) — tambien por grupo
+            // 4/9/2026 — ajustes/actividad de la cuenta de Google (historial de YouTube).
+            googleAccountWebBlocked: ["BLOCK_GOOGLE_ACCOUNT_WEB", "UNBLOCK_GOOGLE_ACCOUNT_WEB"],
+            contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
             accNag: ["ENABLE_ACC_NAG", "DISABLE_ACC_NAG"],

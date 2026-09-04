@@ -870,6 +870,21 @@ fun PoliciesTabContent(context: Context) {
                     isChecked = remember(refreshKey) { policyManager.isLocaleChangeBlocked() },
                     onCheckedChange = { policyManager.setLocaleChangeBlocked(it).also { refreshKey++ } }
                 )
+                // 4/9/2026 — el agujero que encontró el dueño: el historial de YouTube
+                // y Mi Actividad se ven DENTRO de Ajustes, sin ningún navegador.
+                // Es el único de esta sección que viene ENCENDIDO de fábrica: lo que
+                // abre no tiene uso legítimo en un equipo kosher, y un interruptor
+                // apagado por defecto solo protege a quien se acuerde de encenderlo.
+                PolicySwitchRow(
+                    label = "Bloquear ajustes de la cuenta de Google (historial y actividad)",
+                    isChecked = remember(refreshKey) { policyManager.isGoogleAccountWebBlocked() },
+                    onCheckedChange = { policyManager.setGoogleAccountWebBlocked(it).also { refreshKey++ } }
+                )
+                PolicySwitchRow(
+                    label = "Bloquear selector de fotos e ilustraciones de contactos",
+                    isChecked = remember(refreshKey) { policyManager.isContactPhotoPickerBlocked() },
+                    onCheckedChange = { policyManager.setContactPhotoPickerBlocked(it).also { refreshKey++ } }
+                )
                 PolicySwitchRow(
                     label = "Protección de Accesibilidad (maestro)",
                     isChecked = remember(refreshKey) { policyManager.isAccessibilityProtectionEnabled() },

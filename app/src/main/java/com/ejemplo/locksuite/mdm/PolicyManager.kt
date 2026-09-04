@@ -1049,6 +1049,74 @@ class PolicyManager(private val context: Context) {
     }
 
     // ─────────────────────────────────────────────
+    // AJUSTES DE LA CUENTA DE GOOGLE (historial y actividad)   [4/9/2026]
+    //
+    // Ver el comentario de cabecera de `mdm/GoogleAccountWebPolicy.kt`: ahí está el
+    // porqué completo, el camino exacto que encontró el dueño y los límites reales.
+    //
+    // ENCENDIDO POR DEFECTO, y esa es una decisión, no un descuido. Los otros
+    // interruptores de contenido vienen apagados porque cada uno cuesta comodidad y
+    // el administrador elige cuánto pagar. Este es distinto por dos motivos:
+    //
+    //   1. Lo que abre no es una función del equipo que alguien pueda querer: es el
+    //      historial de videos y de búsquedas del propio usuario, servido dentro de
+    //      Ajustes. En un equipo kosher eso no tiene ningún uso legítimo.
+    //   2. Un equipo que se actualiza y no se vuelve a configurar quedaría con el
+    //      agujero abierto. Los interruptores apagados por defecto solo protegen a
+    //      quien se acuerde de encenderlos.
+    //
+    // El costo de tenerlo encendido es bajo y acotado: el administrador pierde poder
+    // abrir "Gestionar tu cuenta de Google" DESDE EL PROPIO EQUIPO. Desde una PC
+    // sigue funcionando igual.
+    // ─────────────────────────────────────────────
+
+    /** Encendido por defecto. Ver el bloque de arriba para el porqué. */
+    fun isGoogleAccountWebBlocked(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("block_google_account_web", true)
+
+    fun setGoogleAccountWebBlocked(enabled: Boolean): Boolean {
+        if (deferIfSuspended("block_google_account_web", enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean("block_google_account_web", enabled)
+            .apply()
+        if (enabled) {
+            // La mitad que de verdad cierra es la de DNS, y sin túnel no hay filtro.
+            // Mismo patrón que setMercadoPagoBlockOffersVpn().
+            try {
+                com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
+            } catch (e: Exception) {
+                android.util.Log.w("PolicyManager", "ensureVpnRunning falló: ${e.message}")
+            }
+        }
+        return true
+    }
+
+    /**
+     * Bloqueo del selector de fotos e ilustraciones de contactos (Google Illustrations,
+     * Google Fotos y avatares de perfil).
+     * Encendido por defecto: lo que abre (catálogo abierto de ilustraciones y fotos)
+     * no tiene justificación en un equipo kosher.
+     */
+    fun isContactPhotoPickerBlocked(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("block_contact_photo_picker", true)
+
+    fun setContactPhotoPickerBlocked(enabled: Boolean): Boolean {
+        if (deferIfSuspended("block_contact_photo_picker", enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean("block_contact_photo_picker", enabled)
+            .apply()
+        return true
+    }
+
+    /**
+     * Clases de ventana de Play services que el servicio de Accesibilidad vio y NO
+     * supo clasificar. Es el dato con el que se calibra el rebote en un equipo donde
+     * no dispara, en vez de adivinar (misma idea que `debugLabels` de B.41).
+     */
+    fun getGoogleAccountWebSeenClasses(): String =
+        PrefsHelper.getMdmPrefs(context).getString("google_account_web_seen", "") ?: ""
+
+    // ─────────────────────────────────────────────
     // BLOQUEO TOTAL DE INTERNET POR APP
     // ─────────────────────────────────────────────
 
@@ -1138,6 +1206,11 @@ class PolicyManager(private val context: Context) {
         dataObj.put("mercadoPagoBlockOffersAccessibility", isMercadoPagoBlockOffersAccessibilityEnabled())
         dataObj.put("mercadoPagoBlockOffersVpn", isMercadoPagoBlockOffersVpnEnabled())
         dataObj.put("blockMlInMp", isMercadoLibreInMpBlocked())
+        // 4/9/2026 — mismo nombre de clave acá y en el importador de más abajo.
+        // Ese fue el bug de `no_apps_control` (B.28): una clave que la app no
+        // conoce se acepta en silencio y no hace nada.
+        dataObj.put("googleAccountWebBlocked", isGoogleAccountWebBlocked())
+        dataObj.put("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
         dataObj.put("kosherLauncherEnabled", isKosherLauncherEnabled())
         // 2/9/2026 — interruptores que existen en la app y en el panel pero que el perfil
         // no guardaba. Sin esto, "exportar el perfil de un equipo bien configurado y
@@ -1241,6 +1314,14 @@ class PolicyManager(private val context: Context) {
             setMercadoPagoBlockOffersAccessibility(dataObj.optBoolean("mercadoPagoBlockOffersAccessibility", false))
             setMercadoPagoBlockOffersVpn(dataObj.optBoolean("mercadoPagoBlockOffersVpn", false))
             setMercadoLibreInMpBlocked(dataObj.optBoolean("blockMlInMp", false))
+            // Por omisión, el valor ACTUAL: viene encendido de fábrica, así que un
+            // perfil guardado antes de que esta clave existiera no debe apagarlo.
+            setGoogleAccountWebBlocked(
+                dataObj.optBoolean("googleAccountWebBlocked", isGoogleAccountWebBlocked())
+            )
+            setContactPhotoPickerBlocked(
+                dataObj.optBoolean("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
+            )
             setKosherLauncherEnabled(dataObj.optBoolean("kosherLauncherEnabled", false))
 
             // 2/9/2026 — interruptores nuevos del perfil. El valor por omisión es EL ACTUAL,
@@ -1522,6 +1603,9 @@ class PolicyManager(private val context: Context) {
         if (restriction == UserManager.DISALLOW_CONFIG_PRIVATE_DNS && !prefs.contains(restriction)) {
             return true // Bloquear configuración de DNS privado por defecto para proteger el filtro
         }
+        if (restriction == UserManager.DISALLOW_SET_WALLPAPER && !prefs.contains(restriction)) {
+            return true // Bloquear cambio de fondo por defecto para evitar catálogo de fotos online (Punto E)
+        }
         return prefs.getBoolean(restriction, false)
     }
 
@@ -1713,7 +1797,12 @@ class PolicyManager(private val context: Context) {
                     continue
                 }
 
-                val isIndividuallySuspended = prefs.getBoolean("suspend_${app.packageName}", false)
+                val defaultSuspended = AppController.DEFAULT_BLOCKED_PACKAGES.contains(app.packageName)
+                val isIndividuallySuspended = if (!prefs.contains("suspend_${app.packageName}") && defaultSuspended) {
+                    true
+                } else {
+                    prefs.getBoolean("suspend_${app.packageName}", false)
+                }
                 if (isIndividuallySuspended) {
                     appController.suspendApp(app.packageName, true)
                 }
@@ -2130,7 +2219,8 @@ class PolicyManager(private val context: Context) {
         "com.duckduckgo.mobile.android",
         "com.android.browser",             // Navegador AOSP antiguo
         "com.UCMobile.intl",
-        "com.kiwibrowser.browser"
+        "com.kiwibrowser.browser",
+        "com.google.android.googlequicksearchbox" // App de Google / Asistente / Lens (Punto 1)
     )
 
     private fun getInstalledBrowserPackages(): Set<String> {

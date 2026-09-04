@@ -21,6 +21,7 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.mdm.WebViewBlockManager
 import com.ejemplo.locksuite.mdm.ImageBlockManager
@@ -202,7 +203,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             "com.android.browser",
             "com.UCMobile.intl",
             "com.kiwibrowser.browser",
-            "com.android.htmlviewer"
+            "com.android.htmlviewer",
+            "com.google.android.googlequicksearchbox" // App de Google / Asistente / Lens (Punto 1)
         )
 
         private const val PKG_MERCADOPAGO = "com.mercadopago.wallet"
@@ -340,6 +342,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val strictScroll: Boolean,
         /** Rebotar al usuario si entra al menú de Accesibilidad de Ajustes. */
         val accSettingsBounce: Boolean,
+        /** Rebotar las pantallas web de la cuenta de Google (historial, actividad). */
+        val googleAccountWeb: Boolean,
+        /** Rebotar el selector de foto de contacto / Google Illustrations / Google Fotos. */
+        val contactPhotoPicker: Boolean,
         val takenAt: Long
     )
 
@@ -371,6 +377,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             updatingPkg = p.getString("updating_package", null),
             strictScroll = p.getBoolean("image_block_strict_scroll", false),
             accSettingsBounce = p.getBoolean("acc_protect_bounce_settings", false),
+            // Encendido por defecto: ver el comentario de PolicyManager sobre por qué
+            // este interruptor es la excepción a "todo apagado de fábrica".
+            googleAccountWeb = p.getBoolean("block_google_account_web", true),
+            contactPhotoPicker = p.getBoolean("block_contact_photo_picker", true),
             takenAt = SystemClock.elapsedRealtime()
         )
         cachedFlags = fresh
@@ -639,6 +649,27 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             handleMercadoPagoBlocking(eventType)
         }
 
+        // ── Ajustes de la cuenta de Google (historial de YouTube, Mi Actividad) ──
+        //
+        // Costo en el camino caliente: un booleano ya cacheado, una comparación de
+        // enteros y a lo sumo tres comparaciones de string sobre el nombre del
+        // paquete. Solo al CAMBIAR DE VENTANA, que es cuando aparece una pantalla
+        // nueva — no en los CONTENT_CHANGED, que son los que llegan diez por segundo.
+        if (f.googleAccountWeb &&
+            eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            GoogleAccountWebPolicy.isCandidatePackage(packageName)
+        ) {
+            if (handleGoogleAccountWebBounce(ev, packageName)) return
+        }
+
+        // ── Selector de foto de contacto / Google Illustrations (switch: block_contact_photo_picker) ──
+        if (f.contactPhotoPicker && eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val cls = ev.className?.toString() ?: ""
+            if (isContactPhotoPickerScreen(packageName, cls)) {
+                if (handleContactPhotoPickerBounce(cls, packageName)) return
+            }
+        }
+
         // Debounce para CONTENT_CHANGED (se dispara muy seguido)
         if (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             val now = SystemClock.elapsedRealtime()
@@ -652,6 +683,18 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         // ── Bloqueo de WebView ──
         handleWebViewBlocking(packageName, eventType)
+
+        // ── Rebote de Licencias y Términos Legales en Ajustes (Punto D) ──
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            (isSettingsPackage(packageName) || packageName == GoogleAccountWebPolicy.PKG_GMS)
+        ) {
+            val cls = ev.className?.toString() ?: ""
+            if (isLegalOrLicenseScreen(cls)) {
+                Log.w(TAG, "🚫 Pantalla legal/licencias detectada: rebotando al usuario ($cls).")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                return
+            }
+        }
 
         // ── Rebote del menú de Accesibilidad de Ajustes ──
         // Va ANTES de la anti-evasión genérica porque es más específico y más barato:
@@ -1480,6 +1523,199 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
             if (out.done) return
         }
+    }
+
+    /**
+     * Detección de pantallas de Licencias de Código Abierto y Términos Legales (Punto D).
+     * Evita que el usuario abra las listas de licencias con hipervínculos web.
+     */
+    private fun isLegalOrLicenseScreen(cls: String): Boolean {
+        if (cls.isEmpty()) return false
+        val lower = cls.lowercase()
+        return lower.contains("license") ||
+               lower.contains("legalsettings") ||
+               lower.contains("opensource") ||
+               lower.contains("copyright")
+    }
+
+    // ──────────────────────────────────────────────
+    // Ajustes de la cuenta de Google  (switch: block_google_account_web)   [4/9/2026]
+    //
+    // Hallazgo del dueño: Ajustes → Google → Gestionar tu cuenta → Datos y privacidad
+    // → Historial de YouTube muestra los videos vistos, con miniatura, DENTRO de
+    // Ajustes. El porqué completo y los límites están en `mdm/GoogleAccountWebPolicy.kt`.
+    //
+    // Esta es la mitad de Capa 3: rebota antes de que la pantalla se vea. La mitad que
+    // de verdad cierra es la de Capa 2 (los dominios), porque no depende ni del idioma,
+    // ni del fabricante, ni de que este servicio esté prendido.
+    //
+    // Detección por NOMBRE DE CLASE de la ventana y nada más. Ni un solo texto de
+    // pantalla: cambiar el idioma del equipo (B.19) no evade esto. Es la regla de B.19
+    // punto 3 — "si hay una señal estructural, usarla antes que una palabra".
+    // ──────────────────────────────────────────────
+
+    private var gAccBounceInProgress = false
+    private var gAccBounceBackoffUntil = 0L
+    private val gAccBounceBackoffMs = 4_000L
+
+    /** Clases de Play services ya anotadas, para no reescribir la preferencia. */
+    private val gAccSeenClasses = HashSet<String>(16)
+    private val gAccMaxSeen = 12
+
+    /** Devuelve true si rebotó (y por lo tanto el evento ya está atendido). */
+    private fun handleGoogleAccountWebBounce(ev: AccessibilityEvent, packageName: String): Boolean {
+        val cls = ev.className?.toString()
+        if (!GoogleAccountWebPolicy.isAccountWebClass(cls)) {
+            recordUnknownGoogleClass(packageName, cls)
+            return false
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        if (gAccBounceInProgress || now < gAccBounceBackoffUntil) return false
+        // El administrador con sesión abierta entra a propósito (mismo criterio que el
+        // rebote del menú de Accesibilidad): si no, no podría ni revisar la cuenta del
+        // equipo que administra.
+        if (com.ejemplo.locksuite.security.SessionManager.isActive()) return false
+
+        gAccBounceInProgress = true
+        Log.w(TAG, "🚫 Ajustes/actividad de la cuenta de Google ($cls): rebotando al usuario.")
+        mainHandler.post {
+            Toast.makeText(
+                applicationContext,
+                "🚫 Ajustes de la cuenta de Google restringidos por LockSuite",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        performGlobalAction(GLOBAL_ACTION_BACK)
+
+        mainHandler.postDelayed({
+            // Verificación, igual que en Mercado Pago: un "atrás" a ciegas encadena
+            // rebotes. Y acá hay un motivo extra — esta pantalla es un WebView, así
+            // que "atrás" puede navegar DENTRO de la página en vez de cerrarla.
+            //
+            // Solo se escala a HOME si seguimos dentro de Play services. Si el "atrás"
+            // nos devolvió a Ajustes, funcionó: no hay que sacar al usuario de Ajustes
+            // por completo, que fue exactamente el sobre-bloqueo de B.15 punto 1.
+            var stillInGms = false
+            val current = rootInActiveWindow
+            if (current != null) {
+                stillInGms = current.packageName?.toString() == GoogleAccountWebPolicy.PKG_GMS
+                current.recycle()
+            }
+            if (stillInGms) {
+                Log.w(TAG, "🏠 La pantalla de la cuenta persiste: forzando HOME.")
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                gAccBounceBackoffUntil = SystemClock.elapsedRealtime() + gAccBounceBackoffMs
+            }
+            gAccBounceInProgress = false
+        }, 700)
+
+        return true
+    }
+
+    /**
+     * Anota las clases de Play services que se vieron y no se supieron clasificar.
+     *
+     * Play services reparte sus pantallas en módulos que se actualizan solos (Chimera),
+     * así que el nombre de clase de hoy puede no ser el de mañana. Sin este dato, un
+     * equipo donde el rebote no dispare es una sesión entera de adivinanza — que es
+     * exactamente lo que pasó con `debugLabels` en B.41.
+     *
+     * Acotado a propósito: solo Play services (la app de Ajustes tiene cientos de
+     * clases y no aportan nada), solo hasta `gAccMaxSeen` clases nuevas por proceso, y
+     * con un HashSet en memoria adelante para que a partir de la segunda vez sea un
+     * lookup y no una escritura.
+     */
+    private fun recordUnknownGoogleClass(packageName: String, className: String?) {
+        if (packageName != GoogleAccountWebPolicy.PKG_GMS) return
+        if (className.isNullOrEmpty()) return
+        if (gAccSeenClasses.size >= gAccMaxSeen) return
+        if (!gAccSeenClasses.add(className)) return
+        try {
+            mdmPrefs.edit()
+                .putString("google_account_web_seen", gAccSeenClasses.joinToString(","))
+                .apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo anotar la clase de Play services: ${e.message}")
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // Selector de fotos e ilustraciones de contactos (switch: block_contact_photo_picker)
+    //
+    // Permite bloquear el selector de fotos de Google Contacts y Google Profile Photo Picker
+    // que da acceso a Google Fotos y al catálogo abierto de Google Illustrations.
+    // Viene ENCENDIDO de fábrica.
+    // ──────────────────────────────────────────────
+
+    private var contactPhotoBounceInProgress = false
+    private var contactPhotoBounceBackoffUntil = 0L
+    private val contactPhotoBounceBackoffMs = 2_000L
+
+    private fun isContactPhotoPickerScreen(packageName: String, cls: String): Boolean {
+        if (cls.isEmpty()) return false
+        val lowerCls = cls.lowercase()
+        val lowerPkg = packageName.lowercase()
+
+        // 1. Paquete dedicado de avatar picker
+        if (lowerPkg == "com.android.avatarpicker" || lowerPkg == "com.google.android.avatarpicker") {
+            return true
+        }
+
+        // 2. Biblioteca Google Profile Photo Picker (usada por Contactos, GMS, etc.)
+        // Contiene las pestañas de Ilustraciones y Google Fotos
+        if (lowerCls.contains("user.profile.photopicker") ||
+            lowerCls.contains("libraries.user.profile") ||
+            lowerCls.contains("photopickerintentactivity")
+        ) {
+            return true
+        }
+
+        // 3. Catálogo de ilustraciones y arte de Google
+        if (lowerCls.contains("illustration") ||
+            lowerCls.contains("artpicker") ||
+            lowerCls.contains("artactivity")
+        ) {
+            return true
+        }
+
+        // 4. Actividades de selección de avatar o recorte de fotos dentro de apps de contactos
+        val isContactsApp = lowerPkg.contains("contacts") || lowerPkg.contains("people")
+        if (isContactsApp) {
+            if (lowerCls.contains("avatarpicker") ||
+                lowerCls.contains("photopicker") ||
+                lowerCls.contains("photoselection") ||
+                lowerCls.contains("attachimage") ||
+                lowerCls.contains("photoeditor")
+            ) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private fun handleContactPhotoPickerBounce(cls: String, packageName: String): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (contactPhotoBounceInProgress || now < contactPhotoBounceBackoffUntil) return true
+        if (com.ejemplo.locksuite.security.SessionManager.isActive()) return false
+
+        contactPhotoBounceInProgress = true
+        contactPhotoBounceBackoffUntil = now + contactPhotoBounceBackoffMs
+        Log.w(TAG, "🚫 Selector de foto de contacto detectado ($cls en $packageName): rebotando al usuario.")
+        mainHandler.post {
+            Toast.makeText(
+                applicationContext,
+                "🚫 Selección de foto de contacto bloqueada por LockSuite",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        performGlobalAction(GLOBAL_ACTION_BACK)
+
+        mainHandler.postDelayed({
+            contactPhotoBounceInProgress = false
+        }, 1_000L)
+        return true
     }
 
     private fun handleSettingsAntiEvasion() {

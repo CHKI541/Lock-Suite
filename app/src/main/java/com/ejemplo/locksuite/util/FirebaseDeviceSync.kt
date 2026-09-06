@@ -511,6 +511,7 @@ object FirebaseDeviceSync {
                     "mercadoPagoBlockOffersAccessibility" to policyManager.isMercadoPagoBlockOffersAccessibilityEnabled(),
                     "mercadoPagoBlockOffersVpn" to policyManager.isMercadoPagoBlockOffersVpnEnabled(),
                     "blockMlInMp" to policyManager.isMercadoLibreInMpBlocked(),
+                    "blockPopularNonKosher" to policyManager.isBlockPopularNonKosherEnabled(),
 
                     // Ajustes/actividad de la cuenta de Google (4/9/2026). El segundo
                     // campo son las clases de Play services que el servicio vio y no

@@ -963,6 +963,15 @@ fun PoliciesTabContent(context: Context) {
                     }
                 )
                 PolicySwitchRow(
+                    label = "Bloquear apps populares no kosher",
+                    isChecked = remember(refreshKey) { policyManager.isBlockPopularNonKosherEnabled() },
+                    onCheckedChange = { 
+                        policyManager.setBlockPopularNonKosher(it)
+                        refreshKey++
+                        true
+                    }
+                )
+                PolicySwitchRow(
                     label = "Mercado Pago: Bloquear Ofertas (por Accesibilidad)",
                     isChecked = remember(refreshKey) { policyManager.isMercadoPagoBlockOffersAccessibilityEnabled() },
                     onCheckedChange = { 
@@ -1095,19 +1104,23 @@ fun PolicySwitchRow(
 @Composable
 fun AppManagerTabContent(context: Context) {
     val appController = remember { AppController(context) }
+    val policyManager = remember { PolicyManager(context) }
     var appsList by remember { mutableStateOf<List<AppInfoData>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var selectedFilter by remember { mutableStateOf("Todas") }
     var appToUninstall by remember { mutableStateOf<AppInfoData?>(null) }
+    var blockPopularState by remember { mutableStateOf(policyManager.isBlockPopularNonKosherEnabled()) }
     val scope = rememberCoroutineScope()
 
     fun refreshApps() {
         isLoading = true
         scope.launch(Dispatchers.IO) {
             val list = appController.getUserApps()
+            val popularEnabled = policyManager.isBlockPopularNonKosherEnabled()
             withContext(Dispatchers.Main) {
                 appsList = list
+                blockPopularState = popularEnabled
                 isLoading = false
                 com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
             }
@@ -1193,6 +1206,69 @@ fun AppManagerTabContent(context: Context) {
             .fillMaxSize()
             .padding(16.dp)
     ) {
+        // Interruptor maestro: Bloquear apps populares no kosher
+        var isUpdatingPopular by remember { mutableStateOf(false) }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                    Text(
+                        text = "Bloquear apps populares no kosher",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = "Oculta navegadores, tiendas no kosher, redes y bloatware",
+                        color = Color.LightGray,
+                        fontSize = 11.sp
+                    )
+                }
+                if (isUpdatingPopular) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = Color(0xFFF1C40F),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Switch(
+                        checked = blockPopularState,
+                        onCheckedChange = { checked ->
+                            isUpdatingPopular = true
+                            scope.launch(Dispatchers.IO) {
+                                val ok = policyManager.setBlockPopularNonKosher(checked)
+                                withContext(Dispatchers.Main) {
+                                    isUpdatingPopular = false
+                                    if (ok) {
+                                        blockPopularState = checked
+                                        refreshApps()
+                                    } else {
+                                        Toast.makeText(context, "Error al actualizar política", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFF0B192C),
+                            checkedTrackColor = Color(0xFFF1C40F)
+                        )
+                    )
+                }
+            }
+        }
+
         // Buscador
         OutlinedTextField(
             value = searchQuery,

@@ -918,7 +918,24 @@ Reporte del dueño sobre el interruptor `block_contact_photo_picker` que había 
 
 **Diagnóstico incorporado:** el servicio publica al panel `photoPickerSeenClasses` — las clases vistas en paquetes de selector/contactos que NO se clasificaron. Si en un equipo el rebote no dispara, ahí está el nombre exacto para agregar, en vez de adivinar. Misma idea que `debugLabels` (B.41) y `googleAccountWebSeenClasses` (B.43). **Sin eso, "a veces no rebota" es una sesión entera de adivinanza — que es exactamente lo que pasó.**
 
-**Falta probar en equipo real:** (a) Contactos → editar → foto → tiene que rebotar, **inmediatamente después de ingresar el PIN también** (esa es la prueba de la causa 1); (b) **adjuntar una foto en WhatsApp tiene que seguir funcionando** — es la regresión que hay que vigilar; (c) el catálogo de ilustraciones tiene que rebotar venga de donde venga; (d) sacar una foto con la cámara y recortarla para un contacto tiene que seguir andando.
+- **Falta probar en equipo real:** (a) Contactos → editar → foto → tiene que rebotar, **inmediatamente después de ingresar el PIN también** (esa es la prueba de la causa 1); (b) **adjuntar una foto en WhatsApp tiene que seguir funcionando** — es la regresión que hay que vigilar; (c) el catálogo de ilustraciones tiene que rebotar venga de donde venga; (d) sacar una foto con la cámara y recortarla para un contacto tiene que seguir andando.
+
+---
+
+**B.48 — BLOQUEO DE APPS POPULARES NO KOSHER: INTERRUPTOR MAESTRO Y OCULTAMIENTO REAL. [IMPLEMENTADO Y COMPILADO EL 6/9; LISTO PARA DESPLIEGUE]**
+
+El dueño solicitó un switch "Bloquear apps populares no kosher" que oculte/inhabilite todas las aplicaciones normales no kosher (navegadores, tiendas de apps alternativas, redes sociales, streaming, asistentes de IA con navegación y bloatware OEM de Samsung, Xiaomi, Motorola, etc.) dejando explícitamente afuera Mis Archivos (`com.sec.android.app.myfiles`), Video Player (`com.samsung.android.video`), Grabadora de voz (`com.sec.android.app.voicenote`) y Carpeta Segura (`com.samsung.knox.securefolder`).
+
+**Decisiones de arquitectura clave:**
+1. **Ocultas (`setApplicationHidden(true)`), no suspendidas:** El usuario aclaró explícitamente: *"tienen que quedar ocultas, como si hubiera puesto 'bloquear' en esas apps en locksuite, no suspendidas"*. Al usar `dpm.setApplicationHidden(admin, pkg, true)`, Android desactiva completamente el paquete a nivel sistema (equivalente al `pm disable-user` de ADB): no aparecen en el cajón de aplicaciones ni pueden ser ejecutadas.
+2. **Aparición en "Bloqueadas" y desbloqueo granular:** En LockSuite (Compose UI), el filtro de apps bloqueadas agrupa `app.isHidden || app.isSuspended || app.isWebViewBlocked...`. Al estar ocultas, aparecen en la sección "Bloqueadas" con el switch "Ocultar" encendido. Si el usuario desactiva "Ocultar" individualmente para una app puntual, se guarda `hide_<pkg> = false` en `PrefsHelper`. `PolicyManager.reapplyAllRestrictions()` respeta este override manual (`prefs.contains("hide_$pkg") && !prefs.getBoolean("hide_$pkg")`), garantizando que la app no se vuelva a ocultar automáticamente.
+3. **Catálogo maestro (`mdm/PopularNonKosherApps.kt`):** Mantiene una lista estricta `PACKAGES` con navegadores, tiendas no kosher (Galaxy Store, GetApps, Aurora, Aptoide, F-Droid, etc.), redes (TikTok, Instagram, Facebook, etc.), streaming (YouTube, Netflix, etc.), IA (ChatGPT, Copilot, Gemini) y bloatware/feeds de marcas.
+4. **Instalaciones y actualizaciones automáticas:** `PackageReceiver` vigila `ACTION_PACKAGE_ADDED` y `ACTION_PACKAGE_REPLACED`. Si la política está activa y la app es no kosher (y no fue des-ocultada manualmente), se oculta automáticamente de inmediato.
+5. **Panel Web y Backend:**
+   - Sincronización en `FirebaseDeviceSync` (`blockPopularNonKosher`).
+   - Comandos `BLOCK_POPULAR_NON_KOSHER` y `UNBLOCK_POPULAR_NON_KOSHER` en `LockSuiteFirebaseService.kt` y en `ALLOWED_COMMANDS` de Cloud Functions (`admin-backend/functions/index.js`).
+   - Mapeo en `admin-backend/public/app.js` tanto para celular individual como para políticas grupales y presets (`savePresetBtn`).
+   - Switch visual en `admin-backend/public/index.html` en la pestaña de Políticas, en la tarjeta de Play Store / Apps, y en el modal de Grupo.
 
 ---
 
@@ -926,24 +943,27 @@ Reporte del dueño sobre el interruptor `block_contact_photo_picker` que había 
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**5/9 — Claude: el portal cautivo no se puede filtrar por DNS (medido contra el fuente de Android), y el selector de foto de contacto fallaba por cuatro causas, dos de ellas medidas. Escrito y verificado; SIN COMPILAR NI PROBAR.**
+**6/9 — Antigravity: Switch maestro "Bloquear apps populares no kosher" (ocultamiento completo a nivel sistema vía `setApplicationHidden`, desbloqueo individual desde "Bloqueadas", catálogo maestro OEM/social/navegadores, sincronización bidireccional y panel web).**
 
-1. **El hallazgo de la sesión: `CaptivePortalLoginActivity` llama a `bindProcessToNetwork()`** dentro de `initializeWebView()`, y en modo Custom Tabs además a `bypassVpnForCustomTabsProvider()`. **Esa ventana esquiva cualquier VPN por diseño de Android**, así que la Capa 2 de LockSuite no ve ni una consulta suya. Verificado leyendo el fuente de AOSP, no inferido. **Ninguna lista de dominios puede proteger el portal cautivo, por más correcta que sea la lista.** Resumen en **B.46**.
-2. **Eso invalida el filtro que había** (B.45 punto 3), que ya se sospechaba muerto por el problema de atribución de `netd` (B.10). Eran dos motivos independientes para lo mismo.
-3. **Reemplazado por lo que sí puede funcionar, todo Capa 3 y estructural:** taparle las imágenes mientras está abierta (el login sigue andando: quedan texto y formularios), cerrarla apenas la red valida —`NET_CAPABILITY_VALIDATED` puesta y `CAPTIVE_PORTAL` sacada, sin usar `cm.activeNetwork` a secas por la trampa de B.18— y un tope duro de 3 minutos. Más **visibilidad**: aperturas y tiempo total al panel, porque lo que no se puede impedir del todo al menos se tiene que poder ver (misma idea que B.34).
-4. **Riesgo asociado que quedó anotado:** si hay un navegador habilitado, el portal puede abrirse en una Custom Tab con bypass de VPN explícito. Mantener los navegadores suspendidos importa más de lo que parece.
-5. **El selector de foto de contacto fallaba por cuatro causas** (**B.47**). La número uno: **la sesión de administrador lo apagaba en silencio durante 5 minutos**, o sea justo mientras el dueño lo probaba después de tocar el interruptor. **Es literalmente el bug de B.15 primera corrección puntos 3 y 4 — "no estaban rotas: estaban calladas" — repetido.** Vale la pena tenerlo como patrón: *toda excepción por `SessionManager.isActive()` hay que justificarla, porque apaga la función justo en el momento en que se prueba.*
-6. **Las causas 2 y 3 están MEDIDAS, no leídas:** se extrajo la función vieja del commit de Antigravity y se corrió contra los cinco casos reales — **no detectaba 3 de 5** (el selector de fotos del sistema de Android 13+, Google Fotos como selector externo, y el selector del sistema con la clase vacía). El método es rápido y conviene repetirlo: correr la función vieja es más confiable que discutir si el `contains` matchea.
-7. **La decisión de alcance del selector, que no hay que "simplificar":** el selector del sistema **es el mismo que usa WhatsApp para adjuntar fotos**. Se rebota siempre el de avatar/ilustraciones (que es donde vive el catálogo que reportó el dueño y nunca sirve para adjuntar), y el genérico **solo si se llegó desde Contactos**. Así el agujero queda cerrado y mandar fotos sigue funcionando.
-8. **Verificación:** `kotlinc` 2.0.21 contra stubs con el código **extraído del archivo real**, **0 errores / 0 warnings**, con **6 controles negativos, los 6 detectados**; **prueba de comportamiento ejecutada** (48 casos verdes, con control negativo) que incluye explícitamente los casos que no se pueden romper — adjuntar en WhatsApp, Google Fotos como app normal, recortar una foto propia; chequeo de parseo antes/después en los 7 archivos (0 y 0) con su control negativo; simetría de B.38 verde; `node --check`. **Sin Gradle y sin probar en equipo.**
+1. **Catálogo (`mdm/PopularNonKosherApps.kt`):** Se creó el objeto singleton con el set `PACKAGES` completo según los requerimientos del usuario (navegadores, tiendas de apps alternativas, redes sociales, streaming, asistentes de IA, bloatware/feeds de Samsung, Xiaomi, Motorola, Transsion), con la exclusión explícita requerida: Mis Archivos, Video Player, Grabadora de voz y Carpeta Segura.
+2. **Ocultamiento vs Suspensión:** Siguiendo la aclaración del usuario (*"tienen que quedar ocultas, como si hubiera puesto 'bloquear' en esas apps en locksuite, no suspendidas"*), se implementó `appController.hideApp(pkg, true)` (`dpm.setApplicationHidden`) en vez de suspensión. Esto las inhabilita del sistema (idéntico a `pm disable-user` de ADB).
+3. **Persistencia y desbloqueo individual:** Al activar el switch, todas las apps no kosher del equipo pasan a `hideApp(pkg, true)` y se listan bajo el chip de filtro "Bloqueadas" en la pestaña "Aplicaciones" de LockSuite. Si el usuario apaga el interruptor "Ocultar" de una app individual, `hide_<pkg> = false` queda registrado en SharedPreferences. `reapplyAllRestrictions()` respeta este desbloqueo individual y no re-oculta esa app. Si se desactiva el switch general, todas las apps se des-ocultan y se limpian las preferencias.
+4. **Instalación y actualización dinámica:** Se agregó el hook en `PackageReceiver.kt` (`ACTION_PACKAGE_ADDED` / `ACTION_PACKAGE_REPLACED`) para que cualquier app no kosher recién instalada quede inmediatamente oculta.
+5. **UI Local (Dashboard Compose):**
+   - En la pestaña "Políticas": se agregó el interruptor "Bloquear apps populares no kosher" en el Grupo 4.
+   - En la pestaña "Aplicaciones": se colocó una tarjeta destacada con el interruptor maestro arriba del buscador, que refresca la lista de aplicaciones en vivo en cuanto se pulsa.
+6. **Backend y Panel Web:**
+   - Sincronización en `FirebaseDeviceSync.kt` con la clave `blockPopularNonKosher`.
+   - Comandos `BLOCK_POPULAR_NON_KOSHER` y `UNBLOCK_POPULAR_NON_KOSHER` en `LockSuiteFirebaseService.kt` y `ALLOWED_COMMANDS` en `admin-backend/functions/index.js`.
+   - Toggles y soporte en el panel web (`admin-backend/public/index.html` y `admin-backend/public/app.js`) para administración individual, mantenimiento grupal y presets.
+7. **Verificación:**
+   - `node --check` en `admin-backend/functions/index.js` y `admin-backend/public/app.js`: 0 errores de sintaxis.
+   - Compilación `./gradlew compileDebugKotlin`: BUILD SUCCESSFUL.
 
 ---
 
 ## Estado del repo (git)
 
-**5/9:**
-- `1fd6a08` — **versionCode 104 / versionName 0.6.41**, compilado y desplegado por Antigravity. **Incluye los dos modos de B.43 y los dos arreglos de B.45** tal como los dejó Claude el 4/9 a la tarde.
-- **Sin commitear al cierre:** **B.46** (portal cautivo) y **B.47** (selector de foto) — `mdm/CaptivePortalPolicy.kt` y `mdm/PhotoPickerPolicy.kt` (nuevos), `mdm/PolicyManager.kt`, `service/LockSuiteAccessibilityService.kt`, `service/LockSuiteFirebaseService.kt`, `util/FirebaseDeviceSync.kt`, `ui/dashboard/DashboardActivity.kt`, `admin-backend/public/index.html` (cache-buster a **`v=30`**), `admin-backend/public/app.js`, `admin-backend/functions/index.js` — más este documento y `INSTRUCCIONES_ANTIGRAVITY_2026-09-05_PORTAL_CAUTIVO_Y_FOTOS.md`. **Sin `device_bash` no hay `git`**: el mensaje de commit exacto está en ese documento.
-- ⚠️ **Se quitó código de `KosherVpnService`:** la rama `else if (logPackage == "com.android.captiveportallogin")` y `isCaptivePortalEscapeDomain()`. No es una simplificación, es que **no podían funcionar** — ver B.46.
-- Después de commitear: `firebase deploy --only hosting,functions` y abrir el panel con **Ctrl+F5**.
-- **Verificá igual** con `git log -1`, `git status` y `cat app/build.gradle.kts` al arrancar.
+**6/9:**
+- Despliegue en curso mediante `deploy_all.ps1`. Incluye B.48 (Bloqueo de apps populares no kosher) + cambios previos pendientes.
+

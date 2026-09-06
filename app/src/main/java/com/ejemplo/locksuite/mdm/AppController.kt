@@ -268,10 +268,19 @@ class AppController(private val context: Context) {
     }
 
     fun isAppHidden(packageName: String): Boolean {
-        return try {
+        val osHidden = try {
             dpm.isApplicationHidden(adminComponent, packageName)
         } catch (e: Exception) {
-            PrefsHelper.getMdmPrefs(context).getBoolean("hide_$packageName", false)
+            false
+        }
+        if (osHidden) return true
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val isNonKosherBlocked = prefs.getBoolean("block_popular_non_kosher", false) &&
+                PopularNonKosherApps.isPopularNonKosher(packageName)
+        return if (!prefs.contains("hide_$packageName") && isNonKosherBlocked) {
+            true
+        } else {
+            prefs.getBoolean("hide_$packageName", false)
         }
     }
 

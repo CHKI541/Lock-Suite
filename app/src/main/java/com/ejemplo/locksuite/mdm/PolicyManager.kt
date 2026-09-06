@@ -1310,6 +1310,7 @@ class PolicyManager(private val context: Context) {
         dataObj.put("kioskLockTask", isKioskLockTaskEnabled())
         dataObj.put("nokiaKeypadMode", isNokiaKeypadMode())
         dataObj.put("nokiaTouchEnabled", isNokiaTouchEnabled())
+        dataObj.put("blockPopularNonKosher", isBlockPopularNonKosherEnabled())
 
         val perAppNetArr = org.json.JSONArray()
         getPerAppInternetBlockedPackages().forEach { perAppNetArr.put(it) }
@@ -1430,6 +1431,7 @@ class PolicyManager(private val context: Context) {
             setKioskLockTaskEnabled(dataObj.optBoolean("kioskLockTask", isKioskLockTaskEnabled()))
             setNokiaKeypadMode(dataObj.optBoolean("nokiaKeypadMode", isNokiaKeypadMode()))
             setNokiaTouchEnabled(dataObj.optBoolean("nokiaTouchEnabled", isNokiaTouchEnabled()))
+            setBlockPopularNonKosher(dataObj.optBoolean("blockPopularNonKosher", isBlockPopularNonKosherEnabled()))
 
             val perAppNetArr = dataObj.optJSONArray("perAppInternetBlocked")
             if (perAppNetArr != null) {
@@ -1880,7 +1882,12 @@ class PolicyManager(private val context: Context) {
                 // suspenderlo después no aporta nada; además hideApp(pkg, false) ya
                 // re-suspende solo si corresponde. Por eso: primero ocultar, y suspender
                 // solo si NO quedó oculta.
-                val debeOcultarse = prefs.getBoolean("hide_${app.packageName}", false)
+                val isPopularNonKosher = isBlockPopularNonKosherEnabled() && PopularNonKosherApps.isPopularNonKosher(app.packageName)
+                val debeOcultarse = if (!prefs.contains("hide_${app.packageName}") && isPopularNonKosher) {
+                    true
+                } else {
+                    prefs.getBoolean("hide_${app.packageName}", false)
+                }
                 if (debeOcultarse) {
                     appController.hideApp(app.packageName, true)
                     continue
@@ -2388,6 +2395,51 @@ class PolicyManager(private val context: Context) {
 
     fun isSystemWebViewSuspended(): Boolean {
         return PrefsHelper.getMdmPrefs(context).getBoolean("system_webview_suspended", false)
+    }
+
+    fun isBlockPopularNonKosherEnabled(): Boolean {
+        return PrefsHelper.getMdmPrefs(context).getBoolean("block_popular_non_kosher", false)
+    }
+
+    fun setBlockPopularNonKosher(block: Boolean): Boolean {
+        if (deferIfSuspended("block_popular_non_kosher", block)) return true
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        prefs.edit().putBoolean("block_popular_non_kosher", block).apply()
+        return try {
+            val appController = AppController(context)
+            val pm = context.packageManager
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                PackageManager.MATCH_UNINSTALLED_PACKAGES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_UNINSTALLED_PACKAGES
+            }
+            val installedApps = pm.getInstalledApplications(flags)
+            val nonKosherApps = installedApps.filter { app ->
+                PopularNonKosherApps.isPopularNonKosher(app.packageName) &&
+                !appController.isCritical(app.packageName)
+            }
+
+            if (block) {
+                for (app in nonKosherApps) {
+                    appController.hideApp(app.packageName, true)
+                }
+            } else {
+                for (app in nonKosherApps) {
+                    appController.hideApp(app.packageName, false)
+                    prefs.edit().remove("hide_${app.packageName}").apply()
+                }
+            }
+            try {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
     }
 
     // ─────────────────────────────────────────────

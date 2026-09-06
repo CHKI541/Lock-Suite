@@ -1245,6 +1245,7 @@ saveNameBtn.addEventListener("click", async () => {
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
+            blockPopularNonKosher: ["BLOCK_POPULAR_NON_KOSHER", "UNBLOCK_POPULAR_NON_KOSHER"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],
@@ -1880,6 +1881,7 @@ if (savePresetBtn) {
             mercadoPagoBlockOffersAccessibility: !!dev.mercadoPagoBlockOffersAccessibility,
             mercadoPagoBlockOffersVpn: !!dev.mercadoPagoBlockOffersVpn,
             blockMlInMp: !!dev.blockMlInMp,
+            blockPopularNonKosher: !!dev.blockPopularNonKosher,
             kosherLauncherEnabled: !!dev.kosherLauncherEnabled,
             // 2/9/2026 — interruptores que el panel controla por comando pero que el
             // perfil no guardaba. Los nombres de la izquierda son las claves del perfil
@@ -2387,6 +2389,7 @@ async function applyGroupPoliciesToSingleDevice(groupId, deviceId) {
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
+            blockPopularNonKosher: ["BLOCK_POPULAR_NON_KOSHER", "UNBLOCK_POPULAR_NON_KOSHER"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             webviewBlocked: ["BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW"]
@@ -2446,6 +2449,7 @@ if (groupSidebar) {
             mercadoPagoBlockOffersAccessibility: ["BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY"],
             mercadoPagoBlockOffersVpn: ["BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN"],
             blockMlInMp: ["BLOCK_ML_IN_MP", "UNBLOCK_ML_IN_MP"],
+            blockPopularNonKosher: ["BLOCK_POPULAR_NON_KOSHER", "UNBLOCK_POPULAR_NON_KOSHER"],
             stealthModeEnabled: ["ENABLE_STEALTH", "DISABLE_STEALTH"],
             kosherLauncherEnabled: ["ENABLE_KOSHER_LAUNCHER", "DISABLE_KOSHER_LAUNCHER"],
             accessibilityProtected: ["PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY"],

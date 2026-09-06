@@ -330,6 +330,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     policyManager.setHideSuspendedApps(enabled)
                     true
                 }
+                "BLOCK_POPULAR_NON_KOSHER" -> {
+                    policyManager.setBlockPopularNonKosher(true)
+                }
+                "UNBLOCK_POPULAR_NON_KOSHER" -> {
+                    policyManager.setBlockPopularNonKosher(false)
+                }
                 "APPLY_PRESET_PROFILE" -> {
                     val presetJson = data["presetJson"]
                     if (!presetJson.isNullOrEmpty()) {

@@ -72,7 +72,6 @@ object PopularNonKosherApps {
         "com.badoo.mobile",                            // Badoo
         "com.bumble.app",                              // Bumble
         "com.linkedin.android",                        // LinkedIn
-        "com.google.android.apps.dynamite",            // Google Chat
 
         // ── 4. Streaming y Entretenimiento ──
         "com.google.android.youtube",                  // YouTube

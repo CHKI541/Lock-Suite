@@ -922,20 +922,19 @@ Reporte del dueño sobre el interruptor `block_contact_photo_picker` que había 
 
 ---
 
-**B.48 — BLOQUEO DE APPS POPULARES NO KOSHER: INTERRUPTOR MAESTRO Y OCULTAMIENTO REAL. [IMPLEMENTADO Y COMPILADO EL 6/9; LISTO PARA DESPLIEGUE]**
+**B.48 — BLOQUEO DE APPS POPULARES NO KOSHER: ACCIÓN EN EL MOMENTO, DESBLOQUEO INDIVIDUAL Y REPARACIÓN DE SUSPENSIÓN. [ACTUALIZADO Y COMPILADO EL 6/9]**
 
-El dueño solicitó un switch "Bloquear apps populares no kosher" que oculte/inhabilite todas las aplicaciones normales no kosher (navegadores, tiendas de apps alternativas, redes sociales, streaming, asistentes de IA con navegación y bloatware OEM de Samsung, Xiaomi, Motorola, etc.) dejando explícitamente afuera Mis Archivos (`com.sec.android.app.myfiles`), Video Player (`com.samsung.android.video`), Grabadora de voz (`com.sec.android.app.voicenote`) y Carpeta Segura (`com.samsung.knox.securefolder`).
+El dueño solicitó que el switch "Bloquear apps populares no kosher":
+1. **Actúe solo en el momento y NO mantenga un bucle de bloqueo permanente de fondo:** *"El switch tiene que bloquear solo en el momento, y no 'mantener' bloqueadas, porque asi no puedo activar el switch y desbloquear solo algunas apps"*.
+2. **Excluya y cure completamente:** Mis Archivos (`com.sec.android.app.myfiles`), Grabadora de voz (`com.sec.android.app.voicenote`), Google Chat (`com.google.android.apps.dynamite`), Samsung Video Player (`com.samsung.android.video`) y Carpeta Segura (`com.samsung.knox.securefolder`).
+3. **Resuelva el fallo de des-suspensión:** Causa raíz identificada: en `AppController.suspendApp(pkg, false)`, si el SO Samsung retornaba el paquete en `unapplied` (por estar oculto o por ser app del sistema) o si arrojaba excepción, la función retornaba `false` sin limpiar `suspend_$pkg = false` en `PrefsHelper`, y `isAppSuspended` hacía `prefsSuspended || osSuspended`, haciendo que el switch en la UI rebotara siempre a encendido.
 
-**Decisiones de arquitectura clave:**
-1. **Ocultas (`setApplicationHidden(true)`), no suspendidas:** El usuario aclaró explícitamente: *"tienen que quedar ocultas, como si hubiera puesto 'bloquear' en esas apps en locksuite, no suspendidas"*. Al usar `dpm.setApplicationHidden(admin, pkg, true)`, Android desactiva completamente el paquete a nivel sistema (equivalente al `pm disable-user` de ADB): no aparecen en el cajón de aplicaciones ni pueden ser ejecutadas.
-2. **Aparición en "Bloqueadas" y desbloqueo granular:** En LockSuite (Compose UI), el filtro de apps bloqueadas agrupa `app.isHidden || app.isSuspended || app.isWebViewBlocked...`. Al estar ocultas, aparecen en la sección "Bloqueadas" con el switch "Ocultar" encendido. Si el usuario desactiva "Ocultar" individualmente para una app puntual, se guarda `hide_<pkg> = false` en `PrefsHelper`. `PolicyManager.reapplyAllRestrictions()` respeta este override manual (`prefs.contains("hide_$pkg") && !prefs.getBoolean("hide_$pkg")`), garantizando que la app no se vuelva a ocultar automáticamente.
-3. **Catálogo maestro (`mdm/PopularNonKosherApps.kt`):** Mantiene una lista estricta `PACKAGES` con navegadores, tiendas no kosher (Galaxy Store, GetApps, Aurora, Aptoide, F-Droid, etc.), redes (TikTok, Instagram, Facebook, etc.), streaming (YouTube, Netflix, etc.), IA (ChatGPT, Copilot, Gemini) y bloatware/feeds de marcas.
-4. **Instalaciones y actualizaciones automáticas:** `PackageReceiver` vigila `ACTION_PACKAGE_ADDED` y `ACTION_PACKAGE_REPLACED`. Si la política está activa y la app es no kosher (y no fue des-ocultada manualmente), se oculta automáticamente de inmediato.
-5. **Panel Web y Backend:**
-   - Sincronización en `FirebaseDeviceSync` (`blockPopularNonKosher`).
-   - Comandos `BLOCK_POPULAR_NON_KOSHER` y `UNBLOCK_POPULAR_NON_KOSHER` en `LockSuiteFirebaseService.kt` y en `ALLOWED_COMMANDS` de Cloud Functions (`admin-backend/functions/index.js`).
-   - Mapeo en `admin-backend/public/app.js` tanto para celular individual como para políticas grupales y presets (`savePresetBtn`).
-   - Switch visual en `admin-backend/public/index.html` en la pestaña de Políticas, en la tarjeta de Play Store / Apps, y en el modal de Grupo.
+**Correcciones implementadas:**
+1. **Acción en el momento sin pisar preferencias:** Al activar el switch, se ejecuta `setBlockPopularNonKosher(true)`, el cual itera sobre las apps del catálogo no kosher instaladas, asegura `suspend_$pkg = false`, des-suspende en DPM si alguna estaba suspendida, y las oculta con `hideApp(pkg, true)`.
+2. **Libertad de desbloqueo granular:** En `reapplyAllRestrictions()` y en `isAppHidden()`, se eliminó la comprobación que forzaba `isPopularNonKosher` a `true`. El ocultamiento se rige únicamente por `hide_$pkg`. Si el usuario va a la sección "Bloqueadas" y apaga el switch "Ocultar" de cualquier app, esta queda liberada (`hide_$pkg = false`) y **nunca vuelve a ser ocultada automáticamente** por reinicios, Watchdog ni sincronizaciones.
+3. **Des-suspensión robusta:** `suspendApp(pkg, false)` ahora siempre persiste `suspend_$pkg = false` y maneja de forma segura llamadas a DPM. `isAppSuspended` verifica si el usuario des-suspendió explícitamente (`hasExplicitPref && !prefsSuspended`), retornando `false` de inmediato sin rebotar.
+4. **Auto-curación:** Función `healRestrictedEssentialApps()` ejecutada al arrancar la app y en `refreshApps()` que des-oculta, des-suspende y limpia flags de Mis Archivos, Grabadora de voz, Google Chat, Video Player y Carpeta Segura.
+5. **Catálogo depurado (`mdm/PopularNonKosherApps.kt`):** Se removió `"com.google.android.apps.dynamite"` (Google Chat). Mis Archivos, Grabadora, Video y Carpeta Segura permanecen totalmente excluidos.
 
 ---
 
@@ -943,27 +942,24 @@ El dueño solicitó un switch "Bloquear apps populares no kosher" que oculte/inh
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**6/9 — Antigravity: Switch maestro "Bloquear apps populares no kosher" (ocultamiento completo a nivel sistema vía `setApplicationHidden`, desbloqueo individual desde "Bloqueadas", catálogo maestro OEM/social/navegadores, sincronización bidireccional y panel web).**
+**6/9 — Antigravity: Corrección de "Bloquear apps populares no kosher" (ejecución puntual en el momento sin políticas persistentes de fondo, desbloqueo individual garantizado, des-suspensión robusta y auto-curación de Archivos, Grabadora y Google Chat).**
 
-1. **Catálogo (`mdm/PopularNonKosherApps.kt`):** Se creó el objeto singleton con el set `PACKAGES` completo según los requerimientos del usuario (navegadores, tiendas de apps alternativas, redes sociales, streaming, asistentes de IA, bloatware/feeds de Samsung, Xiaomi, Motorola, Transsion), con la exclusión explícita requerida: Mis Archivos, Video Player, Grabadora de voz y Carpeta Segura.
-2. **Ocultamiento vs Suspensión:** Siguiendo la aclaración del usuario (*"tienen que quedar ocultas, como si hubiera puesto 'bloquear' en esas apps en locksuite, no suspendidas"*), se implementó `appController.hideApp(pkg, true)` (`dpm.setApplicationHidden`) en vez de suspensión. Esto las inhabilita del sistema (idéntico a `pm disable-user` de ADB).
-3. **Persistencia y desbloqueo individual:** Al activar el switch, todas las apps no kosher del equipo pasan a `hideApp(pkg, true)` y se listan bajo el chip de filtro "Bloqueadas" en la pestaña "Aplicaciones" de LockSuite. Si el usuario apaga el interruptor "Ocultar" de una app individual, `hide_<pkg> = false` queda registrado en SharedPreferences. `reapplyAllRestrictions()` respeta este desbloqueo individual y no re-oculta esa app. Si se desactiva el switch general, todas las apps se des-ocultan y se limpian las preferencias.
-4. **Instalación y actualización dinámica:** Se agregó el hook en `PackageReceiver.kt` (`ACTION_PACKAGE_ADDED` / `ACTION_PACKAGE_REPLACED`) para que cualquier app no kosher recién instalada quede inmediatamente oculta.
-5. **UI Local (Dashboard Compose):**
-   - En la pestaña "Políticas": se agregó el interruptor "Bloquear apps populares no kosher" en el Grupo 4.
-   - En la pestaña "Aplicaciones": se colocó una tarjeta destacada con el interruptor maestro arriba del buscador, que refresca la lista de aplicaciones en vivo en cuanto se pulsa.
-6. **Backend y Panel Web:**
-   - Sincronización en `FirebaseDeviceSync.kt` con la clave `blockPopularNonKosher`.
-   - Comandos `BLOCK_POPULAR_NON_KOSHER` y `UNBLOCK_POPULAR_NON_KOSHER` en `LockSuiteFirebaseService.kt` y `ALLOWED_COMMANDS` en `admin-backend/functions/index.js`.
-   - Toggles y soporte en el panel web (`admin-backend/public/index.html` y `admin-backend/public/app.js`) para administración individual, mantenimiento grupal y presets.
-7. **Verificación:**
-   - `node --check` en `admin-backend/functions/index.js` y `admin-backend/public/app.js`: 0 errores de sintaxis.
-   - Compilación `./gradlew compileDebugKotlin`: BUILD SUCCESSFUL.
+1. **Bloqueo solo en el momento sin imposición de fondo:**
+   - Se ajustó el switch para que realice una acción masiva inmediata (`hideApp(pkg, true)` y limpieza de `suspend_$pkg`) sin imponer una política restrictiva en segundo plano.
+   - Se removió la sobreescritura de `isPopularNonKosher` en `reapplyAllRestrictions()`, `isAppHidden()` y `PackageReceiver.kt`. El estado de cada aplicación se rige fielmente por su preferencia individual (`hide_$pkg`).
+   - Al entrar a "Bloqueadas", el usuario puede apagar el interruptor "Ocultar" de cualquier app y esta permanece desbloqueada sin que el Watchdog la re-bloquee.
+2. **Reparación y des-suspensión de Archivos, Grabadora y Google Chat:**
+   - Se eliminó `"com.google.android.apps.dynamite"` (Google Chat) del catálogo `PopularNonKosherApps.kt`.
+   - Se corrigió el bug de `suspendApp(pkg, false)` y `isAppSuspended(pkg)` en `AppController.kt`, asegurando que `suspend_$pkg = false` se guarde siempre y que el switch de des-suspensión nunca vuelva a trabarse en "encendido".
+   - Se implementó `PolicyManager.healRestrictedEssentialApps()` que des-oculta y des-suspende incondicionalmente Mis Archivos, Grabadora de voz, Google Chat, Video Player y Carpeta Segura al iniciar la app y en cada refresco de la grilla.
+3. **Verificación:**
+   - Compilación exitosa con Gradle: `./gradlew compileDebugKotlin` (BUILD SUCCESSFUL, 0 errores).
+   - Despliegue completo con `./deploy_all.ps1`.
 
 ---
 
 ## Estado del repo (git)
 
 **6/9:**
-- Despliegue en curso mediante `deploy_all.ps1`. Incluye B.48 (Bloqueo de apps populares no kosher) + cambios previos pendientes.
+- Despliegue en curso mediante `deploy_all.ps1`. Versión con corrección de bloqueo en el momento y des-suspensión.
 

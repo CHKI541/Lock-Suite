@@ -275,50 +275,75 @@ class AppController(private val context: Context) {
         }
         if (osHidden) return true
         val prefs = PrefsHelper.getMdmPrefs(context)
-        val isNonKosherBlocked = prefs.getBoolean("block_popular_non_kosher", false) &&
-                PopularNonKosherApps.isPopularNonKosher(packageName)
-        return if (!prefs.contains("hide_$packageName") && isNonKosherBlocked) {
-            true
-        } else {
-            prefs.getBoolean("hide_$packageName", false)
-        }
+        return prefs.getBoolean("hide_$packageName", false)
     }
 
     fun suspendApp(packageName: String, suspend: Boolean): Boolean {
-        if (suspend && PrefsHelper.getMdmPrefs(context).getBoolean("locksuite_suspended", false)) {
-            PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", true).apply()
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (suspend && prefs.getBoolean("locksuite_suspended", false)) {
+            prefs.edit().putBoolean("suspend_$packageName", true).apply()
             return true
         }
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
-            // Si la app es crítica y se solicita des-suspenderla (suspend = false), el estado deseado
-            // ya se cumple (no está suspended) -> retornar true (éxito).
+            // Si la app es crítica y se solicita des-suspenderla (suspend = false),
+            // limpiar cualquier preferencia residual y asegurar en el SO
+            if (!suspend) {
+                prefs.edit().putBoolean("suspend_$packageName", false).apply()
+                try {
+                    dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), false)
+                } catch (e: Exception) { }
+            }
             return !suspend
         }
         
         android.util.Log.i("AppController", "suspendApp: $packageName -> suspend=$suspend")
 
-        val isCurrentlyOsSuspended = try {
-            dpm.isPackageSuspended(adminComponent, packageName)
-        } catch (e: Exception) {
-            false
-        }
-
         return try {
-            val unapplied = if (suspend && isCurrentlyOsSuspended) {
-                emptyArray()
+            if (suspend) {
+                val isCurrentlyOsSuspended = try {
+                    dpm.isPackageSuspended(adminComponent, packageName)
+                } catch (e: Exception) {
+                    false
+                }
+                val unapplied = if (isCurrentlyOsSuspended) {
+                    emptyArray()
+                } else {
+                    dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
+                }
+                if (unapplied.contains(packageName)) {
+                    android.util.Log.w("AppController", "Android no aplico suspension para $packageName")
+                    false
+                } else {
+                    // Solo reflejar como aplicada una politica que el SO confirmo.
+                    prefs.edit().putBoolean("suspend_$packageName", true).apply()
+                    true
+                }
             } else {
-                dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), suspend)
-            }
-            if (unapplied.contains(packageName)) {
-                android.util.Log.w("AppController", "Android no aplico suspension para $packageName")
-                false
-            } else {
-                // Solo reflejar como aplicada una politica que el SO confirmo.
-                PrefsHelper.getMdmPrefs(context).edit().putBoolean("suspend_$packageName", suspend).apply()
-                true
+                // Des-suspender:
+                // 1. Siempre persistir false en SharedPreferences para que ningún reconciliador vuelva a suspenderla
+                prefs.edit().putBoolean("suspend_$packageName", false).apply()
+
+                // 2. Intentar des-suspender en el SO
+                try {
+                    dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), false)
+                } catch (e: Exception) {
+                    android.util.Log.w("AppController", "dpm.setPackagesSuspended(false) para $packageName: ${e.message}")
+                }
+
+                // 3. Si en el SO ya no está suspendida o si está oculta (en donde DPM no permite cambiar suspensión),
+                // la operación es exitosa para que la UI actualice el switch inmediatamente.
+                val stillOsSuspended = try {
+                    dpm.isPackageSuspended(adminComponent, packageName)
+                } catch (e: Exception) {
+                    false
+                }
+                !stillOsSuspended || isAppHidden(packageName)
             }
         } catch (e: Exception) {
             android.util.Log.e("AppController", "No se pudo cambiar suspension de $packageName", e)
+            if (!suspend) {
+                prefs.edit().putBoolean("suspend_$packageName", false).apply()
+            }
             false
         }
     }
@@ -326,20 +351,23 @@ class AppController(private val context: Context) {
     fun isAppSuspended(packageName: String): Boolean {
         val prefs = PrefsHelper.getMdmPrefs(context)
         val defaultSuspended = DEFAULT_BLOCKED_PACKAGES.contains(packageName)
-        val prefsSuspended = if (!prefs.contains("suspend_$packageName") && defaultSuspended) {
+        val hasExplicitPref = prefs.contains("suspend_$packageName")
+        val prefsSuspended = if (!hasExplicitPref && defaultSuspended) {
             true
         } else {
             prefs.getBoolean("suspend_$packageName", false)
         }
+
+        // Si el usuario des-suspendió explícitamente esta app, jamás debe figurar suspendida
+        if (hasExplicitPref && !prefsSuspended) {
+            return false
+        }
+
         val osSuspended = try {
             dpm.isPackageSuspended(adminComponent, packageName)
         } catch (e: Exception) {
             false
         }
-        // Antes había un tercer término "|| (isHidden && prefsSuspended)": como
-        // prefsSuspended ya aparece antes en el OR, ese término era código muerto
-        // (nunca podía cambiar el resultado) y solo costaba una llamada Binder extra
-        // a isApplicationHidden en cada consulta. Eliminado.
         return prefsSuspended || osSuspended
     }
 

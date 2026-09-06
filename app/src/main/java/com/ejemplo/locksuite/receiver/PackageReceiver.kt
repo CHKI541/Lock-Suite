@@ -147,12 +147,9 @@ class PackageReceiver : BroadcastReceiver() {
                         appController.suspendApp(packageName, true)
                     }
 
-                    // 5. Si está activado el bloqueo de apps populares no kosher y esta app lo es
-                    if (policyManager.isBlockPopularNonKosherEnabled() && com.ejemplo.locksuite.mdm.PopularNonKosherApps.isPopularNonKosher(packageName)) {
-                        val explicitlyUnhidden = prefs.contains("hide_$packageName") && !prefs.getBoolean("hide_$packageName", false)
-                        if (!explicitlyUnhidden) {
-                            appController.hideApp(packageName, true)
-                        }
+                    // 5. Si la app estaba oculta explícitamente por el administrador
+                    if (prefs.getBoolean("hide_$packageName", false)) {
+                        appController.hideApp(packageName, true)
                     }
                 } catch (e: Exception) {
                     Log.e("PackageReceiver", "Error al re-suspender paquete tras actualización: $packageName", e)

@@ -1116,6 +1116,7 @@ fun AppManagerTabContent(context: Context) {
     fun refreshApps() {
         isLoading = true
         scope.launch(Dispatchers.IO) {
+            policyManager.healRestrictedEssentialApps()
             val list = appController.getUserApps()
             val popularEnabled = policyManager.isBlockPopularNonKosherEnabled()
             withContext(Dispatchers.Main) {
@@ -1231,7 +1232,7 @@ fun AppManagerTabContent(context: Context) {
                         fontSize = 14.sp
                     )
                     Text(
-                        text = "Oculta navegadores, tiendas no kosher, redes y bloatware",
+                        text = "Oculta en el momento navegadores, tiendas no kosher, redes y bloatware. Podés desbloquear individualmente las que necesites.",
                         color = Color.LightGray,
                         fontSize = 11.sp
                     )
@@ -1254,6 +1255,8 @@ fun AppManagerTabContent(context: Context) {
                                     if (ok) {
                                         blockPopularState = checked
                                         refreshApps()
+                                        val msg = if (checked) "Apps populares no kosher bloqueadas" else "Apps populares no kosher desbloqueadas"
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                     } else {
                                         Toast.makeText(context, "Error al actualizar política", Toast.LENGTH_SHORT).show()
                                     }

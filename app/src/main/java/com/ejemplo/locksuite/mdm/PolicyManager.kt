@@ -1700,6 +1700,32 @@ class PolicyManager(private val context: Context) {
         return prefs.getBoolean(restriction, false)
     }
 
+    fun healRestrictedEssentialApps() {
+        val essentialApps = listOf(
+            "com.sec.android.app.myfiles",
+            "com.sec.android.app.voicenote",
+            "com.google.android.apps.dynamite",
+            "com.samsung.android.video",
+            "com.samsung.knox.securefolder"
+        )
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        for (pkg in essentialApps) {
+            // Des-ocultar si quedó oculta
+            try {
+                if (dpm.isApplicationHidden(adminComponent, pkg)) {
+                    dpm.setApplicationHidden(adminComponent, pkg, false)
+                }
+            } catch (e: Exception) { }
+            prefs.edit().putBoolean("hide_$pkg", false).apply()
+
+            // Des-suspender si quedó suspendida
+            try {
+                dpm.setPackagesSuspended(adminComponent, arrayOf(pkg), false)
+            } catch (e: Exception) { }
+            prefs.edit().putBoolean("suspend_$pkg", false).apply()
+        }
+    }
+
     fun reapplyAllRestrictions() {
         // Mientras LockSuite está suspendido nadie vuelve a aplicar nada: ni el
         // arranque, ni el Watchdog de 15 min, ni un comando del panel. La única
@@ -1709,6 +1735,10 @@ class PolicyManager(private val context: Context) {
             android.util.Log.i("PolicyManager", "LockSuite suspendido: omitiendo reapplyAllRestrictions")
             return
         }
+
+        // Auto-curación de apps esenciales/libres (Archivos, Grabadora, Google Chat, Video, Carpeta Segura)
+        healRestrictedEssentialApps()
+
         val restrictions = listOf(
             UserManager.DISALLOW_FACTORY_RESET,
             UserManager.DISALLOW_INSTALL_APPS,
@@ -1882,12 +1912,7 @@ class PolicyManager(private val context: Context) {
                 // suspenderlo después no aporta nada; además hideApp(pkg, false) ya
                 // re-suspende solo si corresponde. Por eso: primero ocultar, y suspender
                 // solo si NO quedó oculta.
-                val isPopularNonKosher = isBlockPopularNonKosherEnabled() && PopularNonKosherApps.isPopularNonKosher(app.packageName)
-                val debeOcultarse = if (!prefs.contains("hide_${app.packageName}") && isPopularNonKosher) {
-                    true
-                } else {
-                    prefs.getBoolean("hide_${app.packageName}", false)
-                }
+                val debeOcultarse = prefs.getBoolean("hide_${app.packageName}", false)
                 if (debeOcultarse) {
                     appController.hideApp(app.packageName, true)
                     continue
@@ -2422,12 +2447,22 @@ class PolicyManager(private val context: Context) {
 
             if (block) {
                 for (app in nonKosherApps) {
+                    // Garantizar que no quede suspendida
+                    try {
+                        dpm.setPackagesSuspended(adminComponent, arrayOf(app.packageName), false)
+                    } catch (e: Exception) { }
+                    prefs.edit().putBoolean("suspend_${app.packageName}", false).apply()
+
+                    // Ocultar en el momento
                     appController.hideApp(app.packageName, true)
                 }
             } else {
                 for (app in nonKosherApps) {
                     appController.hideApp(app.packageName, false)
-                    prefs.edit().remove("hide_${app.packageName}").apply()
+                    try {
+                        dpm.setPackagesSuspended(adminComponent, arrayOf(app.packageName), false)
+                    } catch (e: Exception) { }
+                    prefs.edit().putBoolean("suspend_${app.packageName}", false).apply()
                 }
             }
             try {

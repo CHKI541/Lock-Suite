@@ -64,7 +64,18 @@ object NetworkForwarder {
     // ──────────────────────────────────────────────────────────────────────────
 
     /** Direcciones del propio túnel: nunca pueden ser el resolutor de salida. */
-    private val TUNNEL_ADDRESSES = setOf("10.0.0.1", "10.0.0.2", "fd00::1", "fd00::2")
+    // 6/9/2026: esta lista estaba escrita a mano y duplicaba las direcciones que declara
+    // KosherVpnService.buildTunnel(). Ese duplicado FUE la causa 1 de B.18: acá figuraba
+    // `10.0.0.1` pero faltaba `fd00::1`, así que el resolutor de salida podía terminar
+    // siendo el DNS virtual del propio túnel y todas las consultas del equipo daban
+    // timeout. Ahora se deriva de la fuente única de verdad: si alguien cambia una
+    // dirección del túnel, esta lista lo sigue sola.
+    private val TUNNEL_ADDRESSES = setOf(
+        com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_DNS_V4,
+        com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_ADDR_V4,
+        com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_DNS_V6,
+        com.ejemplo.locksuite.service.KosherVpnService.TUNNEL_ADDR_V6
+    )
 
     /** Red de seguridad por si algo cambia sin avisar por el callback. */
     private const val UPSTREAM_TTL_MS = 30_000L
@@ -325,6 +336,9 @@ object NetworkForwarder {
             synchronized(output) {
                 output.write(ipResponse)
             }
+            // Señal de salud: prueba que el camino de VUELTA funciona. Ver el bloque
+            // SALUD DEL TÚNEL en KosherVpnService. Cuesta un incremento atómico.
+            com.ejemplo.locksuite.service.KosherVpnService.noteTunnelResponse()
 
         } catch (e: SocketTimeoutException) {
             // Sin respuesta, la app original recibirá timeout nativo.
@@ -451,6 +465,8 @@ object NetworkForwarder {
             synchronized(output) {
                 output.write(ipResponse)
             }
+            // Una respuesta de bloqueo también prueba que el camino de vuelta funciona.
+            com.ejemplo.locksuite.service.KosherVpnService.noteTunnelResponse()
         } catch (e: Exception) {
             android.util.Log.w("KosherVPN", "Fallo enviando respuesta DNS bloqueada: ${e.message}")
         }

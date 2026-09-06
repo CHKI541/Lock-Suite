@@ -50,6 +50,45 @@ class KosherVpnService : VpnService() {
         private const val TUNNEL_MTU = 4000
         private const val TUNNEL_MTU_FALLBACK = 1500
 
+        // ──────────────────────────────────────────────────────────────────────────
+        // DIRECCIONES DEL TÚNEL — FUENTE ÚNICA DE VERDAD
+        //
+        // Estaban escritas a mano acá y OTRA VEZ en `NetworkForwarder.TUNNEL_ADDRESSES`.
+        // Ese duplicado ya costó una caída de internet entera: la lista de exclusión del
+        // resolutor de salida tenía `10.0.0.1` pero NO `fd00::1`, así que el filtro podía
+        // terminar mandándose las consultas a sí mismo (B.18, causa 1). Ahora hay un solo
+        // lugar y `NetworkForwarder` lo lee de acá. Si algún día se cambian estos valores,
+        // se cambian una vez y las dos puntas quedan sincronizadas por construcción.
+        //
+        // ⚠️ LA MÁSCARA /32 (y /128 en IPv6) NO ES UN PROBLEMA, por más que un informe
+        // haya dicho lo contrario. MEDIDO el 6/9/2026 sobre el equipo del dueño (Galaxy
+        // A06, Android 16 / SDK 36): tras un arranque limpio el sistema instala LAS DIEZ
+        // rutas IPv4 pedidas, `10.0.0.1/32` incluida, con esta misma configuración:
+        //     10.0.0.1 dev tun0 table 1056 proto static scope link
+        // O sea que Android NO exige que el destino de una ruta on-link pertenezca a la
+        // subred de la interfaz. NO cambiar esto a /24: además de no arreglar nada,
+        // `10.0.0.0/24` es uno de los rangos LAN domésticos más comunes que existen (el
+        // gateway por omisión de varios ISP es literalmente `10.0.0.1`), y enrutar el /24
+        // entero al túnel —que descarta todo lo que no sea UDP/53— dejaría sin internet a
+        // los equipos conectados a esas redes.
+        // ──────────────────────────────────────────────────────────────────────────
+        const val TUNNEL_DNS_V4 = "10.0.0.1"
+        const val TUNNEL_ADDR_V4 = "10.0.0.2"
+        const val TUNNEL_DNS_V6 = "fd00::1"
+        const val TUNNEL_ADDR_V6 = "fd00::2"
+
+        /**
+         * Espera entre tirar abajo el túnel y volver a levantarlo.
+         *
+         * ⚠️ ESTA CONSTANTE ES EL ARREGLO DE LA CAUSA RAÍZ DE "SE CAE EL INTERNET".
+         * No bajarla a 0 "porque así es más rápido": ver el comentario largo de
+         * `scheduleRestart()`, que explica qué se rompe exactamente.
+         */
+        private const val RESTART_SETTLE_MS = 2_000L
+
+        /** Igual que la anterior, pero para una auto-reparación: se da más margen. */
+        private const val HEAL_SETTLE_MS = 3_500L
+
         // Resolutores DNS públicos más comunes. El filtro original solo
         // capturaba consultas dirigidas al DNS virtual del sistema (10.0.0.1 /
         // fd00::1); cualquier app que ignorase eso y apuntara directo a uno de
@@ -88,6 +127,163 @@ class KosherVpnService : VpnService() {
          */
         @Volatile
         var isTunnelRunning: Boolean = false
+
+        // ══════════════════════════════════════════════════════════════════════════
+        // SALUD DEL TÚNEL  (6/9/2026 — ver B.49)
+        //
+        // POR QUÉ EXISTE ESTO. Hasta hoy, "¿el filtro está funcionando?" se respondía
+        // con `isTunnelRunning`, que solo dice si el HILO está vivo. Y el hilo puede
+        // estar perfectamente vivo, bloqueado en `read()`, sobre un túnel al que el
+        // sistema no le enruta ni un paquete: eso es exactamente lo que se midió el
+        // 6/9/2026 en el Galaxy A06 (las reglas de la red VPN apuntaban a la tabla de
+        // rutas de un `tun0` anterior, que ya no existía y estaba vacía). Para el
+        // usuario eso es "se cayó internet"; para LockSuite, todo verde.
+        //
+        // El síntoma tuvo CINCO causas distintas a lo largo del proyecto (B.18 ×2,
+        // B.20, B.21, B.24) y todas rompían este mismo punto único. La sexta iba a
+        // pasar igual. Por eso acá no se agrega un parche más: se agrega la MEDICIÓN
+        // que faltaba, para que la séptima se detecte y se repare sola.
+        //
+        // COSTO: dos contadores atómicos —uno por paquete leído, otro por respuesta
+        // escrita— y una comparación dentro del ciclo de 20 s que el Watchdog YA hace.
+        // Cero hilos nuevos, cero despertares nuevos, cero llamadas al sistema nuevas.
+        // ══════════════════════════════════════════════════════════════════════════
+
+        /** Paquetes leídos del túnel desde que se estableció el actual. */
+        val tunnelPacketsIn = java.util.concurrent.atomic.AtomicLong(0L)
+
+        /** Respuestas DNS escritas de vuelta al túnel desde que se estableció el actual. */
+        val tunnelResponsesOut = java.util.concurrent.atomic.AtomicLong(0L)
+
+        /** `elapsedRealtime` en que el bucle empezó a leer de verdad. 0 = no está leyendo. */
+        @Volatile
+        var tunnelReadyAtMs: Long = 0L
+
+        /** Auto-reparaciones hechas en esta vida del proceso. Se reporta al panel. */
+        @Volatile
+        var tunnelHeals: Int = 0
+
+        @Volatile
+        private var lastHealAtMs: Long = 0L
+
+        const val HEALTH_OK = "OK"
+        const val HEALTH_OFF = "APAGADO"
+        const val HEALTH_UNKNOWN = "SIN_DATOS"
+        const val HEALTH_NO_CAPTURE = "SIN_CAPTURA"
+        const val HEALTH_NO_UPSTREAM = "SIN_SALIDA"
+
+        /**
+         * Cuánto se espera antes de creerle a "no entró ni un paquete".
+         *
+         * Con la pantalla encendida y una red validada, un Android normal resuelve
+         * dominios todo el tiempo solo (chequeos de conectividad, FCM, sincronizaciones).
+         * Dos minutos y medio sin UN SOLO paquete en esas condiciones no es un equipo
+         * tranquilo: es un túnel que no está recibiendo tráfico.
+         */
+        private const val CAPTURE_GRACE_MS = 150_000L
+
+        /** Entre auto-reparaciones. Evita un ciclo de reinicios si el problema es otro. */
+        private const val HEAL_COOLDOWN_MS = 300_000L
+
+        /** La llama `NetworkForwarder` cada vez que logra escribir una respuesta al túnel. */
+        @JvmStatic
+        fun noteTunnelResponse() {
+            tunnelResponsesOut.incrementAndGet()
+        }
+
+        /**
+         * ¿Está el túnel realmente filtrando?
+         *
+         * Devuelve `HEALTH_UNKNOWN` siempre que la pregunta no se pueda contestar con
+         * honestidad — túnel recién levantado, pantalla apagada (el equipo puede estar
+         * en Doze sin resolver nada, y eso es normal), o sin ninguna red física validada
+         * (sin red no hay consultas que capturar). Es a propósito: un falso positivo acá
+         * cuesta un reinicio de túnel, y un reinicio de túnel es un par de segundos sin
+         * resolver para TODO el equipo. Mejor callarse que adivinar.
+         */
+        @JvmStatic
+        fun tunnelHealth(context: android.content.Context): String {
+            if (!isTunnelRunning) return HEALTH_OFF
+            val readyAt = tunnelReadyAtMs
+            if (readyAt == 0L) return HEALTH_UNKNOWN
+            if (android.os.SystemClock.elapsedRealtime() - readyAt < CAPTURE_GRACE_MS) {
+                return HEALTH_UNKNOWN
+            }
+            if (!isScreenOn(context)) return HEALTH_UNKNOWN
+            if (!hasValidatedPhysicalNetwork(context)) return HEALTH_UNKNOWN
+
+            if (tunnelPacketsIn.get() == 0L) return HEALTH_NO_CAPTURE
+            if (tunnelResponsesOut.get() == 0L) return HEALTH_NO_UPSTREAM
+            return HEALTH_OK
+        }
+
+        /**
+         * Si el túnel está roto, se repara solo: mismo apagar-y-prender que el dueño
+         * viene haciendo a mano desde hace meses, pero automático y con la espera que
+         * hace falta para que el sistema libere la interfaz vieja (ver `scheduleRestart`).
+         *
+         * La llama el ciclo de 20 s del `WatchdogForegroundService`.
+         */
+        @JvmStatic
+        fun healIfBroken(context: android.content.Context) {
+            val health = tunnelHealth(context)
+            if (health != HEALTH_NO_CAPTURE && health != HEALTH_NO_UPSTREAM) return
+
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastHealAtMs < HEAL_COOLDOWN_MS) return
+            lastHealAtMs = now
+            tunnelHeals++
+
+            android.util.Log.w(
+                "KosherVPN",
+                "Tunel en mal estado ($health): paquetes=${tunnelPacketsIn.get()} " +
+                    "respuestas=${tunnelResponsesOut.get()}. Auto-reparacion #$tunnelHeals."
+            )
+            try {
+                val intent = Intent(context, KosherVpnService::class.java).apply {
+                    action = "HEAL_VPN"
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("KosherVPN", "No se pudo pedir la auto-reparacion: ${e.message}")
+            }
+        }
+
+        /** `isInteractive` existe desde API 20 y el `minSdk` del proyecto es 24: sin ramas. */
+        private fun isScreenOn(context: android.content.Context): Boolean = try {
+            context.getSystemService(android.os.PowerManager::class.java)?.isInteractive == true
+        } catch (e: Exception) {
+            false
+        }
+
+        /**
+         * ¿Hay alguna red física (no VPN) que el sistema haya VALIDADO?
+         *
+         * Se descarta `TRANSPORT_VPN` a propósito y no se usa `cm.activeNetwork` a secas:
+         * esa es justamente la trampa que causó la causa 1 de B.18.
+         */
+        private fun hasValidatedPhysicalNetwork(context: android.content.Context): Boolean = try {
+            val cm = context.getSystemService(ConnectivityManager::class.java)
+            var found = false
+            if (cm != null) {
+                @Suppress("DEPRECATION")
+                for (net in cm.allNetworks) {
+                    val caps = cm.getNetworkCapabilities(net) ?: continue
+                    if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue
+                    if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                        found = true
+                        break
+                    }
+                }
+            }
+            found
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -97,6 +293,30 @@ class KosherVpnService : VpnService() {
     private var dnsExecutor: java.util.concurrent.ExecutorService? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastNetworkRestartAtMs: Long = 0L
+
+    /** Para la espera entre bajar y subir el túnel. Ver `scheduleRestart()`. */
+    private val restartHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * Hasta cuándo hay un reestablecimiento en curso.
+     *
+     * Sin esto la espera de `scheduleRestart()` se puede saltear sola: durante esos
+     * segundos `isTunnelRunning` vale `false`, así que si el ciclo de 20 s del Watchdog
+     * cae justo en la ventana, `BootReceiver.ensureVpnRunning()` arranca el servicio y
+     * el túnel se crea ANTES de tiempo — o sea, otra vez encima de la interfaz que se
+     * está muriendo, que es exactamente el bug que la espera viene a evitar. Con la
+     * marca, `startVpn()` se niega a arrancar mientras la espera esté corriendo.
+     */
+    @Volatile private var restartPendingUntilMs: Long = 0L
+
+    private val pendingStart = Runnable {
+        restartPendingUntilMs = 0L
+        try {
+            startVpn()
+        } catch (e: Exception) {
+            android.util.Log.e("KosherVPN", "Fallo al reestablecer el tunel tras la espera: ${e.message}")
+        }
+    }
 
     /**
      * Identificador de la última red física vista. Sirve para NO reestablecer el túnel
@@ -144,13 +364,40 @@ class KosherVpnService : VpnService() {
             stopVpn()
             stopSelf()
             return START_NOT_STICKY
+        } else if (action == "RELOAD_RULES") {
+            // 6/9/2026 (B.49). Antes esto era un RESTART_VPN: cada vez que el
+            // administrador tocaba UNA regla DNS se tiraba abajo el túnel entero y se
+            // volvía a levantar. Rehacer el túnel para recargar un Trie que se lee en
+            // memoria en cada consulta no aporta nada, y sí paga el precio completo:
+            // unos segundos en los que NINGUNA app del equipo puede resolver un dominio,
+            // más el riesgo de dejar la red VPN apuntando a la tabla de rutas del túnel
+            // viejo (ver scheduleRestart()). Era, además, el disparador más frecuente de
+            // los tres, y el que más chances tenía de saltar mientras alguien configuraba.
+            val isCurrentlyRunning = synchronized(lifecycleLock) { running }
+            if (isCurrentlyRunning) {
+                try {
+                    com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
+                    android.util.Log.i("KosherVPN", "Reglas DNS recargadas en caliente (sin rehacer el tunel).")
+                } catch (e: Exception) {
+                    android.util.Log.w("KosherVPN", "No se pudieron recargar reglas DNS: ${e.message}")
+                }
+            } else {
+                startVpn()
+            }
+        } else if (action == "HEAL_VPN") {
+            val isCurrentlyRunning = synchronized(lifecycleLock) { running }
+            if (isCurrentlyRunning) {
+                scheduleRestart(HEAL_SETTLE_MS, "auto-reparacion por tunel sin trafico")
+            } else {
+                startVpn()
+            }
         } else if (action == "RESTART_VPN") {
             val isCurrentlyRunning = synchronized(lifecycleLock) { running }
             if (isCurrentlyRunning) {
-                android.util.Log.i("KosherVPN", "Forzando reinicio de VPN por cambio de reglas DNS.")
-                stopVpn()
+                scheduleRestart(RESTART_SETTLE_MS, "reinicio pedido explicitamente")
+            } else {
+                startVpn()
             }
-            startVpn()
         } else {
             startVpn()
         }
@@ -183,6 +430,17 @@ class KosherVpnService : VpnService() {
     private fun startVpn() {
         synchronized(lifecycleLock) {
             if (running) return
+        }
+        // Hay un reestablecimiento con espera en curso: no adelantarse. Ver
+        // `restartPendingUntilMs` y el comentario largo de `scheduleRestart()`.
+        val pendingUntil = restartPendingUntilMs
+        if (pendingUntil != 0L && android.os.SystemClock.elapsedRealtime() < pendingUntil) {
+            android.util.Log.i(
+                "KosherVPN",
+                "Arranque ignorado: hay un reestablecimiento en curso esperando que se " +
+                    "libere la interfaz anterior."
+            )
+            return
         }
         try {
             startForeground(9002, buildNotification())
@@ -290,12 +548,12 @@ class KosherVpnService : VpnService() {
     private fun buildTunnel(mtu: Int): Builder {
         val builder = Builder()
             .setSession("Filtro Kosher DNS")
-            .addAddress("10.0.0.2", 32)
-            .addDnsServer("10.0.0.1")
-            .addRoute("10.0.0.1", 32) // Captura todas las consultas dirigidas al DNS virtual IPv4
-            .addAddress("fd00::2", 128)
-            .addDnsServer("fd00::1")
-            .addRoute("fd00::1", 128) // Captura todas las consultas dirigidas al DNS virtual IPv6
+            .addAddress(TUNNEL_ADDR_V4, 32)
+            .addDnsServer(TUNNEL_DNS_V4)
+            .addRoute(TUNNEL_DNS_V4, 32) // Captura todas las consultas dirigidas al DNS virtual IPv4
+            .addAddress(TUNNEL_ADDR_V6, 128)
+            .addDnsServer(TUNNEL_DNS_V6)
+            .addRoute(TUNNEL_DNS_V6, 128) // Captura todas las consultas dirigidas al DNS virtual IPv6
             .setBlocking(true)
             .setMtu(mtu)
 
@@ -351,6 +609,14 @@ class KosherVpnService : VpnService() {
             // arranque protegido para que levante el bloqueo preventivo de red.
             com.ejemplo.locksuite.util.BootGate.onFilterReady(applicationContext)
 
+            // Los contadores de salud arrancan de cero con CADA túnel, y el reloj de
+            // gracia arranca acá y no en establish(): lo que hay que medir es "desde que
+            // este túnel está leyendo", no "desde que el servicio arrancó". Ver el bloque
+            // SALUD DEL TÚNEL del companion.
+            tunnelPacketsIn.set(0L)
+            tunnelResponsesOut.set(0L)
+            tunnelReadyAtMs = android.os.SystemClock.elapsedRealtime()
+
             while (running) {
                 val length = tunnelInput.read(buffer)
                 if (length < 0) {
@@ -365,6 +631,12 @@ class KosherVpnService : VpnService() {
                     }
                     continue
                 }
+
+                // Se cuenta ANTES de parsear, y se cuentan TODOS los paquetes, no solo los
+                // DNS: lo que este contador tiene que probar es que el sistema le está
+                // enrutando tráfico a la interfaz. Si el número se queda en cero, el
+                // problema no es el filtro sino el enrutamiento (ver SALUD DEL TÚNEL).
+                tunnelPacketsIn.incrementAndGet()
 
                 if (VERBOSE) {
                     android.util.Log.i("KosherVPN", "TUN_READ: len=$length version=${(buffer[0].toInt() and 0xFF) shr 4}")
@@ -401,13 +673,6 @@ class KosherVpnService : VpnService() {
         } catch (e: Exception) {
             android.util.Log.e("KosherVPN", "Error en bucle de filtrado VPN: ${e.message}")
         } finally {
-            try {
-                input?.close()
-                output?.close()
-            } catch (e: Exception) {
-                android.util.Log.w("KosherVPN", "Error cerrando la interfaz VPN", e)
-            }
-
             // Si el hilo termina inesperadamente, no dejar el servicio marcado como
             // activo. Así el watchdog puede iniciarlo de nuevo en vez de conservar
             // una notificación sin filtro real.
@@ -415,12 +680,30 @@ class KosherVpnService : VpnService() {
                 if (vpnInterface === iface) {
                     running = false
                     isTunnelRunning = false
+                    tunnelReadyAtMs = 0L
                     vpnInterface = null
                     dnsExecutor?.shutdownNow()
                     dnsExecutor = null
                     true
                 } else {
                     false
+                }
+            }
+
+            // ⚠️ EL CIERRE VA DESPUÉS DE LA COMPROBACIÓN DE IDENTIDAD, Y SOLO SI SEGUIMOS
+            // SIENDO EL TÚNEL ACTUAL. `input`/`output` envuelven el descriptor crudo de
+            // `iface` sin duplicarlo. Si este hilo es el de un túnel VIEJO —que es
+            // exactamente lo que pasa en un reestablecimiento— la `ParcelFileDescriptor`
+            // ya la cerró `stopVpn()`, y el sistema puede haberle reasignado ese mismo
+            // número de descriptor al túnel NUEVO: cerrarlo acá cerraría el túnel bueno.
+            // No cerrar no filtra nada, porque el descriptor real ya está cerrado y estos
+            // dos envoltorios quedan como basura para el recolector.
+            if (shouldStopService) {
+                try {
+                    input?.close()
+                    output?.close()
+                } catch (e: Exception) {
+                    android.util.Log.w("KosherVPN", "Error cerrando la interfaz VPN", e)
                 }
             }
             if (shouldStopService) {
@@ -714,12 +997,68 @@ class KosherVpnService : VpnService() {
         return android.os.Process.INVALID_UID
     }
 
-    private fun stopVpn() {
+    /**
+     * ══════════════════════════════════════════════════════════════════════════════
+     * REESTABLECER EL TÚNEL CON UNA ESPERA EN EL MEDIO.
+     *
+     * ⚠️ ESTE ES EL ARREGLO DE LA CAUSA RAÍZ DE "A VECES SE CAE EL INTERNET".
+     * Si alguien viene a "simplificar" esto de vuelta a `stopVpn(); startVpn()`, va a
+     * reintroducir el bug. Vale la pena leer el porqué completo, porque no es obvio.
+     *
+     * QUÉ PASABA. `stopVpn()` cierra el descriptor del túnel, y a partir de ahí el
+     * sistema destruye `tun0` de forma ASINCRÓNICA. `startVpn()` llamaba a `establish()`
+     * en la misma línea, así que el túnel nuevo se creaba mientras el viejo todavía se
+     * estaba muriendo. Android numera la tabla de rutas de cada red como
+     * `1000 + índice de la interfaz`, y ese índice cambia con cada `tun0` nuevo: el
+     * sistema calculaba el número de tabla en un momento y enganchaba la interfaz en
+     * otro. Resultado medido el 6/9/2026 sobre el equipo del dueño (Galaxy A06,
+     * Android 16):
+     *
+     *     58: tun0            ← la interfaz viva tiene índice 58, o sea tabla 1058
+     *     13000: ... uidrange 0-10222  lookup 1057   ← las reglas apuntan a la 1057
+     *     (la tabla 1057 no aparece ni una vez en `ip route show table all`)
+     *
+     * O sea: TODAS las apps del equipo quedan en la red VPN, buscan ruta en una tabla
+     * vacía, caen por descarte a la Wi-Fi, y la consulta al DNS virtual sale por
+     * `wlan0` hacia el router doméstico, que la descarta por ser una IP que no existe
+     * en su LAN. Doce a dieciocho segundos de timeout, todas las consultas, todas las
+     * apps. Ping y TCP por IP directa siguen andando perfecto —la ruta por omisión no
+     * se toca— y LockSuite tampoco se entera, porque está excluida del túnel.
+     *
+     * POR QUÉ ESTO EXPLICA EL DETALLE QUE NADIE PODÍA EXPLICAR. El dueño reportó desde
+     * el primer día que "vuelve apagando y prendiendo la VPN". A mano pasan segundos
+     * entre las dos cosas: la interfaz vieja termina de irse, la nueva se crea sola, y
+     * los dos números coinciden. Por eso siempre funcionó y por eso nunca se pudo
+     * reproducir a pedido: es una carrera.
+     *
+     * QUÉ SE HACE AHORA. Se baja el túnel, se deja que el sistema termine de soltar la
+     * interfaz, y RECIÉN AHÍ se levanta el nuevo. La espera es de segundos y ocurre
+     * solo en un cambio de red, una revocación o una reparación: no cuesta batería.
+     *
+     * `keepForeground` existe para no soltar la notificación de primer plano durante
+     * la espera. Sin eso el proceso queda unos segundos como servicio común y el
+     * sistema lo puede degradar justo en el peor momento.
+     * ══════════════════════════════════════════════════════════════════════════════
+     */
+    private fun scheduleRestart(settleMs: Long, reason: String) {
+        android.util.Log.i(
+            "KosherVPN",
+            "Reestableciendo tunel ($reason). Espera de $settleMs ms para que el sistema " +
+                "libere la interfaz anterior antes de crear la nueva."
+        )
+        restartPendingUntilMs = android.os.SystemClock.elapsedRealtime() + settleMs
+        restartHandler.removeCallbacks(pendingStart)
+        stopVpn(keepForeground = true)
+        restartHandler.postDelayed(pendingStart, settleMs)
+    }
+
+    private fun stopVpn(keepForeground: Boolean = false) {
         val interfaceToClose: ParcelFileDescriptor?
         val executorToStop: java.util.concurrent.ExecutorService?
         synchronized(lifecycleLock) {
             running = false
             isTunnelRunning = false
+            tunnelReadyAtMs = 0L
             executorToStop = dnsExecutor
             dnsExecutor = null
             interfaceToClose = vpnInterface
@@ -735,7 +1074,9 @@ class KosherVpnService : VpnService() {
         } catch (e: Exception) {
             android.util.Log.w("KosherVPN", "Error cerrando interfaz VPN", e)
         }
-        stopForeground(true)
+        if (!keepForeground) {
+            stopForeground(true)
+        }
         android.util.Log.i("KosherVPN", "Servicio VPN detenido.")
     }
 
@@ -833,9 +1174,9 @@ class KosherVpnService : VpnService() {
         if (now - lastNetworkRestartAtMs < 8000) return false
         lastNetworkRestartAtMs = now
 
-        android.util.Log.i("KosherVPN", "Reestableciendo tunel VPN tras cambio de conectividad.")
-        stopVpn()
-        startVpn()
+        // 6/9/2026: antes acá había un `stopVpn(); startVpn()` pegados. Ese par era la
+        // causa raíz de "se cae el internet": ver el comentario largo de scheduleRestart().
+        scheduleRestart(RESTART_SETTLE_MS, "cambio de conectividad")
         return true
     }
 
@@ -846,12 +1187,17 @@ class KosherVpnService : VpnService() {
      * inmediato en vez de esperar al proximo ciclo del Watchdog (hasta 20s).
      */
     override fun onRevoke() {
-        android.util.Log.w("KosherVPN", "onRevoke(): la VPN fue revocada externamente. Reintentando de inmediato.")
-        stopVpn()
-        startVpn()
+        // 6/9/2026: acá también estaba el `stopVpn(); startVpn()` pegado. Y este caso es
+        // el PEOR de los tres para hacerlo así, porque `onRevoke()` significa que el
+        // sistema ya está desmontando la interfaz por su cuenta: crear la nueva encima
+        // es pisarse con el propio desmontaje. Ver scheduleRestart().
+        android.util.Log.w("KosherVPN", "onRevoke(): la VPN fue revocada externamente. Reestableciendo.")
+        scheduleRestart(RESTART_SETTLE_MS, "la VPN fue revocada externamente")
     }
 
     override fun onDestroy() {
+        restartHandler.removeCallbacks(pendingStart)
+        restartPendingUntilMs = 0L
         unregisterNetworkWatcher()
         stopVpn()
         super.onDestroy()

@@ -569,6 +569,17 @@ object FirebaseDeviceSync {
                     "bootGateWaitAccessibility" to policyManager.isBootGateWaitAccessibilityEnabled(),
                     "bootGateLastResult" to com.ejemplo.locksuite.util.BootGate.lastResult(context),
 
+                    // Salud del túnel DNS (6/9/2026, B.49). Misma filosofía que B.34: el
+                    // síntoma "se cae el internet" tuvo cinco causas distintas y en las
+                    // cinco el panel mostró el filtro en verde, porque lo único que se
+                    // reportaba era si el servicio estaba vivo. Estos tres campos dicen si
+                    // está SIRVIENDO: `SIN_CAPTURA` significa que el sistema no le está
+                    // enrutando tráfico al túnel (el equipo se quedó sin DNS), `SIN_SALIDA`
+                    // que entra tráfico pero no se puede resolver hacia afuera.
+                    "dnsTunnelHealth" to com.ejemplo.locksuite.service.KosherVpnService.tunnelHealth(context),
+                    "dnsTunnelPacketsIn" to com.ejemplo.locksuite.service.KosherVpnService.tunnelPacketsIn.get(),
+                    "dnsTunnelHeals" to com.ejemplo.locksuite.service.KosherVpnService.tunnelHeals,
+
                     // Bloqueo de imágenes
                     "imageStrictScroll" to policyManager.isImageBlockStrictScrollEnabled(),
 

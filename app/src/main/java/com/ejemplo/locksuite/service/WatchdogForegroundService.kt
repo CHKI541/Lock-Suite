@@ -206,6 +206,23 @@ class WatchdogForegroundService : Service() {
                 applicationContext, forceServiceRestart
             )
 
+            // ── SALUD DEL TÚNEL (6/9/2026, B.49) ──────────────────────────────────────
+            // `ensureVpnRunning` de arriba responde "¿el servicio está vivo?". Esto
+            // responde la pregunta que faltaba: "¿el túnel está recibiendo tráfico de
+            // verdad?". No son lo mismo, y esa diferencia es la que dejó al equipo del
+            // dueño sin internet con LockSuite reportando todo en verde: el hilo lector
+            // estaba vivo y bloqueado en read(), sobre una interfaz a la que el sistema
+            // no le enrutaba ni un paquete.
+            //
+            // En el caso normal esto son dos lecturas atómicas y una resta. Solo cuando
+            // detecta algo consulta el estado de pantalla y de red, y recién ahí pide la
+            // reparación. Ver KosherVpnService.tunnelHealth()/healIfBroken().
+            try {
+                com.ejemplo.locksuite.service.KosherVpnService.healIfBroken(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             // Garantizar que la marca de agua flotante siga ejecutándose si el launcher está activo
             try {
                 if (forceServiceRestart || !WatermarkService.isRunning) {

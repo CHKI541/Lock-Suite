@@ -73,8 +73,15 @@ class DomainRuleManager(
     private fun refreshVpnState() {
         try {
             if (com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(context)) {
+                // 6/9/2026 (B.49): antes acá iba "RESTART_VPN", o sea que tocar UNA regla
+                // DNS tiraba abajo el túnel entero. Rehacer el túnel para recargar un Trie
+                // que se lee en memoria no aporta nada y sí cuesta: unos segundos sin que
+                // ninguna app del equipo pueda resolver, más el riesgo de la carrera de
+                // reestablecimiento que dejaba al equipo sin DNS (ver scheduleRestart()
+                // en KosherVpnService). "RELOAD_RULES" recarga en caliente, y si la VPN
+                // no estaba corriendo la arranca igual.
                 val vpnIntent = android.content.Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
-                    action = "RESTART_VPN"
+                    action = "RELOAD_RULES"
                 }
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                     context.startForegroundService(vpnIntent)

@@ -1,5 +1,5 @@
 import { appState, saveSessionState, clearSessionState, restoreSessionState } from './state.js';
-import { executeAdbCommand, wait } from './adb-client.js';
+import { executeAdbCommand, wait, checkDeviceMdmAndPackageStatus } from './adb-client.js';
 import { log, showToast, updateStatusBadge, navigateTo } from './ui.js';
 import { PROTECTED_PACKAGES, KNOWN_OFFENDERS, ACCOUNT_PKG_MAP } from './config.js';
 
@@ -546,11 +546,12 @@ export async function checkAccounts() {
     if (listDiv) listDiv.innerHTML = '<div class="account-skeleton-loader"><div class="skeleton-row"></div><div class="skeleton-row"></div></div>';
 
     try {
+        await checkDeviceMdmAndPackageStatus();
         const rawDump = await getAccountDump();
         const accounts = parseActiveAccounts(rawDump);
         const isSdk14 = (appState.sdkVersion || 0) >= 34;
 
-        if (appState.isOtherMdmActive) {
+        if (appState.isOtherMdmActive && appState.activeMdmPackage && appState.activeMdmPackage !== 'null') {
             updateStatusBadge('account-status', '<span class="material-symbols-rounded">gpp_bad</span> קיים מנהל מכשיר', 'error');
             if (nextBtn) nextBtn.disabled = true;
             appState.accountsClean = false;

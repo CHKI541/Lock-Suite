@@ -519,7 +519,7 @@ export async function runInstallation() {
         log("בודק מנהל מכשיר ותקינות מקדימה...", 'info');
         const mdmStatus = await checkDeviceMdmAndPackageStatus(CONFIG.TARGET_PACKAGE);
 
-        if (mdmStatus.isOtherMdmActive) {
+        if (mdmStatus.isOtherMdmActive && mdmStatus.activeMdmPackage && mdmStatus.activeMdmPackage !== 'null') {
             const foreignPkg = mdmStatus.activeMdmPackage || "לא מזוהה";
             throw new Error(`קיים מנהל מכשיר (MDM) אחר על המכשיר (${foreignPkg}). מערכת Android אינה מאפשרת הגדרת מנהל נוסף ללא איפוס יצרן (Factory Reset).`);
         }

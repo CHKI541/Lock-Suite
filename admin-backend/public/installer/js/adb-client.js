@@ -195,6 +195,16 @@ export function parseDisconnectOrRejectionReason(rawError) {
     return rawError;
 }
 
+const KNOWN_SYSTEM_ADMINS = [
+    'com.samsung.android.kgclient',
+    'com.sec.enterprise.knox.cloudmdm.smdms',
+    'com.samsung.android.knox.containercore',
+    'com.sec.knox.kccagent',
+    'com.google.android.apps.work.oobconfig',
+    'com.google.android.gms',
+    'android'
+];
+
 /**
  * Dynamically parse dumpsys device_policy output to extract Device Owner, Profile Owners, and active admins
  */
@@ -214,28 +224,42 @@ export function parseDevicePolicyDump(dumpsysOutput, targetPackage = CONFIG.TARG
         return result;
     }
 
-    // 1. Dynamic Device Owner Detection across multiple Android dumpsys formats
-    const doSectionMatch = dumpsysOutput.match(/Device Owner(?:\s*\([^)]*\))?:[\s\S]*?(?:(?:\r?\n\s*\r?\n)|(?:Profile Owner)|(?:Active Admins)|$)/i);
-    const doText = doSectionMatch ? doSectionMatch[0] : dumpsysOutput;
+    // 1. Strictly extract the "Device Owner" section.
+    // The section starts with "Device Owner" (or "Device Owner (User X)") and terminates at the next top-level section:
+    // e.g., "\n  Profile Owner", "\n  Enabled Device Admins", "\n  Pending System Update", etc.
+    const doSectionRegex = /(?:^|\r?\n)\s*Device Owner(?:\s*\([^)]*\))?:\s*([^\r\n]*)([\s\S]*?)(?=(?:\r?\n\s{0,2}[A-Z][A-Za-z0-9_\s]+(?:\([^)]*\))?:)|$)/i;
+    const match = dumpsysOutput.match(doSectionRegex);
 
-    let compMatch = doText.match(/admin=ComponentInfo\{([^}]+)\}/i) 
-        || doText.match(/ComponentInfo\{([^}]+)\}/i)
-        || dumpsysOutput.match(/Device Owner[\s\S]*?admin=ComponentInfo\{([^}]+)\}/i)
-        || dumpsysOutput.match(/Device Owner[\s\S]*?ComponentInfo\{([^}]+)\}/i);
+    if (match) {
+        const headerValue = (match[1] || '').trim();
+        const bodyValue = match[2] || '';
+        const fullSection = (headerValue + '\n' + bodyValue).trim();
 
-    let pkgMatch = doText.match(/package=([^\s\r\n]+)/i);
+        const lowerSection = fullSection.toLowerCase();
+        const isExplicitNull = headerValue.toLowerCase() === 'null' || headerValue.toLowerCase() === 'none' || headerValue === '-1' || lowerSection === 'null';
 
-    if (compMatch && compMatch[1]) {
-        const fullComp = compMatch[1].trim();
-        const pkg = fullComp.includes('/') ? fullComp.split('/')[0].trim() : fullComp;
-        result.hasDeviceOwner = true;
-        result.deviceOwnerComponent = fullComp;
-        result.deviceOwnerPackage = pkg;
-    } else if (pkgMatch && pkgMatch[1]) {
-        const pkg = pkgMatch[1].trim();
-        result.hasDeviceOwner = true;
-        result.deviceOwnerPackage = pkg;
-        result.deviceOwnerComponent = pkg;
+        if (!isExplicitNull && fullSection.length > 0) {
+            const compMatch = fullSection.match(/admin=ComponentInfo\{([^}]+)\}/i) 
+                || fullSection.match(/ComponentInfo\{([^}]+)\}/i);
+            const pkgMatch = fullSection.match(/package=([^\s\r\n]+)/i);
+
+            let component = null;
+            let pkg = null;
+
+            if (compMatch && compMatch[1]) {
+                component = compMatch[1].trim();
+                pkg = component.includes('/') ? component.split('/')[0].trim() : component;
+            } else if (pkgMatch && pkgMatch[1]) {
+                pkg = pkgMatch[1].trim();
+                component = pkg;
+            }
+
+            if (pkg && pkg.toLowerCase() !== 'null' && pkg.toLowerCase() !== 'none' && !KNOWN_SYSTEM_ADMINS.includes(pkg)) {
+                result.hasDeviceOwner = true;
+                result.deviceOwnerComponent = component;
+                result.deviceOwnerPackage = pkg;
+            }
+        }
     }
 
     // 2. Classify Device Owner

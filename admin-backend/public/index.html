@@ -60,6 +60,7 @@
           <button id="main-tab-archived" class="main-nav-btn" type="button">📦 Archivados</button>
           <button id="main-tab-presets" class="main-nav-btn" type="button">📋 Perfiles</button>
           <button id="main-tab-global-settings" class="main-nav-btn" type="button">⚙️ Ajustes</button>
+          <button id="main-tab-whitelist" class="main-nav-btn" type="button">🛡️ Lista blanca</button>
         </div>
 
         <main id="devices-container">
@@ -144,6 +145,60 @@
             <div id="store-apps-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
               <p class="loading-text">Cargando aplicaciones de la tienda…</p>
             </div>
+          </div>
+        </div>
+
+        <!-- ════════════════════════════════════════════════════════════════
+             MODO LISTA BLANCA (8/9/2026)
+
+             El catálogo es GLOBAL: la condición kosher de una app no cambia de
+             un celular a otro. Lo que sí es por dispositivo son los
+             interruptores (encendido / simulación), que están en la pestaña
+             "Políticas" de cada equipo.
+             ════════════════════════════════════════════════════════════════ -->
+        <div id="whitelist-container" class="hidden">
+          <div class="sidebar-card" style="margin-bottom: 24px;">
+            <h2>🛡️ Lista blanca — catálogo de apps</h2>
+            <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
+              <strong>Permitir</strong> una app hace tres cosas de un toque: se puede descargar de tu tienda,
+              no queda oculta ni suspendida en el celular, y sus dominios resuelven.
+              <strong>Prohibir</strong> hace las tres al revés.
+              Una app <strong>sin marcar</strong> no se toca, pero no tiene ningún dominio abierto: con el
+              filtro estricto encendido, se queda sin internet.
+            </p>
+            <p class="hint-text" style="font-size: 12px; color: var(--accent); margin-bottom: 16px;">
+              ⚠️ Antes de pasar un equipo a estricto, dejalo unos días en <strong>simulación</strong> y revisá
+              la auditoría en su pestaña Políticas: ahí aparece, dominio por dominio, lo que se habría
+              bloqueado. Ninguna lista escrita de antemano está completa.
+            </p>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+              <input type="text" id="whitelist-filter" placeholder="Buscar app…" style="flex:1; min-width:180px; background: var(--navy-dark); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px;" />
+              <button id="whitelist-push-all-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight: bold; border: none; padding: 9px 16px; border-radius: 8px; cursor: pointer;">📤 Enviar a todos los celulares</button>
+            </div>
+            <p id="whitelist-status-msg" style="font-size: 12px; margin-bottom: 12px; min-height: 18px; color: var(--accent);"></p>
+
+            <div id="whitelist-apps-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px;">
+              <p class="loading-text" style="grid-column:1/-1;">Cargando catálogo…</p>
+            </div>
+          </div>
+
+          <!-- Agregar una app que no está en el catálogo de fábrica -->
+          <div class="sidebar-card">
+            <h2>Agregar una app que no está en la lista</h2>
+            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-top: 4px; margin-bottom: 16px;">
+              Poné el paquete y los dominios que querés permitirle. Los subdominios se heredan solos:
+              con <code>ejemplo.com</code> ya entran <code>api.ejemplo.com</code> y <code>www.ejemplo.com</code>.
+              En "dominios prohibidos" van las partes no kosher de una app por lo demás aceptable —
+              se aplican aunque la app esté permitida.
+            </p>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:12px;">
+              <input type="text" id="wl-custom-label" placeholder="Nombre (ej: Banco Ciudad)" style="background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px; font-size:13px;" />
+              <input type="text" id="wl-custom-package" placeholder="Paquete (ej: ar.com.bancociudad)" style="background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px; font-size:13px;" />
+            </div>
+            <input type="text" id="wl-custom-allow" placeholder="Dominios permitidos, separados por coma" style="width:100%; box-sizing:border-box; background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px; font-size:13px; margin-bottom:12px;" />
+            <input type="text" id="wl-custom-block" placeholder="Dominios prohibidos (opcional), separados por coma" style="width:100%; box-sizing:border-box; background: var(--navy-medium); border: 1px solid var(--navy-light); color: var(--text-light); padding: 9px 12px; border-radius: 8px; font-size:13px; margin-bottom:16px;" />
+            <button id="wl-custom-add-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight:bold; border:none; padding:10px 16px; border-radius:8px; cursor:pointer; font-size:13px;">➕ Agregar al catálogo</button>
           </div>
         </div>
       </div>
@@ -340,6 +395,42 @@
                 <label class="toggle-row"><span>Aviso insistente cada ~18 s si está apagada</span><input type="checkbox" class="policy-switch" data-policy="accNag" /></label>
                 <label class="toggle-row"><span>Suspender TODAS las apps mientras esté apagada</span><input type="checkbox" class="policy-switch" data-policy="accSuspendAll" /></label>
                 <label class="toggle-row"><span>Arranque protegido: esperar también a la Accesibilidad</span><input type="checkbox" class="policy-switch" data-policy="bootGateWaitAccessibility" /></label>
+              </div>
+            </div>
+
+            <!-- ══ MODO LISTA BLANCA (8/9/2026) — por dispositivo ══ -->
+            <div class="sidebar-card" id="whitelist-device-card">
+              <h3 style="margin-top:0;">🛡️ Modo lista blanca</h3>
+              <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 12px;">
+                Filtro estricto: <strong>solo resuelven los dominios de las apps permitidas</strong>. Lo demás
+                queda sin internet, incluidas las apps que no marcaste. El catálogo (qué apps, qué dominios)
+                se edita una sola vez en la pestaña <strong>🛡️ Lista blanca</strong> de arriba y vale para
+                todos los equipos; acá se decide si ESTE equipo lo aplica y con qué dureza.
+                <br /><br />
+                <strong>Empezá siempre en simulación.</strong> No bloquea nada: anota lo que se habría
+                bloqueado y lo publica abajo. Con eso completás el catálogo mirando datos reales en vez de
+                adivinar. Ninguna lista escrita de antemano está completa — eso es parte del diseño.
+                <br /><br />
+                Para permitir o prohibir un dominio suelto, usá <strong>forzar permitir / forzar prohibir</strong>
+                de la sección DNS: esas dos reglas le ganan a la lista blanca y a la infraestructura.
+              </p>
+              <div class="toggle-list">
+                <label class="toggle-row"><span>Activar el filtro de lista blanca</span><input type="checkbox" class="policy-switch" data-policy="whitelistEnabled" /></label>
+                <label class="toggle-row"><span style="padding-left:14px;">↳ <strong>Bloquear de verdad</strong> (apagado = solo simular)</span><input type="checkbox" class="policy-switch" data-policy="whitelistEnforce" /></label>
+                <label class="toggle-row"><span style="padding-left:14px;">↳ Permitir CDN compartidos (CloudFront, Akamai, Fastly)</span><input type="checkbox" class="policy-switch" data-policy="whitelistSharedCdn" /></label>
+              </div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; margin: 12px 0;">
+                <button class="action-btn wl-device-btn" data-cmd="SYNC_WHITELIST" style="background: var(--navy-light); color: var(--text-light); border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:12px;">🔄 Sincronizar catálogo</button>
+                <button class="action-btn wl-device-btn" data-cmd="CLEAR_WHITELIST_AUDIT" style="background: var(--navy-light); color: var(--text-light); border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:12px;">🧹 Limpiar auditoría</button>
+              </div>
+              <p id="whitelist-device-summary" style="font-size:12px; color: var(--text-gray); margin: 8px 0;"></p>
+              <h4 style="margin: 14px 0 6px; font-size: 13px;">Dominios que quedaron afuera</h4>
+              <p class="hint-text" style="font-size: 11px; color: var(--text-gray); margin-bottom: 8px;">
+                Si una app que querés permitir dejó de andar, su dominio está acá. "Agregar a…" lo suma al
+                catálogo global de esa app, así queda arreglado para toda la flota de una.
+              </p>
+              <div id="whitelist-audit-list" style="max-height: 320px; overflow-y: auto;">
+                <p class="loading-text" style="font-size:12px;">Sin datos todavía.</p>
               </div>
             </div>
 
@@ -728,6 +819,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=30"></script>
+  <script src="app.js?v=31"></script>
 </body>
 </html>

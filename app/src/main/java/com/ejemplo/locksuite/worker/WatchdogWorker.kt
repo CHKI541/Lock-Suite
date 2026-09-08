@@ -129,6 +129,20 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             }
         }
 
+        // Auditoría de la lista blanca (8/9/2026). Va en TODAS las vueltas, no una de
+        // cada cuatro, y no contradice lo de arriba: cuando no cambió nada,
+        // syncWhitelistState() se da cuenta por la firma y escribe seis campos en vez
+        // del nodo grande. Va seguido porque es lo que el administrador está mirando
+        // mientras corre la simulación, y esperar una hora para ver qué se bloqueó
+        // convierte diez minutos de trabajo en una tarde.
+        try {
+            if (com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).isEnabled()) {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(applicationContext)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         return Result.success()
     }
 }

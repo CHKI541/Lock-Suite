@@ -773,6 +773,82 @@ class KosherVpnService : VpnService() {
             else -> normalCustomRule = customRule
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // MODO LISTA BLANCA (8/9/2026). Ver mdm/WhitelistManager.kt.
+        // ─────────────────────────────────────────────────────────────────────
+        //
+        // Va acá, inmediatamente DESPUÉS de las reglas forzadas y ANTES de todo lo
+        // demás, y esa posición es la definición misma de las prioridades:
+        //
+        //  · Después de FORCE_*: el "forzar permitir/prohibir" de la sección DNS sigue
+        //    siendo la palabra final del administrador, incluso sobre la infraestructura.
+        //    Es la salida de emergencia y tiene que estar arriba de todo.
+        //  · Antes del resto: con la lista blanca encendida, un dominio que no está
+        //    listado no llega a discutirse con el adblock ni con la lista negra de
+        //    WebView — no está permitido y punto. Y de paso el camino caliente se acorta:
+        //    una resolución de Trie en vez de la cadena entera.
+        //
+        // El costo por consulta con el modo APAGADO es una resolución de Trie sobre un
+        // árbol chico (infraestructura + bloqueos fijos), sin locks, sin leer
+        // preferencias y sin construir objetos. Se paga igual porque es lo que arregla
+        // B.52: la lista negra global de WebView tiene `google.com` adentro y se aplica
+        // a TODO el equipo, así que `mtalk.google.com` (el canal de comandos del panel)
+        // caía bajo ese sufijo. La infraestructura ahora le gana.
+        val whitelistDecision = com.ejemplo.locksuite.mdm.WhitelistManager.decide(queriedDomain)
+        val whitelistOn = com.ejemplo.locksuite.mdm.WhitelistManager.isEnabledCached()
+        val whitelistSimulating = com.ejemplo.locksuite.mdm.WhitelistManager.isSimulationCached()
+
+        if (whitelistDecision == com.ejemplo.locksuite.dns.RuleType.BLOCK) {
+            // Dominio de una app prohibida, o un bloqueo fijo (Tenor, YouTube por API).
+            // Rige tenga o no encendido el modo: prohibir una app tiene que servir por
+            // sí solo, sin obligar a activar el filtro estricto de todo el equipo.
+            // NO se anota en la auditoría a propósito. La auditoría contesta una sola
+            // pregunta —"¿qué dominio le faltó a una app que quiero permitir?"— y estos
+            // bloqueos son los DELIBERADOS: los dominios de una app prohibida y los
+            // bloqueos fijos (Tenor, YouTube). Mezclarlos ahí haría que el panel ofrezca
+            // "agregar a la lista" justo sobre lo que se decidió cerrar, que es la forma
+            // más fácil de destapar un bloqueo sin querer.
+            android.util.Log.i("KosherVPN", "🚫 BLOQUEADO LISTA BLANCA dominio=$queriedDomain")
+            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
+            NetworkForwarder.sendBlockedDnsResponse(packet, output)
+            return
+        }
+
+        if (whitelistDecision == com.ejemplo.locksuite.dns.RuleType.FORCE_ALLOW) {
+            // Infraestructura: FCM, Play Store y sus CDN, portal cautivo, hora,
+            // certificados, el propio panel. Se deja pasar SIEMPRE, con el modo
+            // encendido o apagado, porque sin esto el equipo deja de ser rescatable.
+            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.ALLOWED)
+            NetworkForwarder.forwardDnsQuery(packet, output, this)
+            return
+        }
+
+        if (whitelistOn) {
+            if (whitelistDecision == com.ejemplo.locksuite.dns.RuleType.ALLOW) {
+                // Dominio de una app permitida: pasa sin discutir con el resto de la
+                // cadena. Si el administrador lo permitió, permitido está.
+                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.ALLOWED)
+                NetworkForwarder.forwardDnsQuery(packet, output, this)
+                return
+            }
+            // No figura en ninguna lista. Acá es donde el modo hace lo suyo.
+            com.ejemplo.locksuite.mdm.WhitelistManager.recordAudit(queriedDomain)
+            if (whitelistSimulating) {
+                // SIMULACIÓN: no se bloquea nada, solo se anota para el panel. Es lo que
+                // permite completar las listas mirando el equipo real en vez de adivinar.
+                // Se sigue con la cadena normal, así que el equipo se comporta
+                // exactamente como antes de encender el modo.
+                if (VERBOSE) {
+                    android.util.Log.d("KosherVPN", "LISTA BLANCA (simulación) habría bloqueado: $queriedDomain")
+                }
+            } else {
+                android.util.Log.i("KosherVPN", "🚫 BLOQUEADO LISTA BLANCA (no listado) dominio=$queriedDomain de la app=$logPackage")
+                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
+                NetworkForwarder.sendBlockedDnsResponse(packet, output)
+                return
+            }
+        }
+
         // 1. Bloqueo global de anuncios (AdBlocker) si la opción está activa por el administrador
         val isAdBlockerActive = mdmPrefs.getBoolean("global_ad_blocking", false)
         if (isAdBlockerActive && AdBlocker.isBlocked(queriedDomain)) {

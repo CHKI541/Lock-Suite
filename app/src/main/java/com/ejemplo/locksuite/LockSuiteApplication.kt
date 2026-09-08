@@ -114,8 +114,22 @@ class LockSuiteApplication : Application() {
             if (!isStorageUnlocked(context)) return false
             return try {
                 domainRuleManager.loadRules()
+                // La lista blanca viaja en el mismo llamado a propósito: comparte el
+                // momento exacto en que se puede leer el disco, y si se cargara por su
+                // cuenta habría una ventana en la que el filtro DNS ya está resolviendo
+                // con el Trie vacío. Con el Trie vacío la infraestructura no está
+                // marcada, y `mtalk.google.com` vuelve a caer bajo la lista negra
+                // global (B.52) justo durante el arranque, que es cuando el equipo más
+                // necesita recibir comandos.
+                // En su propio try: si la lista blanca fallara, las reglas DNS de
+                // siempre tienen que cargar igual. Nunca al revés.
+                try {
+                    com.ejemplo.locksuite.mdm.WhitelistManager(context.applicationContext).reload()
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "No se pudo cargar la lista blanca: ${e.message}")
+                }
                 rulesLoaded = true
-                android.util.Log.i(TAG, "Reglas DNS cargadas.")
+                android.util.Log.i(TAG, "Reglas DNS y lista blanca cargadas.")
                 true
             } catch (e: Exception) {
                 // Incluye UninitializedPropertyAccessException si alguien llama a esto

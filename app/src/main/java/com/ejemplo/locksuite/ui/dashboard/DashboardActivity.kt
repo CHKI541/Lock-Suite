@@ -420,6 +420,11 @@ fun DashboardScreen(onLogout: () -> Unit) {
                     onClick = { selectedTab = 4 },
                     text = { Text(LocaleManager.t("DNS"), color = if (selectedTab == 4) accentOrange else Color.Gray) }
                 )
+                Tab(
+                    selected = selectedTab == 5,
+                    onClick = { selectedTab = 5 },
+                    text = { Text(LocaleManager.t("Lista blanca"), color = if (selectedTab == 5) accentOrange else Color.Gray) }
+                )
             }
 
             when (selectedTab) {
@@ -432,6 +437,7 @@ fun DashboardScreen(onLogout: () -> Unit) {
                 )
                 3 -> PresetsTabContent(context)
                 4 -> DnsActivityTabContent(context)
+                5 -> WhitelistTabContent(context)
             }
         }
     }
@@ -3243,6 +3249,405 @@ private fun DnsActivityRow(
                 TextButton(onClick = onBlock) {
                     Text("Bloquear", color = Color(0xFFFF5252), fontSize = 11.sp)
                 }
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PESTAÑA "LISTA BLANCA" (8/9/2026) — ver mdm/WhitelistManager.kt
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Pedido del dueño: *"tendría que haber una sección en donde yo active modo lista
+// blanca y tenga una lista de apps que yo pueda permitir o no"*, y que permitir o
+// prohibir sea UN solo toque que arrastre las tres cosas (app, tienda, dominios).
+//
+// Dos decisiones de esta pantalla que conviene no "simplificar":
+//
+// · **El interruptor de simulación va ARRIBA del maestro y se explica en texto.**
+//   Encender el filtro estricto sin haber simulado es la forma más rápida de dejar
+//   un celular a medio funcionar sin saber por qué; la pantalla tiene que decirlo
+//   antes, no después.
+// · **La auditoría se muestra en esta misma pantalla, no solo en el panel.** El que
+//   está probando el equipo lo tiene en la mano: obligarlo a ir a la web para ver
+//   qué se bloqueó convierte diez minutos de trabajo en una tarde.
+
+@Composable
+private fun WhitelistTabContent(context: Context) {
+    val scope = rememberCoroutineScope()
+    val wl = remember { com.ejemplo.locksuite.mdm.WhitelistManager(context) }
+
+    var enabled by remember { mutableStateOf(wl.isEnabled()) }
+    var simulation by remember { mutableStateOf(wl.isSimulation()) }
+    var sharedCdn by remember { mutableStateOf(wl.isSharedCdnAllowed()) }
+    var decisions by remember { mutableStateOf(wl.allDecisions()) }
+    var domainCount by remember { mutableIntStateOf(wl.ruleCount()) }
+    var audit by remember { mutableStateOf(com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()) }
+    var busy by remember { mutableStateOf(false) }
+    var filtro by remember { mutableStateOf("") }
+
+    val accentOrange = Color(0xFFF1C40F)
+    val navyMedium = Color(0xFF1E3E62)
+
+    fun refresh() {
+        decisions = wl.allDecisions()
+        domainCount = wl.ruleCount()
+        audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
+    }
+
+    // La auditoría se refresca sola mientras la pantalla está abierta: durante la
+    // simulación es un contador vivo y mirarlo es justamente lo que hay que hacer.
+    LaunchedEffect(enabled) {
+        while (true) {
+            kotlinx.coroutines.delay(3000)
+            audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
+        }
+    }
+
+    val instaladas = remember {
+        com.ejemplo.locksuite.mdm.WhitelistCatalog.APPS.associate { entry ->
+            entry.packageName to try {
+                context.packageManager.getPackageInfo(entry.packageName, 0)
+                true
+            } catch (e: Exception) {
+                false
+            }
+        }
+    }
+
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+
+        item {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    LocaleManager.t("Modo lista blanca"),
+                    color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    LocaleManager.t(
+                        "Solo resuelven los dominios de las apps que permitas. Todo lo demás " +
+                        "queda sin internet, incluidas las apps que no marcaste."
+                    ),
+                    color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp
+                )
+            }
+        }
+
+        // ── Paso 1: simulación ──
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                colors = CardDefaults.cardColors(containerColor = navyMedium)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                if (simulation) LocaleManager.t("Paso 1 — Modo simulación (no bloquea nada)")
+                                else LocaleManager.t("Modo estricto (bloquea de verdad)"),
+                                color = if (simulation) accentOrange else Color(0xFFFF5252),
+                                fontWeight = FontWeight.Bold, fontSize = 15.sp
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (simulation) LocaleManager.t(
+                                    "Anota qué SE HABRÍA bloqueado, sin bloquearlo. Usá el celular " +
+                                    "normalmente unos días, revisá la lista de abajo y agregá lo que falte. " +
+                                    "Recién entonces pasá a estricto."
+                                ) else LocaleManager.t(
+                                    "Todo lo que no esté en la lista deja de resolver AHORA. Si una app " +
+                                    "deja de andar, va a aparecer abajo el dominio que le faltó."
+                                ),
+                                color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp
+                            )
+                        }
+                        Switch(
+                            checked = !simulation,
+                            onCheckedChange = { estricto ->
+                                simulation = !estricto
+                                wl.setSimulation(!estricto)
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFFF5252))
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── Maestro ──
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                colors = CardDefaults.cardColors(containerColor = navyMedium)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                LocaleManager.t("Activar el filtro de lista blanca"),
+                                color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp
+                            )
+                            Text(
+                                LocaleManager.t("Dominios cargados") + ": $domainCount",
+                                color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp
+                            )
+                        }
+                        Switch(
+                            checked = enabled,
+                            onCheckedChange = {
+                                enabled = it
+                                wl.setEnabled(it)
+                                refresh()
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = accentOrange)
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                LocaleManager.t("Permitir CDN compartidos"),
+                                color = Color.White, fontSize = 14.sp
+                            )
+                            Text(
+                                LocaleManager.t(
+                                    "CloudFront, Akamai, Fastly. Varias apps los necesitan, pero " +
+                                    "permiten una porción grande de internet. Apagalo para endurecer."
+                                ),
+                                color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = sharedCdn,
+                            onCheckedChange = {
+                                sharedCdn = it
+                                wl.setSharedCdnAllowed(it)
+                                domainCount = wl.ruleCount()
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = accentOrange)
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── Auditoría ──
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                colors = CardDefaults.cardColors(containerColor = navyMedium)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (simulation) LocaleManager.t("Se habría bloqueado")
+                            else LocaleManager.t("Bloqueado por la lista blanca"),
+                            color = Color.White, fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp, modifier = Modifier.weight(1f)
+                        )
+                        Text("${audit.size}", color = accentOrange, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = {
+                            com.ejemplo.locksuite.mdm.WhitelistManager.clearAudit()
+                            audit = emptyList()
+                        }) { Text(LocaleManager.t("Limpiar"), color = Color(0xFFFF5252), fontSize = 11.sp) }
+                    }
+                    if (audit.isEmpty()) {
+                        Text(
+                            if (enabled) LocaleManager.t("Nada bloqueado todavía. Usá el celular un rato.")
+                            else LocaleManager.t("Activá el filtro para empezar a registrar."),
+                            color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp
+                        )
+                    } else {
+                        Text(
+                            LocaleManager.t(
+                                "Cada línea es un dominio que alguna app pidió y no está en ninguna lista. " +
+                                "Si una app que querés permitir dejó de andar, su dominio está acá."
+                            ),
+                            color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        audit.take(40).forEach { (dominio, golpes) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(dominio, color = Color.White, fontSize = 12.sp, maxLines = 1)
+                                    Text(
+                                        "$golpes " + LocaleManager.t("intento(s)"),
+                                        color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp
+                                    )
+                                }
+                                // Atajo: mandarlo directo a "forzar permitir" de la sección DNS.
+                                // Es la salida rápida cuando hace falta destrabar algo YA; lo
+                                // ordenado es agregarlo a la app que corresponda desde el panel.
+                                TextButton(onClick = {
+                                    try {
+                                        com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager
+                                            .setRule(dominio, RuleType.FORCE_ALLOW)
+                                        Toast.makeText(
+                                            context,
+                                            LocaleManager.t("Permitido a la fuerza") + ": $dominio",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }) {
+                                    Text(LocaleManager.t("Permitir"), color = Color(0xFF69F0AE), fontSize = 11.sp)
+                                }
+                            }
+                        }
+                        if (audit.size > 40) {
+                            Text(
+                                LocaleManager.t("…y") + " ${audit.size - 40} " + LocaleManager.t("más (se ven todos en el panel)"),
+                                color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Buscador ──
+        item {
+            OutlinedTextField(
+                value = filtro,
+                onValueChange = { filtro = it },
+                label = { Text(LocaleManager.t("Buscar app"), color = Color.White.copy(alpha = 0.8f)) },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = accentOrange,
+                    unfocusedBorderColor = Color.White.copy(alpha = 0.4f),
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+
+        // ── Catálogo de apps ──
+        val visibles = com.ejemplo.locksuite.mdm.WhitelistCatalog.APPS.filter {
+            filtro.isBlank() ||
+                it.label.contains(filtro, ignoreCase = true) ||
+                it.packageName.contains(filtro, ignoreCase = true)
+        }
+
+        items(visibles) { entry ->
+            val estado = decisions[entry.packageName]
+                ?: com.ejemplo.locksuite.mdm.WhitelistManager.STATE_UNSET
+            WhitelistAppRow(
+                label = entry.label,
+                packageName = entry.packageName,
+                allowCount = entry.allow.size,
+                blockCount = entry.block.size,
+                note = entry.note,
+                installed = instaladas[entry.packageName] == true,
+                state = estado,
+                busy = busy,
+                onAllow = {
+                    busy = true
+                    scope.launch {
+                        withContext(Dispatchers.IO) { wl.allowApp(entry.packageName) }
+                        refresh(); busy = false
+                    }
+                },
+                onBlock = {
+                    busy = true
+                    scope.launch {
+                        withContext(Dispatchers.IO) { wl.blockApp(entry.packageName) }
+                        refresh(); busy = false
+                    }
+                },
+                onUnset = {
+                    busy = true
+                    scope.launch {
+                        withContext(Dispatchers.IO) { wl.unsetApp(entry.packageName) }
+                        refresh(); busy = false
+                    }
+                }
+            )
+        }
+
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun WhitelistAppRow(
+    label: String,
+    packageName: String,
+    allowCount: Int,
+    blockCount: Int,
+    note: String,
+    installed: Boolean,
+    state: String,
+    busy: Boolean,
+    onAllow: () -> Unit,
+    onBlock: () -> Unit,
+    onUnset: () -> Unit
+) {
+    val permitida = state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW
+    val prohibida = state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        if (!installed) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                LocaleManager.t("(no instalada)"),
+                                color = Color.White.copy(alpha = 0.45f), fontSize = 11.sp
+                            )
+                        }
+                    }
+                    Text(packageName, color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp, maxLines = 1)
+                    Text(
+                        "$allowCount " + LocaleManager.t("dominios permitidos") +
+                            if (blockCount > 0) " · $blockCount " + LocaleManager.t("bloqueados") else "",
+                        color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp
+                    )
+                }
+                val (texto, color) = when {
+                    permitida -> LocaleManager.t("Permitida") to Color(0xFF69F0AE)
+                    prohibida -> LocaleManager.t("Prohibida") to Color(0xFFFF5252)
+                    else -> LocaleManager.t("Sin marcar") to Color.White.copy(alpha = 0.5f)
+                }
+                Text(texto, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            if (note.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(note, color = Color(0xFFFFD180), fontSize = 11.sp)
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onAllow,
+                    enabled = !busy && !permitida,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                    modifier = Modifier.weight(1f)
+                ) { Text(LocaleManager.t("Permitir"), fontSize = 12.sp, color = Color.White) }
+                Button(
+                    onClick = onBlock,
+                    enabled = !busy && !prohibida,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
+                    modifier = Modifier.weight(1f)
+                ) { Text(LocaleManager.t("Prohibir"), fontSize = 12.sp, color = Color.White) }
+                if (permitida || prohibida) {
+                    TextButton(onClick = onUnset, enabled = !busy) {
+                        Text(LocaleManager.t("Quitar"), color = Color(0xFFFFD180), fontSize = 11.sp)
+                    }
+                }
+            }
         }
     }
 }

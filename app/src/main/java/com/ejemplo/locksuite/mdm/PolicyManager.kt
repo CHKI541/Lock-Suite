@@ -1170,6 +1170,46 @@ class PolicyManager(private val context: Context) {
         return true
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // MODO LISTA BLANCA (8/9/2026) — ver mdm/WhitelistManager.kt
+    // ─────────────────────────────────────────────────────────────────────────
+    //
+    // Estos métodos son una fachada fina sobre WhitelistManager para que el resto del
+    // proyecto (comandos FCM, panel, presets, pantalla del celular) siga hablando con
+    // PolicyManager como con cualquier otra política, y no tenga que conocer un objeto
+    // nuevo. La lógica vive en WhitelistManager; acá solo se agrega la regla de
+    // suspensión, que es transversal a todas las políticas.
+
+    fun whitelist(): WhitelistManager = WhitelistManager(context)
+
+    fun isWhitelistModeEnabled(): Boolean = whitelist().isEnabled()
+
+    fun isWhitelistSimulation(): Boolean = whitelist().isSimulation()
+
+    fun isWhitelistSharedCdnAllowed(): Boolean = whitelist().isSharedCdnAllowed()
+
+    /**
+     * Encender el modo con LockSuite suspendido guarda la intención sin aplicarla,
+     * igual que cualquier otra política: durante la suspensión el equipo tiene que
+     * estar realmente libre. Apagarlo se aplica siempre — quitar un filtro nunca puede
+     * romper la promesa de "sin restricciones".
+     */
+    fun setWhitelistModeEnabled(enabled: Boolean): Boolean {
+        if (deferIfSuspended(WhitelistManager.KEY_ENABLED, enabled)) return true
+        whitelist().setEnabled(enabled)
+        return true
+    }
+
+    fun setWhitelistSimulation(simulation: Boolean): Boolean {
+        whitelist().setSimulation(simulation)
+        return true
+    }
+
+    fun setWhitelistSharedCdnAllowed(allowed: Boolean): Boolean {
+        whitelist().setSharedCdnAllowed(allowed)
+        return true
+    }
+
     /**
      * Tapado de imágenes DENTRO de la ventana del portal. Encendido por defecto.
      *
@@ -1901,6 +1941,28 @@ class PolicyManager(private val context: Context) {
             }
         }
 
+        // ── Lista blanca: reconciliar las apps prohibidas (8/9/2026) ──
+        //
+        // Va acá, dentro del re-aplicado general, por la lección de B.11 punto 2: la
+        // preferencia `hide_<paquete>` NO se reconstruía en ningún lado, así que
+        // cualquier cosa que des-ocultara una app la dejaba visible para siempre
+        // mientras el panel seguía mostrándola como oculta. Las decisiones de la lista
+        // blanca tienen exactamente ese modo de falla, y encima `reapplyAllRestrictions()`
+        // corre cada 15 minutos desde el Watchdog: sin esto, una app prohibida vuelve a
+        // aparecer al primer reinicio y nadie se entera.
+        //
+        // Reconcilia (compara y corrige solo lo que difiere) en vez de ordenar: es el
+        // mismo patrón de AppController.reconcileEmergencySuspend(), y es lo que lo hace
+        // barato de correr cada 15 minutos.
+        try {
+            val corregidas = WhitelistManager(context).reconcileApps()
+            if (corregidas > 0) {
+                android.util.Log.i("PolicyManager", "Lista blanca: $corregidas app(s) reconciliadas")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Aplicar FRP si está activado
         if (isFrpEnabled()) {
             setFrpPolicy(getFrpAccounts(), useDefaultFrp(), true)
@@ -2358,6 +2420,16 @@ class PolicyManager(private val context: Context) {
         // Clear local preferences (incluida la marca de suspensión: tras la purga
         // no queda ninguna política que suspender)
         PrefsHelper.getMdmPrefs(context).edit().clear().apply()
+
+        // El Trie de la lista blanca vive en memoria estática, así que borrar las
+        // preferencias no lo vacía solo. Sin esto, "revocar permisos" (que llama acá
+        // sin desinstalar) dejaría el filtro estricto aplicándose sobre una
+        // configuración que ya no existe en el disco.
+        try {
+            WhitelistManager(context).reload()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private val KNOWN_BROWSER_PACKAGES = listOf(

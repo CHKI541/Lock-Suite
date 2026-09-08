@@ -84,6 +84,19 @@ const ALLOWED_COMMANDS = new Set([
   // entero. Es la salida de emergencia cuando un portal real queda inusable y el
   // usuario esta viajando: ver B.50 y mdm/CaptivePortalPolicy.kt.
   "ENABLE_CAPTIVE_PORTAL_IMAGES", "DISABLE_CAPTIVE_PORTAL_IMAGES",
+  // ── MODO LISTA BLANCA (8/9/2026) ──
+  // El filtro estricto: solo resuelven los dominios de las apps permitidas.
+  // Ojo con SET_WHITELIST_ENFORCE: es el que pasa de "solo registrar" a bloquear
+  // de verdad, o sea el unico de este grupo que puede dejar un equipo a medio
+  // funcionar. Exige PIN como todos los de aca (no esta en la excepcion de
+  // UPDATE_*). La configuracion (que apps, que dominios) NO viaja por FCM: va en
+  // globalSettings/whitelist y SYNC_WHITELIST solo avisa que hay que releerla —
+  // el data de FCM tiene tope de ~4 KB y el catalogo lo pasa (misma leccion de
+  // B.28 con los presets).
+  "ENABLE_WHITELIST_MODE", "DISABLE_WHITELIST_MODE",
+  "SET_WHITELIST_SIMULATION", "SET_WHITELIST_ENFORCE",
+  "ENABLE_WHITELIST_SHARED_CDN", "DISABLE_WHITELIST_SHARED_CDN",
+  "SYNC_WHITELIST", "CLEAR_WHITELIST_AUDIT",
   // Selector de foto de contactos / Google Illustrations (4/9/2026)
   "BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER",
   "ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS",

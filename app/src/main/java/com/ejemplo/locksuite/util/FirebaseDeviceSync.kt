@@ -603,7 +603,14 @@ object FirebaseDeviceSync {
                     // verdad. Cuando difieren, el panel mostraba el interruptor encendido
                     // sobre un equipo desprotegido, en silencio.
                     "policyDrift" to policyDrift.joinToString(","),
-                    "policyDriftCount" to policyDrift.size
+                    "policyDriftCount" to policyDrift.size,
+
+                    // Modo lista blanca (8/9/2026). Los escalares viajan acá, con el
+                    // resto del estado; el nodo grande de la auditoría lo publica
+                    // syncWhitelistState() aparte y solo cuando cambió.
+                    "whitelistEnabled" to policyManager.isWhitelistModeEnabled(),
+                    "whitelistSimulation" to policyManager.isWhitelistSimulation(),
+                    "whitelistSharedCdn" to policyManager.isWhitelistSharedCdnAllowed()
                 )
                 // Restricciones del registro declarativo (mdm/PolicySpec.kt). Se agregan
                 // desde la misma lista que las aplica, así una restricción nueva aparece en
@@ -659,6 +666,187 @@ object FirebaseDeviceSync {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MODO LISTA BLANCA (8/9/2026) — ver mdm/WhitelistManager.kt
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Baja la configuración de la lista blanca desde `globalSettings/whitelist` y la
+     * aplica en el equipo. Lo dispara el comando FCM `SYNC_WHITELIST`.
+     *
+     * **Por qué la configuración NO viaja por FCM.** El `data` de un mensaje FCM tiene
+     * un tope duro de ~4 KB y la Cloud Function corta en 3.000 bytes; el catálogo de la
+     * lista blanca con sus dominios lo pasa con 25 apps. B.28 ya dejó anotado que a los
+     * presets les faltaba poco para el mismo problema y que el camino correcto era
+     * exactamente este: dejar el dato en la base y mandar por FCM solo el aviso. Un
+     * comando que se trunca en silencio es peor que uno que no llega, porque el panel
+     * lo da por aplicado.
+     *
+     * **Por qué es global y no por dispositivo.** La condición kosher de una app no
+     * cambia de un celular a otro: si Waze está permitida, lo está en toda la flota.
+     * Lo que sí es por dispositivo son los interruptores (encendido, simulación), que
+     * viajan como cualquier otra política, por comando. Así un equipo se puede pasar a
+     * estricto sin tocar a los demás, y el catálogo se edita en un solo lugar.
+     *
+     * Estructura esperada:
+     * ```
+     * globalSettings/whitelist/decisions/<paquete>   = "allow" | "block"
+     * globalSettings/whitelist/custom/<paquete>      = {label, allow:[…], block:[…]}
+     * ```
+     * (Las claves de Firebase no admiten `.`, así que los paquetes viajan con `_`.)
+     *
+     * @return true si se leyó y se aplicó.
+     */
+    fun pullWhitelistConfig(context: Context): Boolean {
+        val ctx = context.applicationContext
+        return try {
+            val ref = FirebaseDatabase.getInstance().getReference("globalSettings/whitelist")
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var ok = false
+            withAuth {
+                ref.get()
+                    .addOnSuccessListener { snap ->
+                        try {
+                            val wl = com.ejemplo.locksuite.mdm.WhitelistManager(ctx)
+
+                            // Catálogo personalizado primero: si una app nueva viene con
+                            // decisión "allow", sus dominios tienen que existir ANTES de
+                            // que se recargue el Trie por la decisión. Al revés quedaría
+                            // permitida sin un solo dominio abierto, o sea sin internet,
+                            // que es justo lo contrario de lo que se pidió.
+                            val customJson = org.json.JSONObject()
+                            snap.child("custom").children.forEach { child ->
+                                val pkg = child.child("packageName").getValue(String::class.java)
+                                    ?: child.key?.replace("_", ".") ?: return@forEach
+                                val obj = org.json.JSONObject()
+                                obj.put("label", child.child("label").getValue(String::class.java) ?: pkg)
+                                obj.put("allow", org.json.JSONArray(
+                                    child.child("allow").children.mapNotNull { it.getValue(String::class.java) }
+                                ))
+                                obj.put("block", org.json.JSONArray(
+                                    child.child("block").children.mapNotNull { it.getValue(String::class.java) }
+                                ))
+                                customJson.put(pkg, obj)
+                            }
+                            wl.replaceCustomApps(customJson.toString())
+
+                            snap.child("decisions").children.forEach { child ->
+                                val pkg = child.key?.replace("_", ".") ?: return@forEach
+                                when (child.getValue(String::class.java)) {
+                                    com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW -> wl.allowApp(pkg)
+                                    com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK -> wl.blockApp(pkg)
+                                    else -> wl.unsetApp(pkg)
+                                }
+                            }
+                            ok = true
+                        } catch (e: Exception) {
+                            android.util.Log.e("FirebaseDeviceSync", "Lista blanca: error aplicando la config: ${e.message}", e)
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("FirebaseDeviceSync", "Lista blanca: no se pudo leer globalSettings/whitelist: ${e.message}", e)
+                        latch.countDown()
+                    }
+            }
+            // Tope alto pero finito: esto corre en un hilo de IO lanzado por el propio
+            // comando FCM, nunca en el hilo principal ni en el lector del túnel.
+            latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            if (ok) syncWhitelistState(ctx)
+            ok
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "Lista blanca: pullWhitelistConfig falló: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * Publica al panel el estado de la lista blanca y la auditoría.
+     *
+     * **La auditoría es la parte que hace usable todo el modo.** Sin ella, "el equipo no
+     * puede entrar a tal lado" es un reporte sin dato: hay que adivinar qué dominio
+     * faltaba. Con ella, el panel muestra la lista exacta de lo que se bloqueó (o se
+     * habría bloqueado en simulación), ordenada por cantidad de intentos, y cada línea
+     * tiene un botón para agregarla a la app que corresponda.
+     *
+     * Se publica agregada —dominio y cantidad, no una entrada por consulta— a propósito:
+     * el buffer de DNS crudo son miles de líneas por hora y **hoy no llega al panel de
+     * ninguna forma** (B.52 da por sentado que sí; se verificó que `DnsActivityBuffer`
+     * solo se lee desde la pantalla del celular). Mandar el crudo sería mucho tráfico y
+     * un registro de navegación del usuario en la nube; el agregado alcanza para
+     * completar las listas y no es un historial.
+     */
+    /**
+     * Firma de la última auditoría publicada (cantidad de dominios + total de golpes).
+     * Sirve para no reescribir el mismo nodo cada 15 minutos: con 300 dominios eso son
+     * ~15 KB por ciclo, o sea más de un mega por día de datos móviles del usuario final
+     * por un dato que no cambió. Es el mismo criterio de B.30 con los arranques de
+     * servicio: no gastar por costumbre.
+     */
+    @Volatile private var lastAuditSignature: String = ""
+
+    fun syncWhitelistState(context: Context, force: Boolean = false) {
+        val ctx = context.applicationContext
+        try {
+            val wl = com.ejemplo.locksuite.mdm.WhitelistManager(ctx)
+            val audit = com.ejemplo.locksuite.mdm.WhitelistManager.auditSnapshot()
+            val signature = "${audit.size}:${audit.sumOf { it.second }}"
+            if (!force && signature == lastAuditSignature) {
+                // Nada nuevo que contar: se publican igual los escalares (son cuatro
+                // booleanos y dos enteros) y se saltea el nodo grande.
+                withAuth {
+                    writeFields(
+                        ctx,
+                        mapOf(
+                            "whitelistEnabled" to wl.isEnabled(),
+                            "whitelistSimulation" to wl.isSimulation(),
+                            "whitelistSharedCdn" to wl.isSharedCdnAllowed(),
+                            "whitelistDomainCount" to wl.ruleCount(),
+                            "whitelistAuditCount" to audit.size
+                        )
+                    )
+                }
+                return
+            }
+            lastAuditSignature = signature
+            val auditMap = mutableMapOf<String, Any>()
+            for ((domain, hits) in audit) {
+                // Las claves de Firebase no admiten `.`, `#`, `$`, `[` ni `]`.
+                auditMap[domain.replace(".", "_")] = mapOf("domain" to domain, "hits" to hits)
+            }
+            val decisions = mutableMapOf<String, Any>()
+            for ((pkg, state) in wl.allDecisions()) decisions[pkg.replace(".", "_")] = state
+
+            withAuth {
+                writeFields(
+                    ctx,
+                    mapOf(
+                        "whitelistEnabled" to wl.isEnabled(),
+                        "whitelistSimulation" to wl.isSimulation(),
+                        "whitelistSharedCdn" to wl.isSharedCdnAllowed(),
+                        "whitelistDomainCount" to wl.ruleCount(),
+                        "whitelistAuditCount" to audit.size,
+                        "whitelistAuditDropped" to com.ejemplo.locksuite.mdm.WhitelistManager.auditDropped(),
+                        "whitelistDecisions" to decisions
+                    )
+                )
+                try {
+                    FirebaseDatabase.getInstance()
+                        .getReference("devices/${deviceId(ctx)}/whitelistAudit")
+                        .setValue(auditMap)
+                        .addOnFailureListener { e ->
+                            android.util.Log.e("FirebaseDeviceSync", "Lista blanca: no se pudo publicar la auditoría: ${e.message}", e)
+                        }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "Lista blanca: syncWhitelistState falló: ${e.message}", e)
         }
     }
 

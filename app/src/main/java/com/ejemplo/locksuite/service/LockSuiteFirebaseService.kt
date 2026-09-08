@@ -473,6 +473,39 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 // (8/9/2026, ver CaptivePortalPolicy).
                 "ENABLE_CAPTIVE_PORTAL_IMAGES" -> policyManager.setCaptivePortalCoverImages(true)
                 "DISABLE_CAPTIVE_PORTAL_IMAGES" -> policyManager.setCaptivePortalCoverImages(false)
+
+                // ── MODO LISTA BLANCA (8/9/2026) — ver mdm/WhitelistManager.kt ──
+                //
+                // Las decisiones por app y el catálogo personalizado NO viajan por el
+                // `data` de FCM: se leen de `globalSettings/whitelist` en la base de
+                // datos y por FCM va solo el aviso (`SYNC_WHITELIST`). El motivo es el
+                // mismo que ya obligó a repensar los presets en B.28: el `data` de FCM
+                // tiene un tope duro de ~4 KB y la Function corta en 3.000 bytes, y una
+                // lista de 25 apps con sus dominios lo pasa sola. Un comando que se
+                // trunca en silencio es peor que un comando que no llega.
+                "ENABLE_WHITELIST_MODE" -> policyManager.setWhitelistModeEnabled(true)
+                "DISABLE_WHITELIST_MODE" -> policyManager.setWhitelistModeEnabled(false)
+                "SET_WHITELIST_SIMULATION" -> policyManager.setWhitelistSimulation(true)
+                "SET_WHITELIST_ENFORCE" -> policyManager.setWhitelistSimulation(false)
+                "ENABLE_WHITELIST_SHARED_CDN" -> policyManager.setWhitelistSharedCdnAllowed(true)
+                "DISABLE_WHITELIST_SHARED_CDN" -> policyManager.setWhitelistSharedCdnAllowed(false)
+                "SYNC_WHITELIST" -> {
+                    val idToAck = commandId
+                    commandId = null
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val ok = com.ejemplo.locksuite.util.FirebaseDeviceSync
+                            .pullWhitelistConfig(applicationContext)
+                        sendCommandAck(
+                            idToAck, "SYNC_WHITELIST", ok,
+                            if (ok) null else "No se pudo leer globalSettings/whitelist"
+                        )
+                    }
+                    true
+                }
+                "CLEAR_WHITELIST_AUDIT" -> {
+                    com.ejemplo.locksuite.mdm.WhitelistManager.clearAudit()
+                    true
+                }
                 "BLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(true)
                 "UNBLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(false)
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)

@@ -314,7 +314,10 @@ async function openDeviceSidebar(e, t) {
 }
 
 function closeDeviceSidebar() {
-    selectedDeviceId = null, sidebar.classList.add("hidden"), sidebar.classList.remove("expanded")
+    selectedDeviceId = null, sidebar.classList.add("hidden"), sidebar.classList.remove("expanded");
+    // Soltar el listener de la auditoría: si no, cada equipo abierto deja uno vivo y el
+    // panel termina escuchando media flota a la vez.
+    try { watchWhitelistAudit(null); } catch (e) {}
 }
 
 function updateSidebarUI(e, t) {
@@ -340,9 +343,40 @@ function updateSidebarUI(e, t) {
     sidebarDeviceName.textContent = n || a || "Celular sin nombre", sidebarDeviceId.textContent = e, sidebarDeviceVersion.textContent = vText, document.activeElement !== deviceNameInput && (deviceNameInput.value = n);
     sidebar.querySelectorAll(".policy-switch").forEach(e => {
         const n = e.getAttribute("data-policy");
-        const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked");
+        // "Bloquear de verdad" es el INVERSO de whitelistSimulation, que el celular
+        // reporta con true por omisión (la simulación viene encendida a propósito: ver
+        // WhitelistManager). Se resuelve acá y no pidiéndole al equipo un campo más,
+        // porque son dos nombres para un mismo estado y duplicarlo es lo que se
+        // desincroniza después.
+        if (n === "whitelistEnforce") {
+            e.checked = field(t, "whitelistSimulation", true) === false;
+            return;
+        }
+        const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked"
+                        || n === "whitelistSharedCdn");
         e.checked = field(t, n, defVal) === true;
     });
+
+    // ── Resumen y auditoría de la lista blanca ──
+    try {
+        const wlOn = field(t, "whitelistEnabled", false) === true;
+        const wlSim = field(t, "whitelistSimulation", true) === true;
+        const wlDom = field(t, "whitelistDomainCount", 0);
+        const wlAud = field(t, "whitelistAuditCount", 0);
+        const resumen = document.getElementById("whitelist-device-summary");
+        if (resumen) {
+            resumen.innerHTML = wlOn
+                ? `Estado: <strong style="color:${wlSim ? "var(--accent)" : "#00E676"}">` +
+                  `${wlSim ? "SIMULANDO (no bloquea)" : "BLOQUEANDO"}</strong> · ` +
+                  `${wlDom} dominios cargados · ${wlAud} dominios afuera`
+                : 'Estado: <strong style="color:var(--text-gray)">apagado</strong>';
+        }
+        const card = document.getElementById("whitelist-device-card");
+        if (card) card.style.opacity = wlOn ? "" : "0.75";
+        watchWhitelistAudit(e);
+    } catch (err) {
+        console.warn("lista blanca: no se pudo dibujar el resumen", err);
+    }
 
     // ── Filas que este equipo no soporta (2/9/2026) ──
     // Android acepta y descarta en silencio una restricción que su versión no conoce, así
@@ -1255,6 +1289,18 @@ saveNameBtn.addEventListener("click", async () => {
             googleAccountBlockStrict: ["SET_GOOGLE_ACCOUNT_MODE_STRICT", "SET_GOOGLE_ACCOUNT_MODE_NORMAL"],
             captivePortalGuard: ["ENABLE_CAPTIVE_PORTAL_GUARD", "DISABLE_CAPTIVE_PORTAL_GUARD"],
             captivePortalCoverImages: ["ENABLE_CAPTIVE_PORTAL_IMAGES", "DISABLE_CAPTIVE_PORTAL_IMAGES"],
+            // Modo lista blanca (8/9/2026). Ojo con el orden de whitelistEnforce: el
+            // switch ENCENDIDO significa "bloquear de verdad" (SET_WHITELIST_ENFORCE) y
+            // APAGADO significa "solo simular". Es el inverso del campo que reporta el
+            // celular (whitelistSimulation) y está resuelto en updateSidebarUI.
+            //
+            // A propósito NO está en el mapa de GRUPOS: encender el filtro estricto
+            // sobre un grupo entero con un clic es justo la clase de acción que B.12
+            // decidió no ofrecer, y acá el costo de equivocarse es toda la flota sin
+            // internet a la vez.
+            whitelistEnabled: ["ENABLE_WHITELIST_MODE", "DISABLE_WHITELIST_MODE"],
+            whitelistEnforce: ["SET_WHITELIST_ENFORCE", "SET_WHITELIST_SIMULATION"],
+            whitelistSharedCdn: ["ENABLE_WHITELIST_SHARED_CDN", "DISABLE_WHITELIST_SHARED_CDN"],
             contactPhotoPickerBlocked: ["BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER"],
             localeChangeBlocked: ["BLOCK_LOCALE_CHANGE", "UNBLOCK_LOCALE_CHANGE"],
             accBounceSettings: ["ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS"],
@@ -1614,12 +1660,70 @@ const mainTabPresets = document.getElementById("main-tab-presets");
 const presetsContainer = document.getElementById("presets-container");
 const presetsList = document.getElementById("presets-list");
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MODO LISTA BLANCA (8/9/2026)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// El catálogo de fábrica vive en el APK (mdm/WhitelistCatalog.kt). Acá se
+// duplica SOLO lo que el panel necesita mostrar: nombre, paquete y cuántos
+// dominios trae cada app. **Los dominios en sí NO se duplican**, a propósito:
+// dos copias de una lista de dominios en dos lenguajes distintos es exactamente
+// el tipo de cosa que se desincroniza sin que nadie se entere (ver B.28, donde
+// el panel mandaba una clave que la app no conocía y "funcionaba" sin hacer
+// nada). Lo que el panel escribe en `globalSettings/whitelist` es solo la
+// DECISIÓN por app; los dominios los pone el equipo desde su propio catálogo.
+//
+// Las apps agregadas a mano desde el panel sí traen sus dominios acá, porque el
+// APK no las conoce — para esas, el panel es la única fuente.
+const mainTabWhitelist = document.getElementById("main-tab-whitelist");
+const whitelistContainer = document.getElementById("whitelist-container");
+const whitelistAppsList = document.getElementById("whitelist-apps-list");
+const whitelistFilter = document.getElementById("whitelist-filter");
+const whitelistStatusMsg = document.getElementById("whitelist-status-msg");
+const whitelistPushAllBtn = document.getElementById("whitelist-push-all-btn");
+
+const WHITELIST_BUILTIN = [
+    { pkg: "com.waze", label: "Waze", allow: 3, block: 5 },
+    { pkg: "com.didiglobal.passenger", label: "DiDi", allow: 4, block: 6 },
+    { pkg: "com.mercadopago.wallet", label: "Mercado Pago", allow: 5, block: 21 },
+    { pkg: "com.google.android.apps.walletnfcrel", label: "Google Wallet / Pay", allow: 4, block: 0 },
+    { pkg: "ar.com.personalpay", label: "Personal Pay", allow: 4, block: 0 },
+    { pkg: "com.google.android.gm", label: "Gmail", allow: 3, block: 0 },
+    { pkg: "com.google.android.apps.dynamite", label: "Google Chat", allow: 1, block: 3 },
+    { pkg: "com.google.android.apps.messaging", label: "Google Messages", allow: 3, block: 5 },
+    { pkg: "com.google.android.apps.docs", label: "Google Drive", allow: 3, block: 0 },
+    { pkg: "com.ubercab", label: "Uber", allow: 3, block: 0 },
+    { pkg: "com.google.android.apps.adm", label: "Localizador de dispositivos", allow: 1, block: 0 },
+    { pkg: "life.channel.accurate.local.weather.forecast", label: "Centro de información / Clima", allow: 3, block: 0 },
+    { pkg: "com.lionscribe.hebdate", label: "HebDate (calendario hebreo)", allow: 1, block: 0 },
+    { pkg: "fm.jewishmusic.application", label: "Zing Music", allow: 2, block: 0 },
+    { pkg: "com.lomdaat.apps.music", label: "Jusic", allow: 4, block: 0 },
+    { pkg: "com.whatsapp", label: "WhatsApp", allow: 4, block: 0 },
+    { pkg: "com.google.android.apps.tachyon", label: "Google Meet", allow: 2, block: 0 },
+    { pkg: "com.google.android.apps.meetings", label: "Google Meet (app aparte)", allow: 2, block: 0 },
+    { pkg: "com.beatmobile.ak", label: "Ajdut Kosher", allow: 2, block: 0 },
+    { pkg: "com.tranzmate", label: "Moovit", allow: 3, block: 0 },
+    { pkg: "com.google.android.apps.chromecast.app", label: "Google Home", allow: 2, block: 0 },
+    { pkg: "com.tuya.smartlife", label: "Smart Life (Tuya)", allow: 6, block: 0 },
+    { pkg: "com.google.android.apps.translate", label: "Traductor de Google", allow: 1, block: 1 },
+    { pkg: "com.google.android.keep", label: "Google Keep", allow: 1, block: 0 },
+    { pkg: "com.google.android.contacts", label: "Contactos de Google", allow: 2, block: 0 },
+    { pkg: "com.google.android.calendar", label: "Calendario de Google", allow: 1, block: 0 }
+];
+
+/** Clave de Firebase: los paquetes llevan `.`, que RTDB no admite en una clave. */
+const pkgKey = pkg => pkg.replace(/\./g, "_");
+
+let whitelistDecisions = {};   // { "com_waze": "allow" | "block" }
+let whitelistCustom = {};      // { "ar_com_x": {label, packageName, allow:[], block:[]} }
+
 const mainNavTabs = [
     { btn: mainTabDevices, container: devicesContainer },
     { btn: mainTabGroups, container: groupsContainer, onOpen: () => closeDeviceSidebar() },
     { btn: mainTabArchived, container: archivedContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
     { btn: mainTabPresets, container: presetsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); loadPresetsList && loadPresetsList(); } },
-    { btn: mainTabGlobalSettings, container: globalSettingsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } }
+    { btn: mainTabGlobalSettings, container: globalSettingsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
+    { btn: mainTabWhitelist, container: whitelistContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderWhitelistCatalog(); } }
 ];
 
 function switchMainTab(activeTabObj) {
@@ -2785,5 +2889,299 @@ if (typeof auth !== "undefined" && typeof auth.getRedirectResult === "function")
     auth.getRedirectResult().catch(err => {
         const box = document.getElementById("login-error");
         if (box) box.textContent = "Error al iniciar sesión con Google: " + ((err && err.message) || err);
+    });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MODO LISTA BLANCA — CATÁLOGO GLOBAL Y AUDITORÍA POR EQUIPO (8/9/2026)
+// ═════════════════════════════════════════════════════════════════════════════
+
+function whitelistState(pkg) {
+    return whitelistDecisions[pkgKey(pkg)] || "unset";
+}
+
+function setWhitelistStatus(msg, isError) {
+    if (!whitelistStatusMsg) return;
+    whitelistStatusMsg.textContent = msg || "";
+    whitelistStatusMsg.style.color = isError ? "var(--alert-red)" : "var(--accent)";
+    if (msg) setTimeout(() => { if (whitelistStatusMsg.textContent === msg) whitelistStatusMsg.textContent = ""; }, 6000);
+}
+
+/**
+ * Guarda la decisión de una app en `globalSettings/whitelist/decisions`.
+ *
+ * No manda ningún comando por sí sola: el catálogo se empuja a los equipos con
+ * "Enviar a todos los celulares" (SYNC_WHITELIST). Es deliberado — así se pueden
+ * marcar veinte apps de un tirón y sincronizar una sola vez, en vez de disparar
+ * veinte comandos FCM por cada clic.
+ */
+async function setWhitelistDecision(pkg, state) {
+    try {
+        const ref = database.ref("globalSettings/whitelist/decisions/" + pkgKey(pkg));
+        if (state === "unset") await ref.remove(); else await ref.set(state);
+
+        // ── La otra mitad del "un solo toque": la tienda administrada ──
+        //
+        // Pedido textual del dueño: *"en caso de permitir una app, se permita también
+        // la descarga del paquete de mi tienda (así lo subo y lo pueden descargar) y
+        // además se permitan sus dominios. Y en caso de que prohíba una app (…) se
+        // bloqueará descargarla de la tienda"*.
+        //
+        // Quién decide si un celular puede bajar una app de la tienda es
+        // `globalSettings/allowedPackages` (lo lee LoginActivity al abrir la tienda).
+        // O sea que permitir = agregar el paquete ahí, prohibir = sacarlo. Se hace acá
+        // y no con un comando aparte para que sea de verdad UN toque: si esto viviera
+        // en otro botón, tarde o temprano una app queda permitida y no descargable, y
+        // el síntoma es "la permití y no aparece en la tienda".
+        //
+        // Ojo: esto NO sube el APK. El administrador igual tiene que cargar la app en
+        // "Tienda de Apps" con su URL; lo que se abre acá es el permiso para bajarla.
+        await syncStoreAllowedPackage(pkg, state === "allow");
+
+        setWhitelistStatus("Guardado. Acordate de tocar «Enviar a todos los celulares».");
+    } catch (err) {
+        setWhitelistStatus("Error al guardar: " + err.message, true);
+    }
+}
+
+/** Agrega o saca un paquete de `globalSettings/allowedPackages` (tienda administrada). */
+async function syncStoreAllowedPackage(pkg, permitir) {
+    const ref = database.ref("globalSettings/allowedPackages");
+    const snap = await ref.once("value");
+    const actual = snap.val() || [];
+    const lista = Array.isArray(actual) ? actual.slice() : Object.values(actual);
+    const i = lista.indexOf(pkg);
+    if (permitir && i < 0) {
+        lista.push(pkg);
+    } else if (!permitir && i >= 0) {
+        lista.splice(i, 1);
+    } else {
+        return; // ya estaba como corresponde: no se escribe por escribir
+    }
+    await ref.set(lista);
+    // El cuadro de texto de Ajustes lee el mismo nodo y tiene su propio listener, así
+    // que se actualiza solo. No se toca acá para no pisar lo que el usuario esté
+    // escribiendo en ese momento.
+}
+
+function renderWhitelistCatalog() {
+    if (!whitelistAppsList) return;
+    const filtro = (whitelistFilter && whitelistFilter.value || "").trim().toLowerCase();
+
+    // Catálogo de fábrica + lo que se agregó a mano desde el panel.
+    const customEntries = Object.entries(whitelistCustom).map(([key, v]) => ({
+        pkg: v.packageName || key.replace(/_/g, "."),
+        label: v.label || key,
+        allow: (v.allow || []).length,
+        block: (v.block || []).length,
+        custom: true,
+        key: key
+    }));
+    const todas = WHITELIST_BUILTIN.concat(customEntries).filter(a =>
+        !filtro || a.label.toLowerCase().includes(filtro) || a.pkg.toLowerCase().includes(filtro)
+    );
+
+    whitelistAppsList.innerHTML = "";
+    if (todas.length === 0) {
+        whitelistAppsList.innerHTML = '<p class="loading-text" style="grid-column:1/-1;">Ninguna app coincide con la búsqueda.</p>';
+        return;
+    }
+
+    todas.forEach(app => {
+        const estado = whitelistState(app.pkg);
+        const color = estado === "allow" ? "#00E676" : estado === "block" ? "var(--alert-red)" : "var(--text-gray)";
+        const etiqueta = estado === "allow" ? "Permitida" : estado === "block" ? "Prohibida" : "Sin marcar";
+        const card = document.createElement("div");
+        card.className = "group-card";
+        card.style.cssText = "padding:14px; display:flex; flex-direction:column; gap:8px;";
+        card.innerHTML = `
+            <div style="display:flex; align-items:flex-start; gap:8px;">
+              <div style="flex:1; min-width:0;">
+                <h3 style="margin:0 0 2px; font-size:15px;">${escapeHtml(app.label)}${app.custom ? ' <span style="font-size:10px; color:var(--accent);">(agregada)</span>' : ''}</h3>
+                <p style="margin:0; font-size:11px; color:var(--text-gray); word-break:break-all;">${escapeHtml(app.pkg)}</p>
+                <p style="margin:4px 0 0; font-size:11px; color:var(--text-gray);">${app.allow} dominios permitidos${app.block ? " · " + app.block + " bloqueados" : ""}</p>
+              </div>
+              <span style="font-size:12px; font-weight:bold; color:${color}; white-space:nowrap;">${etiqueta}</span>
+            </div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="wl-allow" ${estado === "allow" ? "disabled" : ""} style="flex:1; background:#2E7D32; color:#fff; border:none; padding:7px 10px; border-radius:6px; cursor:pointer; font-size:12px; ${estado === "allow" ? "opacity:.45; cursor:default;" : ""}">Permitir</button>
+              <button class="wl-block" ${estado === "block" ? "disabled" : ""} style="flex:1; background:#C62828; color:#fff; border:none; padding:7px 10px; border-radius:6px; cursor:pointer; font-size:12px; ${estado === "block" ? "opacity:.45; cursor:default;" : ""}">Prohibir</button>
+              ${estado !== "unset" ? '<button class="wl-unset" style="background:var(--navy-light); color:var(--text-light); border:none; padding:7px 10px; border-radius:6px; cursor:pointer; font-size:12px;">Quitar</button>' : ""}
+              ${app.custom ? '<button class="wl-delete" style="background:var(--navy-light); color:var(--alert-red); border:none; padding:7px 10px; border-radius:6px; cursor:pointer; font-size:12px;">🗑</button>' : ""}
+            </div>`;
+
+        card.querySelector(".wl-allow").addEventListener("click", () => setWhitelistDecision(app.pkg, "allow"));
+        card.querySelector(".wl-block").addEventListener("click", () => setWhitelistDecision(app.pkg, "block"));
+        const unsetBtn = card.querySelector(".wl-unset");
+        if (unsetBtn) unsetBtn.addEventListener("click", () => setWhitelistDecision(app.pkg, "unset"));
+        const delBtn = card.querySelector(".wl-delete");
+        if (delBtn) delBtn.addEventListener("click", () => {
+            if (!confirm(`¿Quitar "${app.label}" del catálogo?\n\nSe borra la app y sus dominios. Las decisiones ya enviadas a los celulares se limpian en la próxima sincronización.`)) return;
+            database.ref("globalSettings/whitelist/custom/" + app.key).remove();
+            database.ref("globalSettings/whitelist/decisions/" + app.key).remove();
+        });
+
+        whitelistAppsList.appendChild(card);
+    });
+}
+
+function escapeHtml(s) {
+    return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+if (whitelistFilter) whitelistFilter.addEventListener("input", renderWhitelistCatalog);
+
+// Agregar una app que no está en el catálogo de fábrica.
+const wlCustomAddBtn = document.getElementById("wl-custom-add-btn");
+if (wlCustomAddBtn) {
+    wlCustomAddBtn.addEventListener("click", async () => {
+        const label = (document.getElementById("wl-custom-label").value || "").trim();
+        const pkg = (document.getElementById("wl-custom-package").value || "").trim();
+        const allowRaw = (document.getElementById("wl-custom-allow").value || "").trim();
+        const blockRaw = (document.getElementById("wl-custom-block").value || "").trim();
+        if (!label || !pkg) { alert("Falta el nombre o el paquete."); return; }
+        if (!/^[a-zA-Z0-9_.]+$/.test(pkg)) { alert("Nombre de paquete inválido."); return; }
+
+        // Se normaliza igual que en el equipo (normalizeDomain): minúsculas, sin punto
+        // final. Si el panel guardara "Waze.com" y el filtro comparara "waze.com", la
+        // regla no coincidiría nunca y el síntoma sería "lo permití y no anda".
+        const parse = s => s.split(",").map(d => d.trim().toLowerCase().replace(/\.$/, ""))
+                            .filter(d => d && d.includes("."));
+        const allow = parse(allowRaw), block = parse(blockRaw);
+        if (allow.length === 0 && block.length === 0) {
+            alert("Poné al menos un dominio (con punto, ej: ejemplo.com).");
+            return;
+        }
+        wlCustomAddBtn.disabled = true;
+        try {
+            await database.ref("globalSettings/whitelist/custom/" + pkgKey(pkg)).set({
+                label: label, packageName: pkg, allow: allow, block: block
+            });
+            document.getElementById("wl-custom-label").value = "";
+            document.getElementById("wl-custom-package").value = "";
+            document.getElementById("wl-custom-allow").value = "";
+            document.getElementById("wl-custom-block").value = "";
+            setWhitelistStatus(`"${label}" agregada al catálogo.`);
+        } catch (err) {
+            alert("Error al agregar: " + err.message);
+        } finally {
+            wlCustomAddBtn.disabled = false;
+        }
+    });
+}
+
+// Empujar el catálogo a toda la flota.
+if (whitelistPushAllBtn) {
+    whitelistPushAllBtn.addEventListener("click", async () => {
+        const ids = Object.keys(currentDevicesData || {});
+        if (ids.length === 0) { alert("No hay celulares registrados."); return; }
+        if (!confirm(`Enviar el catálogo de la lista blanca a ${ids.length} celular(es)?`)) return;
+        whitelistPushAllBtn.disabled = true;
+        let ok = 0, fail = 0;
+        for (const id of ids) {
+            try { await runCommandOnDevice(id, "SYNC_WHITELIST"); ok++; } catch (e) { fail++; }
+        }
+        whitelistPushAllBtn.disabled = false;
+        setWhitelistStatus(`Enviado a ${ok} celular(es)` + (fail ? `, ${fail} fallaron` : "") + ".", fail > 0);
+    });
+}
+
+// ── Auditoría de un equipo: lo que la lista blanca dejó afuera ──
+let whitelistAuditListener = null;
+let whitelistAuditDeviceId = null;
+
+function renderWhitelistAudit(deviceId, audit) {
+    const cont = document.getElementById("whitelist-audit-list");
+    if (!cont) return;
+    const entries = Object.values(audit || {})
+        .filter(e => e && e.domain)
+        .sort((a, b) => (b.hits || 0) - (a.hits || 0));
+    if (entries.length === 0) {
+        cont.innerHTML = '<p class="loading-text" style="font-size:12px;">Sin datos todavía. Con el filtro encendido, el celular publica esto cada 15 minutos.</p>';
+        return;
+    }
+    cont.innerHTML = "";
+    entries.forEach(e => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--navy-light);";
+        const opciones = WHITELIST_BUILTIN.concat(
+            Object.entries(whitelistCustom).map(([k, v]) => ({ pkg: v.packageName || k.replace(/_/g, "."), label: v.label || k }))
+        ).map(a => `<option value="${escapeHtml(a.pkg)}">${escapeHtml(a.label)}</option>`).join("");
+        row.innerHTML = `
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:12px; color:var(--text-light); word-break:break-all;">${escapeHtml(e.domain)}</div>
+              <div style="font-size:10px; color:var(--text-gray);">${e.hits || 0} intento(s)</div>
+            </div>
+            <select class="wl-audit-app" style="background:var(--navy-dark); color:var(--text-light); border:1px solid var(--navy-light); border-radius:6px; font-size:11px; padding:4px; max-width:130px;">
+              <option value="">Agregar a…</option>${opciones}
+            </select>`;
+        row.querySelector(".wl-audit-app").addEventListener("change", async ev => {
+            const pkg = ev.target.value;
+            if (!pkg) return;
+            ev.target.disabled = true;
+            try {
+                // Se agrega al catálogo GLOBAL, no al equipo: un dominio que le faltó a
+                // una app le va a faltar a todos los celulares. Arreglarlo por equipo
+                // sería descubrir el mismo problema una vez por celular.
+                const key = pkgKey(pkg);
+                const snap = await database.ref("globalSettings/whitelist/custom/" + key).once("value");
+                const actual = snap.val() || {};
+                const base = WHITELIST_BUILTIN.find(a => a.pkg === pkg);
+                const allow = (actual.allow || []).slice();
+                if (!allow.includes(e.domain)) allow.push(e.domain);
+                await database.ref("globalSettings/whitelist/custom/" + key).set({
+                    label: actual.label || (base && base.label) || pkg,
+                    packageName: pkg,
+                    allow: allow,
+                    block: actual.block || []
+                });
+                // Lo que se guarda acá se SUMA a los dominios de fábrica de esa app, no
+                // los reemplaza (ver WhitelistManager.allowedDomainsOf). Así el camino
+                // más usado del modo —ver un dominio que faltó y sumarlo con un clic— no
+                // puede dejar a la app peor de lo que estaba.
+                setWhitelistStatus(`"${e.domain}" agregado a ${(base && base.label) || pkg}. Tocá «Enviar a todos los celulares».`);
+                renderWhitelistCatalog();
+            } catch (err) {
+                alert("Error: " + err.message);
+            } finally {
+                ev.target.disabled = false;
+                ev.target.value = "";
+            }
+        });
+        cont.appendChild(row);
+    });
+}
+
+function watchWhitelistAudit(deviceId) {
+    if (whitelistAuditListener && whitelistAuditDeviceId) {
+        database.ref("devices/" + whitelistAuditDeviceId + "/whitelistAudit").off("value", whitelistAuditListener);
+    }
+    whitelistAuditDeviceId = deviceId;
+    if (!deviceId) { whitelistAuditListener = null; return; }
+    whitelistAuditListener = database.ref("devices/" + deviceId + "/whitelistAudit")
+        .on("value", snap => renderWhitelistAudit(deviceId, snap.val() || {}));
+}
+
+// Botones sueltos de la tarjeta por dispositivo.
+document.addEventListener("click", ev => {
+    const btn = ev.target.closest && ev.target.closest(".wl-device-btn");
+    if (!btn || !selectedDeviceId) return;
+    runCommandOnDevice(selectedDeviceId, btn.getAttribute("data-cmd"), null, btn);
+});
+
+// Listeners de Firebase para el catálogo global.
+if (auth) {
+    auth.onAuthStateChanged(user => {
+        if (!user) return;
+        database.ref("globalSettings/whitelist/decisions").on("value", snap => {
+            whitelistDecisions = snap.val() || {};
+            renderWhitelistCatalog();
+        });
+        database.ref("globalSettings/whitelist/custom").on("value", snap => {
+            whitelistCustom = snap.val() || {};
+            renderWhitelistCatalog();
+        });
     });
 }

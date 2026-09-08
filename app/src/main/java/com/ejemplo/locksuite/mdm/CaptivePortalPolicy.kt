@@ -57,11 +57,88 @@ package com.ejemplo.locksuite.mdm
  */
 object CaptivePortalPolicy {
 
+    // ═════════════════════════════════════════════════════════════════════════════
+    // 8/9/2026 — CORRECCIÓN, CON EL REPORTE DEL PRIMER USUARIO QUE PISÓ UN PORTAL
+    // REAL. Leer esto antes de tocar nada de acá abajo.
+    // ═════════════════════════════════════════════════════════════════════════════
+    //
+    // Reporte, textual: *"estoy en el aeropuerto y cuando me conecto al wifi hay
+    // [una página] que tengo que aceptar desde la página, se me conecta pero a los
+    // dos minutos se desconecta, entonces tengo que entrar, conectar de vuelta,
+    // todo. En el avión había wifi gratis, pero como de vuelta tiene que entrar por
+    // la página. ¿Hay una forma?"*
+    //
+    // Dos cosas de la versión del 5/9 estaban mal, y las dos por el mismo motivo:
+    // describían lo que se quiso hacer, no lo que el código hace.
+    //
+    //  1. **"Se tapan las imágenes; queda el texto y los formularios, o sea que
+    //     iniciar sesión sigue funcionando."** Es falso. La palanca reusa el tapado
+    //     de Capa 1, y la lista de nodos que la Capa 1 tapa (`visualNodeClassNames`
+    //     en el servicio de accesibilidad) incluye **`android.webkit.WebView`** —
+    //     y el contenido entero de esta ventana ES un WebView. O sea que la Capa 1
+    //     encontraba ese único nodo, lo tapaba entero y ni siquiera bajaba a sus
+    //     hijos ("no hace falta descender", dice el comentario). **La página de
+    //     inicio de sesión quedaba pintada de negro.** Nadie puede iniciar sesión
+    //     en un rectángulo negro: es exactamente lo contrario de la condición que
+    //     puso el dueño ("sin bloquear al usuario a que se conecte a la red").
+    //     Arreglado en `scanNode()`: en esta ventana el WebView NO se tapa, se baja
+    //     por sus hijos y se tapan solo los nodos de imagen de verdad
+    //     (`android.widget.Image` / `ImageView`) que además no sean controles.
+    //
+    //  2. **"Tope duro de 3 minutos. Un login legítimo tarda menos de un minuto."**
+    //     También es falso fuera del laboratorio. Un portal de aeropuerto o de avión
+    //     pide elegir un plan, aceptar términos, cargar nombre/asiento/vuelo/mail,
+    //     esperar un código por SMS o mirar un anuncio. Tres minutos de reloj de
+    //     pared se acaban a mitad del trámite, y ahí el guard mandaba HOME y el
+    //     usuario tenía que empezar de cero — que es, palabra por palabra, el
+    //     "a los dos minutos se desconecta, tengo que entrar, conectar de vuelta,
+    //     todo" del reporte. Ahora el tope mide **inactividad**, no tiempo total:
+    //     mientras la página cambie (el usuario está tocando y escribiendo) el reloj
+    //     se reinicia. El techo absoluto queda igual pero mucho más arriba, para que
+    //     nadie la deje abierta de navegador para siempre.
+    //
+    // Lo que NO cambió: la ventana se sigue cerrando apenas la red valida, se sigue
+    // reportando al panel cuántas veces se abrió y cuánto duró, y las imágenes de
+    // contenido se siguen tapando. El guard hace lo mismo; lo que dejó de hacer es
+    // impedir el login.
+
     /** Interruptor. Encendido por defecto. */
     const val KEY_ENABLED = "captive_portal_guard"
 
-    /** Tope duro de la ventana. Un login legítimo tarda menos de un minuto. */
-    const val MAX_OPEN_MS = 3 * 60 * 1000L
+    /**
+     * Interruptor aparte, SOLO para el tapado de imágenes de esta ventana. Encendido
+     * por defecto.
+     *
+     * Existe porque el modo de falla de esta palanca deja al usuario sin poder
+     * conectarse, y eso puede pasarle a alguien que está en otro país, sin datos
+     * móviles y sin nadie al lado. Con esto el administrador apaga **solo el tapado**
+     * desde el panel, en un comando, sin tener que apagar el guard entero (que es lo
+     * único que se podía hacer antes y deja la ventana completamente libre).
+     *
+     * Comandos: `ENABLE_CAPTIVE_PORTAL_IMAGES` / `DISABLE_CAPTIVE_PORTAL_IMAGES`.
+     */
+    const val KEY_COVER_IMAGES = "captive_portal_cover_images"
+
+    /**
+     * Inactividad tolerada dentro de la ventana antes de cerrarla.
+     *
+     * Es el reemplazo del tope de 3 minutos de reloj de pared, y el motivo del cambio
+     * está arriba. Lo que este tope tiene que matar es una ventana **abandonada** o
+     * usada de visor, no un trámite largo: mientras el contenido de la página cambie
+     * —o sea, mientras el usuario esté tocando, escribiendo o navegando el portal— el
+     * reloj se reinicia. Tres minutos sin que la página cambie ni una vez no es
+     * alguien iniciando sesión.
+     */
+    const val IDLE_CLOSE_MS = 3 * 60 * 1000L
+
+    /**
+     * Techo absoluto de la ventana, pase lo que pase.
+     *
+     * Acota el abuso de "la dejo abierta y la uso de navegador scrolleando", que sí
+     * genera cambios de contenido y por lo tanto no lo agarra el tope de inactividad.
+     * Quince minutos es de sobra para cualquier portal real y sigue siendo un techo.
+     */
+    const val MAX_OPEN_MS = 15 * 60 * 1000L
 
     /**
      * Gracia antes de cerrar por "red validada".
@@ -90,4 +167,26 @@ object CaptivePortalPolicy {
         val cls = className?.lowercase() ?: return false
         return cls.contains(CLASS_MARKER)
     }
+
+    /**
+     * Qué nodo es "una imagen" DENTRO del WebView del portal.
+     *
+     * No se puede reusar `visualNodeClassNames` del servicio para esto por dos motivos
+     * independientes, y los dos hacen falta para entender el arreglo:
+     *
+     *  - esa lista incluye `android.webkit.WebView`, o sea el contenedor entero: taparlo
+     *    pinta la página de negro (ver la nota de arriba);
+     *  - y NO incluye `android.widget.Image`, que es la clase con la que WebView expone
+     *    un `<img>` de HTML a la accesibilidad. `ImageView` es la de las vistas nativas.
+     *    Bajando por dentro del WebView con la lista vieja no se taparía absolutamente
+     *    nada — el bloqueo quedaría anunciado y sin efecto, que es la forma de bug que
+     *    este proyecto ya se comió en B.45 y B.47.
+     */
+    val WEB_IMAGE_CLASS_NAMES = setOf(
+        "android.widget.Image",
+        "android.widget.ImageView"
+    )
+
+    /** El contenedor que NO hay que tapar en esta ventana. */
+    const val WEB_CONTAINER_CLASS = "android.webkit.WebView"
 }

@@ -468,6 +468,11 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 // esquiva la VPN por diseño, así que esto es Capa 3 y nada más.
                 "ENABLE_CAPTIVE_PORTAL_GUARD" -> policyManager.setCaptivePortalGuard(true)
                 "DISABLE_CAPTIVE_PORTAL_GUARD" -> policyManager.setCaptivePortalGuard(false)
+                // Solo el tapado de imágenes de esa ventana, sin tocar el resto del
+                // guard. Es la salida de emergencia para un portal que quede inusable
+                // (8/9/2026, ver CaptivePortalPolicy).
+                "ENABLE_CAPTIVE_PORTAL_IMAGES" -> policyManager.setCaptivePortalCoverImages(true)
+                "DISABLE_CAPTIVE_PORTAL_IMAGES" -> policyManager.setCaptivePortalCoverImages(false)
                 "BLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(true)
                 "UNBLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(false)
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)

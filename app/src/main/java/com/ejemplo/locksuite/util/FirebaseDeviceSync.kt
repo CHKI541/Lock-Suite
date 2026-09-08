@@ -522,9 +522,14 @@ object FirebaseDeviceSync {
                     // la VPN), lo que sí se puede es que el administrador VEA cuántas
                     // veces se abrió y cuánto tiempo estuvo abierta.
                     "captivePortalGuard" to policyManager.isCaptivePortalGuardEnabled(),
+                    "captivePortalCoverImages" to policyManager.isCaptivePortalCoverImagesEnabled(),
                     "captivePortalOpens" to policyManager.getCaptivePortalOpens(),
                     "captivePortalTotalMs" to policyManager.getCaptivePortalTotalMs(),
                     "captivePortalLastOpenAt" to policyManager.getCaptivePortalLastOpenAt(),
+                    // 8/9: cuántas veces el guard cerró la ventana por su cuenta. Es el
+                    // número a mirar cuando alguien reporta que el Wi-Fi se le corta.
+                    "captivePortalForcedCloses" to policyManager.getCaptivePortalForcedCloses(),
+                    "captivePortalLastCloseReason" to policyManager.getCaptivePortalLastCloseReason(),
                     // Clases de selector de fotos vistas y no clasificadas: es el dato
                     // para calibrar el rebote en un equipo donde no dispare.
                     "photoPickerSeenClasses" to policyManager.getPhotoPickerSeenClasses(),

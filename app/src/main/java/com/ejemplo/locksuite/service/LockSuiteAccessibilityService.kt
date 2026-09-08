@@ -352,6 +352,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val contactPhotoPicker: Boolean,
         /** Vigilar la ventana de "Iniciar sesión en la red" (portal cautivo). */
         val captivePortalGuard: Boolean,
+        /** Tapar las imágenes DE esa ventana. Se puede apagar sin apagar el guard. */
+        val captivePortalCoverImages: Boolean,
         val takenAt: Long
     )
 
@@ -393,6 +395,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             ),
             contactPhotoPicker = p.getBoolean("block_contact_photo_picker", true),
             captivePortalGuard = p.getBoolean(CaptivePortalPolicy.KEY_ENABLED, true),
+            // Encendido por defecto, igual que el guard. Es la válvula de escape del
+            // 8/9: si un portal real queda inusable con las imágenes tapadas, el
+            // administrador apaga SOLO esto desde el panel y el resto del guard sigue.
+            captivePortalCoverImages = p.getBoolean(CaptivePortalPolicy.KEY_COVER_IMAGES, true),
             takenAt = SystemClock.elapsedRealtime()
         )
         cachedFlags = fresh
@@ -682,8 +688,20 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // ── Ventana de "Iniciar sesión en la red" (portal cautivo) ──
         // Ver mdm/CaptivePortalPolicy.kt: esta ventana esquiva la VPN por diseño, así
         // que la Capa 2 no puede hacer NADA ahí. Esto es lo único que puede.
-        if (f.captivePortalGuard && eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            updateCaptivePortalState(packageName, ev.className?.toString())
+        if (f.captivePortalGuard) {
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                updateCaptivePortalState(packageName, ev.className?.toString())
+            } else if (captiveOpenedAt != 0L &&
+                eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+                CaptivePortalPolicy.isCaptivePortalWindow(packageName, null)
+            ) {
+                // Señal de vida de la ventana: la página cambió, o sea que alguien la
+                // está usando. Reinicia el reloj de inactividad (ver IDLE_CLOSE_MS).
+                // Va ANTES del antirrebote de CONTENT_CHANGED de abajo a propósito:
+                // no queremos que un trámite lento se cierre porque el antirrebote se
+                // comió justo los eventos que probaban que el usuario estaba ahí.
+                captiveLastActivityAt = SystemClock.elapsedRealtime()
+            }
         }
 
         // Debounce para CONTENT_CHANGED (se dispara muy seguido)
@@ -832,7 +850,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // pero deja de ser un visor de contenido. Es lo único que la Capa 1 puede
         // aportar ahí, porque la Capa 2 no ve esa ventana (ver CaptivePortalPolicy).
         // El chequeo es una comparación de strings contra un campo ya cacheado.
+        //
+        // ⚠️ 8/9/2026 — ACÁ ESTABA EL BUG QUE DEJÓ A UN USUARIO SIN PODER CONECTARSE
+        // A UN WI-FI DE AEROPUERTO. El modo "layer1" recorre el árbol y tapa entero el
+        // primer nodo cuya clase esté en `visualNodeClassNames` — y esa lista incluye
+        // `android.webkit.WebView`, que es EL CONTENIDO ENTERO de esta ventana. O sea
+        // que "tapar las imágenes del portal" pintaba de negro la página de inicio de
+        // sesión completa. Ver la nota larga en `mdm/CaptivePortalPolicy.kt`.
+        // El arreglo está en `scanNode()`, gobernado por `captivePortalScan`.
         val portalCautivo = captiveOpenedAt != 0L &&
+            flags().captivePortalCoverImages &&
             CaptivePortalPolicy.isCaptivePortalWindow(activePkg, null)
 
         val mode = when {
@@ -843,7 +870,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         // 1. Capa 1: Bloqueo por Nodos
         if (mode == "layer1" || mode == "both") {
-            runLayer1NodeBlocking(activePkg)
+            captivePortalScan = portalCautivo
+            try {
+                runLayer1NodeBlocking(activePkg)
+            } finally {
+                captivePortalScan = false
+            }
         } else if (overlayManager.hasRegions("layer1:")) {
             // Solo se llama si hay algo que limpiar. Antes se llamaba siempre, lo que
             // encolaba un Runnable en el hilo principal diez veces por segundo aunque
@@ -870,6 +902,29 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         "android.widget.ImageView", "android.widget.VideoView",
         "android.view.SurfaceView", "android.view.TextureView", "android.webkit.WebView"
     )
+
+    /**
+     * Solo true MIENTRAS se escanea la ventana del portal cautivo (8/9/2026).
+     *
+     * Cambia dos cosas de `scanNode()`, y únicamente ahí:
+     *
+     *  1. **El `WebView` deja de ser un nodo tapable y pasa a ser un nodo por el que se
+     *     baja.** Sin esto, "tapar las imágenes del portal" tapa la página entera: el
+     *     contenido de esa ventana ES un WebView, `visualNodeClassNames` lo incluye, y
+     *     `scanNode` tapa el primer nodo que matchea y ni siquiera desciende. Un
+     *     rectángulo negro donde va el formulario de inicio de sesión.
+     *  2. **Dentro del WebView se tapan las imágenes de HTML** (`android.widget.Image`,
+     *     que es como WebView las expone) **salvo las que además son un control**
+     *     (`isClickable` / `isEditable`). El botón de "Conectar"/"Aceptar", el captcha
+     *     y las tarjetas de plan de los portales de avión son imágenes clicables: si se
+     *     tapan, no hay forma de completar el login, que es justo la condición que puso
+     *     el dueño ("sin bloquear al usuario a que se conecte a la red"). Una foto de
+     *     contenido no es clicable y se sigue tapando.
+     *
+     * Se restaura en el `finally` de quien lo prende, así que no puede quedar pegado y
+     * afectar el escaneo de otra app.
+     */
+    private var captivePortalScan = false
 
     /**
      * Ruta del nodo dentro del árbol (índice de hijo en cada nivel). Se usa para armar
@@ -917,7 +972,28 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (nodeBudget-- <= 0) return
 
         val className = node.className?.toString()
-        if (className != null && className in visualNodeClassNames) {
+
+        // Ventana del portal cautivo: reglas distintas, y solo acá. Ver el comentario
+        // de `captivePortalScan` — sin esta rama, el guard tapa la página de inicio de
+        // sesión entera y el usuario se queda sin Wi-Fi.
+        if (captivePortalScan) {
+            if (className == CaptivePortalPolicy.WEB_CONTAINER_CLASS) {
+                // El contenedor NO se tapa: se baja por sus hijos (sigue de largo).
+            } else if (className != null && className in CaptivePortalPolicy.WEB_IMAGE_CLASS_NAMES) {
+                // Una imagen que además es un control es el botón de "Conectar", el
+                // captcha o la tarjeta del plan. Taparla es impedir el login.
+                if (!node.isClickable && !node.isEditable) {
+                    val rectPortal = Rect()
+                    node.getBoundsInScreen(rectPortal)
+                    if (!rectPortal.isEmpty && node.isVisibleToUser) {
+                        val keyPortal = buildLayer1Key(depth)
+                        foundKeys.add(keyPortal)
+                        overlayManager.blockRegion(keyPortal, rectPortal)
+                    }
+                    return
+                }
+            }
+        } else if (className != null && className in visualNodeClassNames) {
             val rect = Rect()
             node.getBoundsInScreen(rect)
             // Solo tapar lo que realmente se ve: un nodo con área nula o fuera de la
@@ -1786,19 +1862,40 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     /** elapsedRealtime en que se vio la ventana del portal por primera vez, o 0. */
     private var captiveOpenedAt = 0L
+
+    /**
+     * elapsedRealtime del último cambio de contenido DENTRO de la ventana del portal.
+     *
+     * Es la señal de "el usuario está trabajando acá". El tope de tiempo cuenta contra
+     * esto y no contra `captiveOpenedAt`: ver la nota del 8/9 en `CaptivePortalPolicy`.
+     */
+    private var captiveLastActivityAt = 0L
     private var captiveBounceInProgress = false
 
     private val captiveTickRunnable = object : Runnable {
         override fun run() {
             if (captiveOpenedAt == 0L) return  // sin re-encolar: la ventana ya no está
-            val abierta = SystemClock.elapsedRealtime() - captiveOpenedAt
+            val ahora = SystemClock.elapsedRealtime()
+            val abierta = ahora - captiveOpenedAt
+            val inactiva = ahora - captiveLastActivityAt
 
             // 1. La red validó: la ventana ya no tiene razón de existir.
+            //
+            //    Nota para quien venga después: Android hace esto solo. El propio
+            //    `CaptivePortalLoginActivity` registra un NetworkCallback y en
+            //    `onCapabilitiesChanged`, si la red tiene NET_CAPABILITY_VALIDATED,
+            //    llama a `done(Result.DISMISSED)` y se cierra. Esta palanca es un
+            //    respaldo, no el mecanismo principal — no le agregues agresividad.
             if (abierta >= CaptivePortalPolicy.VALIDATED_GRACE_MS && isNetworkValidated()) {
                 closeCaptivePortal("la red ya está conectada")
                 return
             }
-            // 2. Tope duro.
+            // 2. Ventana abandonada: nadie la tocó en todo ese rato.
+            if (inactiva >= CaptivePortalPolicy.IDLE_CLOSE_MS) {
+                closeCaptivePortal("la ventana quedó abierta sin usarse")
+                return
+            }
+            // 3. Techo absoluto, pase lo que pase.
             if (abierta >= CaptivePortalPolicy.MAX_OPEN_MS) {
                 closeCaptivePortal("se agotó el tiempo de inicio de sesión")
                 return
@@ -1812,6 +1909,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (esPortal) {
             if (captiveOpenedAt == 0L) {
                 captiveOpenedAt = SystemClock.elapsedRealtime()
+                captiveLastActivityAt = captiveOpenedAt
                 captiveBounceInProgress = false
                 try {
                     val p = mdmPrefs
@@ -1822,7 +1920,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 } catch (e: Exception) {
                     Log.w(TAG, "No se pudo anotar la apertura del portal: ${e.message}")
                 }
-                Log.i(TAG, "Portal cautivo abierto: vigilando (tope ${CaptivePortalPolicy.MAX_OPEN_MS} ms).")
+                Log.i(
+                    TAG,
+                    "Portal cautivo abierto: vigilando (inactividad " +
+                        "${CaptivePortalPolicy.IDLE_CLOSE_MS} ms, techo " +
+                        "${CaptivePortalPolicy.MAX_OPEN_MS} ms)."
+                )
                 mainHandler.removeCallbacks(captiveTickRunnable)
                 mainHandler.postDelayed(captiveTickRunnable, CaptivePortalPolicy.TICK_MS)
             }
@@ -1835,6 +1938,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun finishCaptivePortalSession() {
         val abierta = if (captiveOpenedAt == 0L) 0L else SystemClock.elapsedRealtime() - captiveOpenedAt
         captiveOpenedAt = 0L
+        captiveLastActivityAt = 0L
         mainHandler.removeCallbacks(captiveTickRunnable)
         if (abierta <= 0L) return
         try {
@@ -1851,6 +1955,18 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (captiveBounceInProgress) return
         captiveBounceInProgress = true
         Log.w(TAG, "🚫 Cerrando la ventana del portal cautivo: $motivo.")
+        // Visibilidad (8/9): un cierre forzado es la forma que tiene este guard de
+        // dejar a alguien sin poder conectarse. Si el contador sube en un equipo, hay
+        // que ir a mirar POR QUÉ antes de que el usuario lo reporte desde un aeropuerto.
+        try {
+            val p = mdmPrefs
+            p.edit()
+                .putInt("captive_portal_forced_closes", p.getInt("captive_portal_forced_closes", 0) + 1)
+                .putString("captive_portal_last_close_reason", motivo)
+                .apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo anotar el cierre forzado del portal: ${e.message}")
+        }
         mainHandler.post {
             Toast.makeText(
                 applicationContext,
@@ -3047,6 +3163,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun stopCaptiveWatch() {
         mainHandler.removeCallbacks(captiveTickRunnable)
         captiveOpenedAt = 0L
+        captiveLastActivityAt = 0L
     }
 
     override fun onInterrupt() {

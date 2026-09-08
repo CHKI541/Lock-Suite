@@ -1170,9 +1170,42 @@ class PolicyManager(private val context: Context) {
         return true
     }
 
+    /**
+     * Tapado de imágenes DENTRO de la ventana del portal. Encendido por defecto.
+     *
+     * Va aparte del guard a propósito (8/9/2026): el modo de falla de esta palabra
+     * concreta —tapar de más— deja al usuario sin poder iniciar sesión en la red, y eso
+     * le puede pasar en otro país, sin datos móviles y sin nadie al lado. Con un
+     * interruptor propio el administrador la apaga sola desde el panel, en un comando,
+     * y el resto del guard (cerrar al validar, tope de inactividad, contadores) sigue
+     * funcionando. Apagar el guard entero era la única salida antes, y deja la ventana
+     * completamente libre.
+     */
+    fun isCaptivePortalCoverImagesEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean(CaptivePortalPolicy.KEY_COVER_IMAGES, true)
+
+    fun setCaptivePortalCoverImages(enabled: Boolean): Boolean {
+        if (deferIfSuspended(CaptivePortalPolicy.KEY_COVER_IMAGES, enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean(CaptivePortalPolicy.KEY_COVER_IMAGES, enabled).apply()
+        return true
+    }
+
     /** Cuántas veces se abrió la ventana del portal. Visibilidad, no bloqueo. */
     fun getCaptivePortalOpens(): Int =
         PrefsHelper.getMdmPrefs(context).getInt("captive_portal_opens", 0)
+
+    /**
+     * Cuántas veces el guard CERRÓ la ventana por su cuenta, y por qué la última vez.
+     *
+     * Es el número que hay que mirar cuando alguien reporta "el wifi se desconecta":
+     * si sube, el guard está cortando logins reales. Ver B.50.
+     */
+    fun getCaptivePortalForcedCloses(): Int =
+        PrefsHelper.getMdmPrefs(context).getInt("captive_portal_forced_closes", 0)
+
+    fun getCaptivePortalLastCloseReason(): String =
+        PrefsHelper.getMdmPrefs(context).getString("captive_portal_last_close_reason", "") ?: ""
 
     /** Tiempo total que estuvo abierta, en milisegundos. */
     fun getCaptivePortalTotalMs(): Long =

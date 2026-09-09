@@ -19,6 +19,9 @@ class PolicyManager(private val context: Context) {
     private val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
 
     private companion object {
+        /** Guarda de una vez por proceso para autoGrantDeclaredPermissions(). Ver B.55. */
+        @Volatile private var permissionsAutoGranted = false
+
         private const val GOOGLE_PLAY_SERVICES_PACKAGE = "com.google.android.gms"
         private const val FRP_CONFIG_CHANGED_ACTION = "com.google.android.gms.auth.FRP_CONFIG_CHANGED"
 
@@ -1308,9 +1311,26 @@ class PolicyManager(private val context: Context) {
     // SISTEMA DE PERFILES GUARDADOS (PRESETS) Y RESPALDOS HMAC
     // ─────────────────────────────────────────────
 
-    fun exportPolicyPresetJson(presetName: String = "Perfil LockSuite"): String {
+    /**
+     * @param includeDeviceState  Si es `true`, el perfil lleva además el ESTADO del
+     *   equipo: apps suspendidas, apps ocultas y reglas DNS personalizadas. Va apagado
+     *   por omisión y no es timidez, es una medición:
+     *
+     *   El perfil completo de políticas pesa hoy **2.009 bytes**, y `sendCommandV8`
+     *   rechaza con HTTP 413 cualquier `presetJson` de más de **3.000** (el `data` de un
+     *   mensaje FCM tiene un tope duro de ~4 KB). Agregarle las listas de apps que B.28
+     *   dejó anotadas como faltantes lo lleva a **3.580 bytes**: o sea que el perfil
+     *   *completo* **no entra por FCM y nunca pudo entrar**. Por eso el estado del equipo
+     *   solo se incluye en la ruta nueva —`globalSettings/profiles/<id>`, que no tiene
+     *   ese tope (ver `FirebaseDeviceSync.pullAndApplyProfile`)— y el `.locksuite` de
+     *   toda la vida sigue saliendo igual que antes.
+     */
+    fun exportPolicyPresetJson(
+        presetName: String = "Perfil LockSuite",
+        includeDeviceState: Boolean = false
+    ): String {
         val dataObj = org.json.JSONObject()
-        
+
         val restrictionsObj = org.json.JSONObject()
         val allRestrictions = listOf(
             UserManager.DISALLOW_FACTORY_RESET,
@@ -1365,6 +1385,22 @@ class PolicyManager(private val context: Context) {
         dataObj.put("googleAccountWebBlocked", isGoogleAccountWebBlocked())
         dataObj.put("contactPhotoPickerBlocked", isContactPhotoPickerBlocked())
         dataObj.put("captivePortalGuard", isCaptivePortalGuardEnabled())
+        // ⚠️ 9/9/2026 — ESTA CLAVE VIAJABA DESDE EL PANEL Y NADIE LA LEÍA.
+        //
+        // `admin-backend/public/app.js` la incluye en el perfil desde el 8/9 y la firma,
+        // pero ni este exportador la escribía ni `importPolicyPresetJson()` la leía: un
+        // perfil que decía "tapar las imágenes del portal cautivo: no" se aplicaba con
+        // éxito y el tapado quedaba igual. Es EXACTAMENTE la forma del bug de
+        // `no_apps_control` (B.28) y de `DISALLOW_CONFIG_DATE_TIME` (B.38): una clave que
+        // el otro lado no conoce se acepta en silencio y no hace nada. Para que no se
+        // pueda repetir, `tools/check_profile_sync.py` compara las tres listas.
+        dataObj.put("captivePortalCoverImages", isCaptivePortalCoverImagesEnabled())
+        // 9/9/2026 — los tres de la lista blanca (B.53) tampoco estaban. Tercera vez que
+        // el perfil se queda atrás de las protecciones nuevas (ya lo anotaron B.28 y el
+        // punto 8 de B.40): el chequeo de simetría existe para que sea la última.
+        dataObj.put("whitelistEnabled", isWhitelistModeEnabled())
+        dataObj.put("whitelistSimulation", isWhitelistSimulation())
+        dataObj.put("whitelistSharedCdn", isWhitelistSharedCdnAllowed())
         // El modo va como booleano para que el panel lo maneje como un switch más.
         dataObj.put("googleAccountBlockStrict", isGoogleAccountBlockStrict())
         dataObj.put("kosherLauncherEnabled", isKosherLauncherEnabled())
@@ -1389,6 +1425,10 @@ class PolicyManager(private val context: Context) {
         getPerAppInternetBlockedPackages().forEach { perAppNetArr.put(it) }
         dataObj.put("perAppInternetBlocked", perAppNetArr)
 
+        if (includeDeviceState) {
+            addDeviceStateToPreset(dataObj)
+        }
+
         val rootObj = org.json.JSONObject()
         rootObj.put("presetName", presetName)
         rootObj.put("createdAt", System.currentTimeMillis())
@@ -1400,6 +1440,48 @@ class PolicyManager(private val context: Context) {
         rootObj.put("signature", signature)
 
         return rootObj.toString(2)
+    }
+
+    /**
+     * Agrega al perfil el ESTADO del equipo: qué apps quedaron suspendidas, cuáles
+     * ocultas y qué reglas DNS puso el administrador a mano.
+     *
+     * B.28 dejó anotado que el perfil "NO guarda apps suspendidas/ocultas, reglas DNS,
+     * bloqueos de WebView, modos de imagen por app ni la lista blanca del launcher", y
+     * que eso era lo que hacía que aplicar un perfil dejara el equipo a medio configurar.
+     * Acá se cierran las tres primeras, que son las que se configuran en cada alta.
+     *
+     * Se leen las PREFERENCIAS y no el estado real del sistema, a propósito: la
+     * preferencia es la INTENCIÓN del administrador, y es lo que hay que reproducir en el
+     * equipo destino. El estado real puede diferir por mil motivos que son propios de
+     * ESE equipo (una app que no está instalada, un fabricante que ignoró la llamada) y
+     * copiarlos sería copiar los accidentes del equipo de origen.
+     */
+    private fun addDeviceStateToPreset(dataObj: org.json.JSONObject) {
+        try {
+            val prefs = PrefsHelper.getMdmPrefs(context)
+            val suspended = org.json.JSONArray()
+            val hidden = org.json.JSONArray()
+            for ((key, value) in prefs.all) {
+                if (value !is Boolean || !value) continue
+                when {
+                    key.startsWith("suspend_") -> suspended.put(key.removePrefix("suspend_"))
+                    key.startsWith("hide_") -> hidden.put(key.removePrefix("hide_"))
+                }
+            }
+            dataObj.put("suspendedPackages", suspended)
+            dataObj.put("hiddenPackages", hidden)
+
+            val dnsRules = org.json.JSONObject()
+            for ((domain, type) in com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.getAllRules()) {
+                dnsRules.put(domain, type.name)
+            }
+            dataObj.put("dnsRules", dnsRules)
+        } catch (e: Exception) {
+            // Que falte el estado del equipo no puede invalidar el perfil de políticas:
+            // es información de más, no el contenido principal.
+            android.util.Log.e("PolicyManager", "No se pudo agregar el estado del equipo al perfil: ${e.message}", e)
+        }
     }
 
     fun importPolicyPresetJson(jsonString: String): Boolean {
@@ -1482,6 +1564,11 @@ class PolicyManager(private val context: Context) {
             setCaptivePortalGuard(
                 dataObj.optBoolean("captivePortalGuard", isCaptivePortalGuardEnabled())
             )
+            // 9/9/2026 — faltaba, y el panel ya la mandaba firmada desde el 8/9 (ver el
+            // comentario del exportador). Un perfil la traía y no hacía absolutamente nada.
+            setCaptivePortalCoverImages(
+                dataObj.optBoolean("captivePortalCoverImages", isCaptivePortalCoverImagesEnabled())
+            )
             setGoogleAccountBlockStrict(
                 dataObj.optBoolean("googleAccountBlockStrict", isGoogleAccountBlockStrict())
             )
@@ -1506,6 +1593,15 @@ class PolicyManager(private val context: Context) {
             setNokiaTouchEnabled(dataObj.optBoolean("nokiaTouchEnabled", isNokiaTouchEnabled()))
             setBlockPopularNonKosher(dataObj.optBoolean("blockPopularNonKosher", isBlockPopularNonKosherEnabled()))
 
+            // 9/9/2026 — la lista blanca (B.53). Igual que el resto: el valor por omisión
+            // es el ACTUAL, así que un perfil viejo no mueve a un equipo de "simulación" a
+            // "bloquear de verdad" ni al revés sin decirlo.
+            setWhitelistModeEnabled(dataObj.optBoolean("whitelistEnabled", isWhitelistModeEnabled()))
+            setWhitelistSimulation(dataObj.optBoolean("whitelistSimulation", isWhitelistSimulation()))
+            setWhitelistSharedCdnAllowed(
+                dataObj.optBoolean("whitelistSharedCdn", isWhitelistSharedCdnAllowed())
+            )
+
             val perAppNetArr = dataObj.optJSONArray("perAppInternetBlocked")
             if (perAppNetArr != null) {
                 val prefs = PrefsHelper.getMdmPrefs(context)
@@ -1515,6 +1611,8 @@ class PolicyManager(private val context: Context) {
                 }
                 prefs.edit().putStringSet("per_app_internet_blocked", set).apply()
             }
+
+            applyDeviceStateFromPreset(dataObj)
 
             com.ejemplo.locksuite.receiver.BootReceiver.ensureVpnRunning(context)
             com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
@@ -1537,6 +1635,116 @@ class PolicyManager(private val context: Context) {
         "no_apps_control" -> UserManager.DISALLOW_APPS_CONTROL
         else -> key
     }
+
+    /**
+     * Aplica el estado del equipo que traiga el perfil: apps suspendidas, apps ocultas y
+     * reglas DNS. Cada bloque se aplica **solo si la clave está presente** — una clave
+     * ausente no se toca, que es la regla que ya rige para el resto del importador.
+     *
+     * ⚠️ **ES ADITIVO A PROPÓSITO: suspende y oculta lo que el perfil nombra, y NUNCA
+     * des-suspende ni des-oculta nada.** No es una simplificación, es fallo-cerrado.
+     *
+     * La alternativa —"dejar el equipo exactamente igual que el de origen", o sea
+     * también liberar lo que el perfil no nombra— parece más prolija y es peligrosa: un
+     * perfil hecho en un equipo donde el navegador nunca se instaló no nombra al
+     * navegador, y aplicarlo en otro equipo lo DESBLOQUEARÍA. Un perfil de configuración
+     * puede cerrar cosas de más sin dañar a nadie; abrirlas de más deja un equipo sin
+     * filtro y nadie se entera. Para liberar apps ya están la pantalla de aplicaciones y
+     * el panel, donde se ve una por una lo que se está soltando.
+     */
+    private fun applyDeviceStateFromPreset(dataObj: org.json.JSONObject) {
+        try {
+            val appController = AppController(context)
+
+            dataObj.optJSONArray("suspendedPackages")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val pkg = arr.optString(i, "")
+                    if (pkg.isNotEmpty()) appController.suspendApp(pkg, true)
+                }
+            }
+            dataObj.optJSONArray("hiddenPackages")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val pkg = arr.optString(i, "")
+                    if (pkg.isNotEmpty()) appController.hideApp(pkg, true)
+                }
+            }
+            dataObj.optJSONObject("dnsRules")?.let { rules ->
+                val ruleManager = com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager
+                val keys = rules.keys()
+                while (keys.hasNext()) {
+                    val domain = keys.next()
+                    // Un tipo de regla desconocido se SALTEA en vez de caer en un valor
+                    // por omisión. Elegir uno sería adivinar entre "permitir" y
+                    // "bloquear" — y las dos adivinanzas están mal: una abre algo que el
+                    // administrador quería cerrado, la otra rompe algo que funcionaba.
+                    val type = try {
+                        com.ejemplo.locksuite.dns.RuleType.valueOf(rules.getString(domain))
+                    } catch (e: Exception) {
+                        android.util.Log.w("PolicyManager", "Regla DNS con tipo desconocido en el perfil: $domain")
+                        null
+                    }
+                    if (type != null) ruleManager.setRule(domain, type)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PolicyManager", "No se pudo aplicar el estado del equipo del perfil: ${e.message}", e)
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // PERFILES MAESTROS DE ALTA (9/9/2026) — ver mdm/EnrollmentProfiles.kt
+    // ─────────────────────────────────────────────
+
+    /**
+     * Aplica uno de los tres perfiles de alta que vienen dentro del APK.
+     *
+     * **Por qué pasa por `importPolicyPresetJson()` en vez de aplicar directo.** Aplicar
+     * un perfil son ~50 llamadas con reglas propias (el valor por omisión es el actual,
+     * las claves viejas se traducen, el estado del equipo es aditivo, hay que reencender
+     * la VPN al final). Eso ya está escrito y probado en un solo lugar. Un segundo camino
+     * "porque este perfil viene de adentro" se separaría del primero en la siguiente
+     * sesión que toque uno de los dos — es el modo de falla que este proyecto ya pagó
+     * cuatro veces. La firma HMAC de un perfil que nunca salió del equipo no protege de
+     * nada, pero calcularla cuesta microsegundos y es el precio de tener UN camino.
+     *
+     * @return `false` si el id no existe o si el perfil no se pudo aplicar.
+     */
+    fun applyMasterProfile(profileId: String?): Boolean {
+        val data = EnrollmentProfiles.buildData(profileId) ?: run {
+            android.util.Log.w("PolicyManager", "Perfil maestro desconocido: $profileId")
+            return false
+        }
+        return try {
+            val rootObj = org.json.JSONObject()
+            rootObj.put("presetName", EnrollmentProfiles.presetNameFor(profileId))
+            rootObj.put("createdAt", System.currentTimeMillis())
+            rootObj.put("version", 1)
+            rootObj.put("data", data)
+            rootObj.put("signature", computeHmacSha256(canonicalizeJson(data)))
+            val applied = importPolicyPresetJson(rootObj.toString())
+            if (applied) {
+                // Queda anotado cuál se aplicó y cuándo: el panel lo muestra, y es lo
+                // primero que hay que mirar cuando un equipo "se comporta distinto a los
+                // demás" sin que nadie recuerde cómo se lo dio de alta.
+                PrefsHelper.getMdmPrefs(context).edit()
+                    .putString("master_profile_id", profileId)
+                    .putLong("master_profile_at", System.currentTimeMillis())
+                    .apply()
+            }
+            applied
+        } catch (e: Exception) {
+            android.util.Log.e("PolicyManager", "applyMasterProfile falló: ${e.message}", e)
+            false
+        }
+    }
+
+    /** Id del último perfil maestro aplicado, o cadena vacía si nunca se aplicó ninguno. */
+    fun getAppliedMasterProfileId(): String =
+        PrefsHelper.getMdmPrefs(context).getString("master_profile_id", "") ?: ""
+
+    /** Cuándo se aplicó el último perfil maestro (epoch ms), o 0. */
+    fun getAppliedMasterProfileAt(): Long =
+        PrefsHelper.getMdmPrefs(context).getLong("master_profile_at", 0L)
 
     fun saveLocalPreset(presetName: String, jsonString: String) {
         val prefs = PrefsHelper.getMdmPrefs(context)
@@ -1799,6 +2007,51 @@ class PolicyManager(private val context: Context) {
         }
     }
 
+    /**
+     * Auto-concede, desde el privilegio de Device Owner, los permisos PELIGROSOS que
+     * la propia app declara, y los deja "administrado por tu organización" (el
+     * usuario ve el switch deshabilitado en Ajustes y no los puede revocar).
+     *
+     * 9/9/2026 (B.55). Hoy el único permiso peligroso que LockSuite declara es
+     * POST_NOTIFICATIONS (Android 13+): si el usuario lo niega, se quedan mudos el
+     * aviso de accesibilidad caída (B.15) y las notificaciones del watchdog —un
+     * silencio real. Auto-concederlo cierra ese hueco, y la iteración deja cubierto
+     * de una vez cualquier permiso peligroso que se agregue en el futuro.
+     *
+     * ⚠️ setPermissionGrantState SOLO tiene efecto sobre permisos de RUNTIME
+     * (peligrosos). Sobre un permiso normal o un app-op (SYSTEM_ALERT_WINDOW,
+     * MANAGE_EXTERNAL_STORAGE, SCHEDULE_EXACT_ALARM, REQUEST_INSTALL_PACKAGES) es
+     * un no-op: por eso el watchdog de alarma exacta (B.54) NO se arregla por acá,
+     * se arregla declarando el permiso en el Manifest. Se itera y se intenta
+     * conceder cada permiso declarado; los que no son de runtime se ignoran solos.
+     * Idempotente y con guarda de una vez por proceso.
+     */
+    fun autoGrantDeclaredPermissions() {
+        if (permissionsAutoGranted) return
+        try {
+            if (!dpm.isDeviceOwnerApp(context.packageName)) return
+            val declared = try {
+                context.packageManager
+                    .getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+                    .requestedPermissions
+            } catch (e: Exception) { null } ?: return
+            for (perm in declared) {
+                try {
+                    dpm.setPermissionGrantState(
+                        adminComponent, context.packageName, perm,
+                        DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+                    )
+                } catch (e: Exception) {
+                    // Un permiso que no es de runtime devuelve false o tira: se ignora.
+                }
+            }
+            permissionsAutoGranted = true
+            android.util.Log.i("PolicyManager", "Permisos de runtime declarados auto-concedidos (Device Owner)")
+        } catch (e: Exception) {
+            android.util.Log.w("PolicyManager", "autoGrantDeclaredPermissions: ${e.message}")
+        }
+    }
+
     fun reapplyAllRestrictions() {
         // Mientras LockSuite está suspendido nadie vuelve a aplicar nada: ni el
         // arranque, ni el Watchdog de 15 min, ni un comando del panel. La única
@@ -1808,6 +2061,11 @@ class PolicyManager(private val context: Context) {
             android.util.Log.i("PolicyManager", "LockSuite suspendido: omitiendo reapplyAllRestrictions")
             return
         }
+
+        // 9/9/2026 (B.55) — asegurar los permisos peligrosos propios (hoy
+        // POST_NOTIFICATIONS) para que el usuario no pueda dejar mudo el aviso de
+        // accesibilidad caída. Guarda interna de una vez por proceso: barato.
+        autoGrantDeclaredPermissions()
 
         // Auto-curación de apps esenciales/libres (Archivos, Grabadora, Google Chat, Video, Carpeta Segura)
         healRestrictedEssentialApps()

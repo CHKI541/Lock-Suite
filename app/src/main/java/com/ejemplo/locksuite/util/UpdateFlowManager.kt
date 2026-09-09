@@ -705,15 +705,44 @@ object UpdateFlowManager {
     }
 
     private fun armWatchdog(context: Context) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val at = SystemClock.elapsedRealtime() + WATCHDOG_TIMEOUT_MS
+        val pi = watchdogPendingIntent(context)
+        // Esta alarma es la ULTIMA garantia de que la pantalla negra se saque y de
+        // que el equipo se vuelva a bloquear si todo lo demas falla: el proceso
+        // muere, el ticker se corta al re-vincularse el servicio de accesibilidad
+        // (ver LockSuiteAccessibilityService.onServiceConnected), o el hilo principal
+        // se traba. Tiene que quedar programada SI O SI.
+        //
+        // ⚠️ 9/9/2026 (B.54) — POR QUE YA NO ES UN setExactAndAllowWhileIdle A SECAS.
+        //
+        // Desde Android 12 (API 31) setExact* y setExactAndAllowWhileIdle exigen el
+        // permiso de alarmas exactas; sin el, la llamada tira SecurityException. El
+        // Manifest no declaraba NINGUNO, asi que en Android 12/13/14 —incluido el
+        // equipo Android 13 del dueno (B.8)— la excepcion caia en el catch y la
+        // alarma watchdog NO se programaba nunca: el respaldo final del flujo estaba
+        // apagado EN SILENCIO, que es justo la clase de silencio que este subsistema
+        // tiene que evitar. Ahora: (1) el Manifest declara USE_EXACT_ALARM +
+        // SCHEDULE_EXACT_ALARM; (2) igual se verifica canScheduleExactAlarms() en
+        // caliente, porque un OEM puede revocarlo; (3) si no se puede exacta, se cae
+        // a setAndAllowWhileIdle, que NO necesita permiso y dispara igual en Doze —el
+        // sistema la puede correr unos minutos, tolerable para un tope de 10 minutos.
         try {
-            val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val at = SystemClock.elapsedRealtime() + WATCHDOG_TIMEOUT_MS
-            // Exacta y a prueba de Doze: es la unica garantia de que el equipo
-            // vuelva a bloquearse y de que la pantalla negra se saque si todo lo
-            // demas falla. Con am.set() normal el sistema puede correrla mucho.
-            am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, watchdogPendingIntent(context))
+            val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()
+            if (canExact) {
+                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
+            } else {
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
+                Log.w(TAG, "Sin permiso de alarma exacta: watchdog programado inexacto (setAndAllowWhileIdle)")
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "No se pudo programar el watchdog: ${e.message}")
+            // Ultimo recurso: inexacta, que no exige ningun permiso. Es preferible un
+            // watchdog que se corra unos minutos a no tener watchdog.
+            try {
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
+            } catch (e2: Exception) {
+                Log.w(TAG, "No se pudo programar el watchdog ni siquiera inexacto: ${e2.message}")
+            }
         }
     }
 

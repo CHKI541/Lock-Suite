@@ -341,6 +341,23 @@ function updateSidebarUI(e, t) {
         sidebarUpdateLocksuiteBtn.disabled = false;
     }
     sidebarDeviceName.textContent = n || a || "Celular sin nombre", sidebarDeviceId.textContent = e, sidebarDeviceVersion.textContent = vText, document.activeElement !== deviceNameInput && (deviceNameInput.value = n);
+
+    // 9/9/2026 — con qué perfil de alta se configuró este equipo (ver
+    // app/mdm/EnrollmentProfiles.kt). Sin este dato, un celular que se porta distinto
+    // a los demás obliga a comparar sesenta interruptores a mano.
+    const masterProfileEl = document.getElementById("device-master-profile");
+    if (masterProfileEl) {
+        const mpId = field(t, "masterProfileId", "");
+        const mpAt = field(t, "masterProfileAt", 0);
+        if (mpId) {
+            const label = masterProfileLabel(mpId) || mpId;
+            const when = mpAt ? ` · ${new Date(mpAt).toLocaleDateString()}` : "";
+            masterProfileEl.textContent = `⚡ Configurado con: ${label}${when}`;
+        } else {
+            masterProfileEl.textContent = "⚡ Sin perfil de alta: se configuró a mano.";
+        }
+    }
+
     sidebar.querySelectorAll(".policy-switch").forEach(e => {
         const n = e.getAttribute("data-policy");
         // "Bloquear de verdad" es el INVERSO de whitelistSimulation, que el celular
@@ -490,6 +507,31 @@ function updateSidebarUI(e, t) {
             if (cancelBtn) cancelBtn.disabled = false;
         } else {
             flowCard.classList.add("hidden");
+        }
+    }
+    // Resultado de la ÚLTIMA actualización, visible aunque no haya ninguna en curso.
+    // El motivo (p.ej. "faltan 180 MB") y el espacio libre se publican al panel pero
+    // no se dibujaban en la tarjeta: solo se veían en la línea efímera del comando al
+    // mandarlo. Reabrir el panel no mostraba en qué quedó. Ver index.html y B.54.
+    const lastResultCard = document.getElementById("update-last-result-card");
+    if (lastResultCard) {
+        const lr = flow.lastResult || "";
+        if (flow.running !== true && lr) {
+            const lrText = document.getElementById("update-last-result-text");
+            const lrFree = document.getElementById("update-last-result-free");
+            if (lrText) lrText.textContent = updateResultText(lr, flow.lastResultReason);
+            const freeMb = (typeof flow.freeSpaceMb === "number") ? flow.freeSpaceMb : null;
+            if (lrFree) {
+                if (freeMb !== null && freeMb >= 0) {
+                    lrFree.textContent = "Espacio libre en el celular: " + freeMb + " MB";
+                    lrFree.style.display = "block";
+                } else {
+                    lrFree.style.display = "none";
+                }
+            }
+            lastResultCard.classList.remove("hidden");
+        } else {
+            lastResultCard.classList.add("hidden");
         }
     }
     const apps = appsOf(t);
@@ -1792,7 +1834,143 @@ function canonicalizeJson(obj) {
     return '{' + parts.join(',') + '}';
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PERFILES MAESTROS DE ALTA (9/9/2026) — ver app/mdm/EnrollmentProfiles.kt
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// La definición REAL de cada nivel (qué restricciones, qué interruptores) vive en
+// el Kotlin y viaja dentro del APK. Acá se duplica SOLO lo que el panel necesita
+// para dibujar la tarjeta: el id, el nombre, el resumen y el aviso. Los valores no
+// se duplican — es la misma decisión que se tomó con el catálogo de la lista
+// blanca en B.53, y por el mismo motivo: dos copias de la misma tabla en dos
+// lenguajes distintos se desincronizan solas y nadie se entera (B.28).
+//
+// Lo único que TIENE que coincidir es el `id`, porque es lo que viaja por FCM. Un
+// id que el celular no reconozca se descarta allá sin hacer nada. Eso lo verifica
+// `tools/check_profile_sync.py` contra la lista LEVELS de la Cloud Function.
+const MASTER_PROFILES = [
+    {
+        id: "kosher_estricto",
+        label: "Nivel 1 — Kosher estricto",
+        icon: "🕍",
+        summary: "Llamadas, mensajes, bancos y las apps permitidas. Sin navegador, sin tienda, sin estados de WhatsApp, sin ofertas, con launcher kosher.",
+        warning: "Bloquea agregar y quitar cuentas de Google, y bloquea el cambio de idioma. Aplicalo DESPUÉS de haber agregado la cuenta de Google y de haber dejado el equipo en el idioma definitivo.",
+        tone: "strict"
+    },
+    {
+        id: "trabajo",
+        label: "Nivel 2 — Trabajo",
+        icon: "💼",
+        summary: "Todo lo del Nivel 1 salvo el launcher kosher, y deja agregar cuentas de correo y manejar las apps del equipo.",
+        warning: "Bloquea el cambio de idioma del sistema: dejá el equipo en el idioma definitivo antes de aplicarlo.",
+        tone: "work"
+    },
+    {
+        id: "base_minima",
+        label: "Nivel 3 — Base mínima",
+        icon: "🛠️",
+        summary: "Solo el piso anti-manipulación: no se puede formatear, ni entrar en modo seguro, ni desinstalar LockSuite. Ningún filtro de contenido.",
+        warning: "Este perfil APAGA los filtros de contenido (anuncios, GIFs, estados de WhatsApp, ofertas, cuenta de Google, launcher kosher). Usalo para diagnosticar, no para entregar un equipo.",
+        tone: "loose"
+    }
+];
+
+function masterProfileLabel(id) {
+    const p = MASTER_PROFILES.find(x => x.id === id);
+    return p ? p.label : "";
+}
+
+function renderMasterProfiles() {
+    const host = document.getElementById("master-profiles-list");
+    if (!host) return;
+    host.innerHTML = "";
+
+    const dev = selectedDeviceId ? currentDevicesData[selectedDeviceId] : null;
+    const devName = dev ? (dev.deviceName || dev.model || selectedDeviceId) : null;
+    const appliedId = dev ? (dev.masterProfileId || "") : "";
+
+    MASTER_PROFILES.forEach(profile => {
+        const card = document.createElement("div");
+        card.style.cssText =
+            "background: var(--navy-medium); border-radius: 16px; padding: 18px; display: flex;" +
+            "flex-direction: column; gap: 10px; border: 1px solid " +
+            (appliedId === profile.id ? "var(--success-green)" : "var(--navy-light)") + ";";
+
+        const head = document.createElement("div");
+        head.style.cssText = "display:flex; align-items:center; gap:10px;";
+        head.innerHTML =
+            `<span style="font-size:22px; line-height:1;">${profile.icon}</span>` +
+            `<h3 style="margin:0; font-size:15px; color: var(--accent);">${profile.label}</h3>`;
+
+        if (appliedId === profile.id) {
+            const badge = document.createElement("span");
+            badge.textContent = "aplicado";
+            badge.style.cssText =
+                "margin-left:auto; font-size:10px; text-transform:uppercase; letter-spacing:.5px;" +
+                "background: var(--success-green); color:#fff; padding:3px 8px; border-radius:999px;";
+            head.appendChild(badge);
+        }
+
+        const summary = document.createElement("p");
+        summary.style.cssText = "margin:0; font-size:12px; line-height:1.5; color: var(--text-light);";
+        summary.textContent = profile.summary;
+
+        // El aviso NO va escondido en un tooltip ni en la documentación: es lo único
+        // que la persona lee seguro antes de tocar el botón, y en dos de los tres
+        // niveles dice algo que puede arruinar un alta si se ignora.
+        const warn = document.createElement("p");
+        warn.style.cssText =
+            "margin:0; font-size:11px; line-height:1.5; padding:8px 10px; border-radius:8px;" +
+            (profile.tone === "loose"
+                ? "background: rgba(231,76,60,.12); color:#e79b93; border-left:3px solid #e74c3c;"
+                : "background: rgba(241,196,15,.10); color:#e6c86a; border-left:3px solid #f1c40f;");
+        warn.textContent = (profile.tone === "loose" ? "⚠️ " : "ℹ️ ") + profile.warning;
+
+        const btn = document.createElement("button");
+        btn.className = "action-btn";
+        btn.style.cssText =
+            "margin-top:auto; background: var(--success-green); color:#fff; font-weight:bold;" +
+            "font-size:12px; padding:10px 12px; border:none; border-radius:8px; cursor:pointer; width:100%;";
+        btn.textContent = devName ? `⚡ Aplicar a ${devName}` : "⚡ Aplicar…";
+        btn.addEventListener("click", () => applyMasterProfile(profile));
+
+        card.appendChild(head);
+        card.appendChild(summary);
+        card.appendChild(warn);
+        card.appendChild(btn);
+        host.appendChild(card);
+    });
+}
+
+function applyMasterProfile(profile) {
+    const status = document.getElementById("master-profile-status");
+    let targetId = selectedDeviceId;
+    if (!targetId) {
+        targetId = prompt("¿A qué celular querés aplicarle este perfil? Pegá su ID, o elegí uno en la pestaña 'Celulares' para no tener que escribirlo:", "");
+        if (!targetId || !targetId.trim()) return;
+        targetId = targetId.trim();
+    }
+    const dev = currentDevicesData[targetId];
+    const devName = dev ? (dev.deviceName || dev.model || targetId) : targetId;
+
+    // Confirmación con el aviso adentro. Aplicar un perfil toca ~50 políticas de una;
+    // que la persona lo confirme leyendo lo que puede salir mal es más barato que
+    // deshacerlo después, y en el Nivel 1 lo que puede salir mal es que el equipo
+    // quede sin poder dar de alta la cuenta de Google.
+    const ok = confirm(
+        `Aplicar "${profile.label}" a ${devName}.\n\n` +
+        `${profile.summary}\n\n` +
+        `⚠️ ${profile.warning}\n\n` +
+        `¿Seguimos?`
+    );
+    if (!ok) return;
+
+    if (status) status.textContent = `Enviando "${profile.label}" a ${devName}…`;
+    runCommandOnDevice(targetId, "APPLY_MASTER_PROFILE", null, null, null, { level: profile.id });
+}
+
 function loadPresetsList() {
+    renderMasterProfiles();
     const presetsList = document.getElementById("presets-list");
     if (!presetsList) return;
     presetsList.innerHTML = '<p class="loading-text">Cargando perfiles guardados…</p>';
@@ -1873,7 +2051,7 @@ function renderPresetsList(presets) {
         applyBtn.style.padding = "8px 12px";
         applyBtn.style.flex = "1";
         applyBtn.textContent = "⚡ Aplicar a Dispositivo";
-        applyBtn.addEventListener("click", () => applyPresetToDeviceModal(preset));
+        applyBtn.addEventListener("click", () => applyPresetToDeviceModal(preset, presetId));
 
         const exportBtn = document.createElement("button");
         exportBtn.className = "action-btn";
@@ -2012,6 +2190,15 @@ if (savePresetBtn) {
             kioskLockTask: !!(dev.kioskLockTask || dev.kioskLockTaskEnabled),
             nokiaKeypadMode: !!dev.nokiaKeypadMode,
             nokiaTouchEnabled: dev.nokiaTouchEnabled !== false,
+            // 9/9/2026 — los tres de la lista blanca (B.53) faltaban. Es la TERCERA vez
+            // que el perfil se queda atrás de las protecciones nuevas (ya lo anotaron
+            // B.28 y el punto 8 de B.40). Ahora `tools/check_profile_sync.py` compara
+            // este objeto contra PolicyManager.importPolicyPresetJson() y falla si
+            // alguna clave de acá no se lee allá — que es como se detectó
+            // `captivePortalCoverImages`, que viajaba desde el 8/9 sin hacer nada.
+            whitelistEnabled: !!dev.whitelistEnabled,
+            whitelistSimulation: dev.whitelistSimulation !== false,
+            whitelistSharedCdn: dev.whitelistSharedCdn !== false,
             perAppInternetBlocked: Object.values(dev.apps || {}).filter(a => a.isInternetBlocked).map(a => a.packageName)
         };
 
@@ -2104,14 +2291,72 @@ if (importFileInput) {
 }
 
 // 📌 Aplicar Perfil a un Dispositivo en 1-Clic
-function applyPresetToDeviceModal(preset) {
+// El tope real de `presetJson` en sendCommandV8. No es un número elegido acá: la
+// Function rechaza con HTTP 413 a partir de 3.000 bytes, porque el `data` de un
+// mensaje FCM tiene un tope duro de ~4 KB.
+const FCM_PRESET_MAX_BYTES = 3000;
+
+/**
+ * Aplica un perfil guardado a un celular.
+ *
+ * ── POR QUÉ HAY DOS CAMINOS Y CUÁNDO SE USA CADA UNO (9/9/2026) ──────────────
+ *
+ * Está MEDIDO que el perfil completo no entra por FCM: el de políticas de hoy pesa
+ * 2.009 bytes (el 67 % del tope de 3.000) y sumándole las listas de apps que B.28
+ * dejó anotadas como faltantes llega a 3.580 → 413, rechazado. O sea que la ruta
+ * de siempre tiene un techo y ya está cerca de él.
+ *
+ * Entonces: si el perfil entra, se manda como siempre — es el camino que la flota
+ * ya tiene instalado y funcionando, y cambiarlo sin necesidad sería regalar un modo
+ * de falla nuevo. Si NO entra, se deja en `globalSettings/profiles/<id>` y por FCM
+ * va solo el id (`APPLY_PROFILE`), que es el patrón que estrenó la lista blanca en
+ * B.53.
+ *
+ * ⚠️ El perfil se guarda como una CADENA (`json`), no como un objeto anidado. Es
+ * deliberado: Realtime Database descarta los arrays vacíos y no conserva la forma,
+ * y el perfil va firmado con HMAC sobre su forma canónica — cualquier cambio y la
+ * firma no coincide. **Eso ya pasó y es literalmente B.28**, donde casi ningún
+ * perfil creado desde el panel se podía aplicar. Como cadena, la base no puede
+ * tocar el contenido.
+ *
+ * ⚠️ `APPLY_PROFILE` solo lo entienden los celulares con 0.6.48 o superior. Por eso
+ * el camino nuevo se usa únicamente cuando el viejo NO PUEDE funcionar: un equipo
+ * viejo con un perfil grande hoy recibe un 413 del panel, y con esto va a recibir
+ * un rechazo del celular — en los dos casos no se aplica, pero al menos ahora el
+ * caso queda diagnosticable en vez de topado.
+ */
+function applyPresetToDeviceModal(preset, presetId) {
     const deviceId = prompt("Ingresá el ID del dispositivo al que querés aplicar este perfil (o dejalo como está si querés aplicarlo al celular seleccionado actualmente):", selectedDeviceId || "");
     if (!deviceId || !deviceId.trim()) return;
 
     const targetId = deviceId.trim();
     const presetJsonStr = JSON.stringify(preset);
+    const bytes = new TextEncoder().encode(presetJsonStr).length;
 
-    runCommandOnDevice(targetId, "APPLY_PRESET_PROFILE", null, null, null, { presetJson: presetJsonStr });
+    if (bytes <= FCM_PRESET_MAX_BYTES) {
+        runCommandOnDevice(targetId, "APPLY_PRESET_PROFILE", null, null, null, { presetJson: presetJsonStr });
+        return;
+    }
+
+    // Camino grande: se publica el perfil y se manda solo el id.
+    const cloudId = (presetId && /^[A-Za-z0-9_-]{1,128}$/.test(presetId))
+        ? presetId
+        : "p" + Date.now().toString(36);
+
+    database.ref(`globalSettings/profiles/${cloudId}`).set({
+        name: preset.presetName || "Perfil",
+        createdAt: Date.now(),
+        json: presetJsonStr
+    }).then(() => {
+        runCommandOnDevice(targetId, "APPLY_PROFILE", null, null, null, { profileId: cloudId });
+    }).catch(err => {
+        alert(
+            "No se pudo publicar el perfil para enviarlo.\n\n" +
+            `Pesa ${bytes} bytes y el envío directo topa en ${FCM_PRESET_MAX_BYTES}, ` +
+            "así que hay que dejarlo en la base primero.\n\n" +
+            "Error: " + err.message
+        );
+    });
 }
 
 // 2. Renderizar Lista de Tarjetas de Grupos

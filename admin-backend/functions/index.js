@@ -45,6 +45,17 @@ const ALLOWED_COMMANDS = new Set([
   "BLOCK_GIFS", "UNBLOCK_GIFS", "UPDATE_APP", "UPDATE_LOCKSUITE", "VERIFY_PIN",
   "BLOCK_APP_INTERNET", "UNBLOCK_APP_INTERNET", "UNSUSPEND_ALL_APPS",
   "SET_HIDE_SUSPENDED_APPS", "APPLY_PRESET_PROFILE",
+  // ── PERFILES MAESTROS DE ALTA (9/9/2026) — ver app/mdm/EnrollmentProfiles.kt ──
+  // APPLY_PRESET_PROFILE manda el perfil ENTERO dentro del data de FCM y por eso
+  // tiene el tope de 3.000 bytes de mas abajo. Esta MEDIDO que por ahi no entra un
+  // perfil completo: el de politicas ya pesa 2.009 bytes y con las listas de apps
+  // que le faltan (B.28) llega a 3.580. Estos dos comandos no mandan el perfil:
+  //   APPLY_MASTER_PROFILE -> el perfil esta dentro del APK, viaja solo el nivel.
+  //   APPLY_PROFILE        -> el perfil vive en globalSettings/profiles/<id> y
+  //                           viaja solo el id (mismo patron que SYNC_WHITELIST).
+  // Los dos EXIGEN PIN: cambian politicas del equipo, asi que no van en la
+  // excepcion de UPDATE_* de mas abajo.
+  "APPLY_MASTER_PROFILE", "APPLY_PROFILE",
   "BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY",
   "BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN",
   "BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS",
@@ -254,7 +265,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
 
     const {
       deviceId, command, packages, devicePin, rememberDevice, newPin,
-      enabled, presetJson
+      enabled, presetJson, profileId, level
     } = req.body || {};
 
     if (!deviceId || typeof deviceId !== "string") {
@@ -364,6 +375,37 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
         return;
       }
       payload.presetJson = presetJson;
+    } else if (command === "APPLY_MASTER_PROFILE") {
+      // Los tres niveles que trae el APK. La lista esta escrita a mano aca a
+      // proposito: la Function no puede leer el Kotlin, y una constante suelta que
+      // el celular no reconozca se descarta alla sin decir nada. Si se agrega un
+      // nivel en EnrollmentProfiles.kt hay que agregarlo aca tambien, y
+      // tools/check_profile_sync.py lo verifica.
+      const LEVELS = new Set(["kosher_estricto", "trabajo", "base_minima"]);
+      if (typeof level !== "string" || !LEVELS.has(level)) {
+        res.status(400).json({ error: `Nivel de perfil desconocido: ${level}` });
+        return;
+      }
+      payload.level = level;
+    } else if (command === "APPLY_PROFILE") {
+      // Solo el id: el perfil se lee de globalSettings/profiles/<id> desde el
+      // celular. El formato se valida para no armar una ruta de Firebase invalida
+      // (las claves no admiten . # $ [ ] ni /).
+      if (typeof profileId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(profileId)) {
+        res.status(400).json({ error: "Identificador de perfil invalido." });
+        return;
+      }
+      const profileSnap = await admin.database()
+        .ref(`globalSettings/profiles/${profileId}/json`).once("value");
+      const profileJson = profileSnap.val();
+      if (typeof profileJson !== "string" || profileJson.length === 0) {
+        // Se verifica ACA y no en el celular porque el modo de falla del otro lado
+        // es mudo: el equipo no encuentra el nodo, no aplica nada, y el panel se
+        // queda esperando un ack que no dice por que. Mejor un 404 con la causa.
+        res.status(404).json({ error: `El perfil '${profileId}' no existe o esta vacio.` });
+        return;
+      }
+      payload.profileId = profileId;
     } else if (typeof packages === "string" && packages.trim().length > 0) {
       const clean = packages.split(",").map(p => p.trim()).filter(p => /^[a-zA-Z0-9_.]+$/.test(p));
       if (clean.length > 0) payload.packages = clean.join(",");

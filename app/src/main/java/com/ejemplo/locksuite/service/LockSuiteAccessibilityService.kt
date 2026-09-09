@@ -534,6 +534,33 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             Log.w(TAG, "Reconciliación al conectar: ${e.message}")
         }
 
+        // 9/9/2026 (B.54) — Si el servicio se re-vincula EN MEDIO de una
+        // actualizacion (el sistema mata y recrea los servicios de accesibilidad
+        // seguido, sobre todo en equipos con poca RAM como el CAT S22 Flip), el
+        // ticker del flujo quedo cortado junto con el instance viejo y nadie lo
+        // vuelve a arrancar: onServiceConnected() no lo miraba. Resultado: el flujo
+        // seguia marcado "en curso" con Play Store destapada y la instalacion
+        // habilitada, pero SIN pantalla y SIN nadie que lo llevara a un cierre con
+        // motivo. En Android 12+ ni siquiera lo rescataba la alarma watchdog (ver
+        // UpdateFlowManager.armWatchdog / B.54). Se re-arma el ticker y se redibuja
+        // el overlay para que el flujo retome y termine diciendo en que quedo.
+        try {
+            val ctx = applicationContext
+            if (com.ejemplo.locksuite.util.UpdateFlowManager.isRunning(ctx)) {
+                val pkg = com.ejemplo.locksuite.util.UpdateFlowManager.currentPackage(ctx)
+                if (!pkg.isNullOrBlank()) {
+                    com.ejemplo.locksuite.util.UpdateFlowManager.showOverlay(
+                        ctx, pkg,
+                        com.ejemplo.locksuite.util.UpdateFlowManager.currentStage(ctx)
+                    )
+                    startUpdateTicker()
+                    Log.i(TAG, "Flujo de actualizacion en curso al reconectar: ticker re-armado para $pkg")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo re-armar el flujo de actualizacion al reconectar: ${e.message}")
+        }
+
         Log.i(TAG, "✅ LockSuiteAccessibilityService conectado (Programmatic config + XML capabilities)")
     }
 

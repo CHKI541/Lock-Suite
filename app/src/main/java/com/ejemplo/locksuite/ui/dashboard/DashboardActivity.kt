@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.ejemplo.locksuite.mdm.AppController
 import com.ejemplo.locksuite.mdm.AppInfoData
+import com.ejemplo.locksuite.mdm.EnrollmentProfiles
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.security.SessionManager
 import com.ejemplo.locksuite.util.PrefsHelper
@@ -1743,6 +1744,131 @@ fun AppRowItem(
     }
 }
 
+/**
+ * ⚡ Configuración rápida — los tres perfiles de alta (9/9/2026).
+ *
+ * Ver `mdm/EnrollmentProfiles.kt` para el porqué completo. En una línea: dar de alta un
+ * equipo eran más de sesenta interruptores y acordarse de todos; acá son tres botones.
+ *
+ * Dos decisiones de esta pantalla que no hay que "simplificar":
+ *
+ * 1. **La confirmación muestra el aviso del perfil, no un "¿estás seguro?".** Dos de los
+ *    tres niveles hacen algo que puede arruinar un alta si se aplica en el momento
+ *    equivocado (el Nivel 1 bloquea agregar cuentas de Google; el Nivel 3 APAGA los
+ *    filtros). El diálogo es el único texto que la persona lee seguro.
+ * 2. **El perfil aplicado queda marcado en la tarjeta.** Sin eso, "¿este equipo con qué
+ *    nivel quedó?" se contesta comparando sesenta interruptores a mano.
+ */
+@Composable
+fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
+    val context = LocalContext.current
+    var pendingProfile by remember { mutableStateOf<EnrollmentProfiles.MasterProfile?>(null) }
+    var appliedId by remember { mutableStateOf(policyManager.getAppliedMasterProfileId()) }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                "⚡ Configuración rápida",
+                color = Color(0xFFF1C40F),
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+            Text(
+                "Tres configuraciones listas. Un toque deja el celular configurado entero, " +
+                    "en vez de ir interruptor por interruptor. Después se puede ajustar lo que haga falta.",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 12.sp
+            )
+
+            EnrollmentProfiles.ALL.forEach { profile ->
+                val isApplied = profile.id == appliedId
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (isApplied) Color(0xFF27AE60).copy(alpha = 0.16f)
+                            else Color.White.copy(alpha = 0.05f)
+                        )
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            profile.label,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (isApplied) {
+                            Text("✓ aplicado", color = Color(0xFF2ECC71), fontSize = 11.sp)
+                        }
+                    }
+                    Text(
+                        profile.summary,
+                        color = Color.White.copy(alpha = 0.75f),
+                        fontSize = 12.sp
+                    )
+                    Button(
+                        onClick = { pendingProfile = profile },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Aplicar", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+    }
+
+    pendingProfile?.let { profile ->
+        AlertDialog(
+            onDismissRequest = { pendingProfile = null },
+            containerColor = Color(0xFF0B2447),
+            title = {
+                Text(profile.label, color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(profile.summary, color = Color.White, fontSize = 13.sp)
+                    profile.warning?.let { warning ->
+                        Text(
+                            "⚠️ $warning",
+                            color = Color(0xFFF1C40F),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val ok = policyManager.applyMasterProfile(profile.id)
+                    pendingProfile = null
+                    if (ok) {
+                        appliedId = policyManager.getAppliedMasterProfileId()
+                        onApplied()
+                        Toast.makeText(context, "✅ ${profile.label} aplicado.", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(context, "❌ No se pudo aplicar el perfil.", Toast.LENGTH_LONG).show()
+                    }
+                }) {
+                    Text("Aplicar", color = Color(0xFF2ECC71), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingProfile = null }) {
+                    Text("Cancelar", color = Color.White.copy(alpha = 0.7f))
+                }
+            }
+        )
+    }
+}
+
 @Composable
 fun PresetsTabContent(context: Context) {
     val policyManager = remember { PolicyManager(context) }
@@ -1810,6 +1936,14 @@ fun PresetsTabContent(context: Context) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Va ARRIBA de "guardar preset" a propósito: el caso frecuente en esta pantalla
+        // es dar de alta un equipo nuevo, no cargar un respaldo.
+        item {
+            MasterProfilesCard(
+                policyManager = policyManager,
+                onApplied = { refreshKey++ }
+            )
+        }
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),

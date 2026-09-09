@@ -344,6 +344,50 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                         false
                     }
                 }
+
+                // ── PERFILES MAESTROS DE ALTA (9/9/2026) — ver mdm/EnrollmentProfiles.kt ──
+                //
+                // `APPLY_PRESET_PROFILE` (arriba) manda el perfil entero dentro del `data`
+                // de FCM, y eso tiene un techo MEDIDO: la Function rechaza con 413 a los
+                // 3.000 bytes, el perfil completo de políticas ya pesa 2.009, y con las
+                // listas de apps que le faltan (B.28) llega a 3.580. O sea que por ahí
+                // nunca va a entrar un perfil completo. Los dos comandos de acá abajo son
+                // la salida, y ninguno de los dos manda el perfil por FCM:
+                //
+                //   · APPLY_MASTER_PROFILE — el perfil está DENTRO DEL APK. Cero red, cero
+                //     tamaño. Es el que sirve para dar de alta un equipo que todavía no
+                //     tiene ni cuenta de Google ni Wi-Fi, que es cuando más falta hace.
+                //   · APPLY_PROFILE — el perfil vive en `globalSettings/profiles/<id>` y
+                //     por FCM viaja solo el id. Mismo patrón que `SYNC_WHITELIST` (B.53).
+                "APPLY_MASTER_PROFILE" -> {
+                    val level = data["level"]
+                    val ok = policyManager.applyMasterProfile(level)
+                    if (!ok) {
+                        android.util.Log.w("LockSuiteFCM", "APPLY_MASTER_PROFILE: nivel desconocido o fallo: $level")
+                    }
+                    ok
+                }
+                "APPLY_PROFILE" -> {
+                    val profileId = data["profileId"]
+                    if (profileId.isNullOrBlank()) {
+                        false
+                    } else {
+                        // Se acka desde el hilo de IO, igual que SYNC_WHITELIST: leer de
+                        // la base y aplicar ~50 políticas no puede correr en el hilo que
+                        // atiende el mensaje FCM.
+                        val idToAck = commandId
+                        commandId = null
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val ok = com.ejemplo.locksuite.util.FirebaseDeviceSync
+                                .pullAndApplyProfile(applicationContext, profileId)
+                            sendCommandAck(
+                                idToAck, "APPLY_PROFILE", ok,
+                                if (ok) null else "No se pudo leer o verificar globalSettings/profiles/$profileId"
+                            )
+                        }
+                        true
+                    }
+                }
                 "SET_IMAGE_BLOCK_NONE" -> {
                     packagesList.forEach { com.ejemplo.locksuite.mdm.ImageBlockManager.setMode(this, it, "none") }
                     true

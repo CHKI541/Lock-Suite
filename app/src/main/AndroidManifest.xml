@@ -19,6 +19,17 @@
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
+    <!-- Alarma exacta: la usa el watchdog de 10 min del flujo de actualizacion
+         (UpdateFlowManager) como respaldo final para sacar la pantalla negra y
+         re-bloquear el equipo si todo lo demas falla. Sin declararla, en Android
+         12+ setExactAndAllowWhileIdle tira SecurityException y el watchdog no se
+         programaba nunca, en silencio (B.54). USE_EXACT_ALARM se auto-concede en
+         API 33+; SCHEDULE_EXACT_ALARM cubre API 31-32. LockSuite se instala por
+         sideload como Device Owner, no por Play, asi que la politica de Play sobre
+         USE_EXACT_ALARM no aplica. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
 
     <!-- Knox SDK (Samsung) — recien concede algo una vez activada la licencia KPE;
          no tiene efecto en equipos sin Knox. Ver KnoxHardening.kt. -->

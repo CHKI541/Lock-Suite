@@ -521,6 +521,11 @@ object FirebaseDeviceSync {
                     // Como no se puede impedir del todo navegar ahí (la ventana esquiva
                     // la VPN), lo que sí se puede es que el administrador VEA cuántas
                     // veces se abrió y cuánto tiempo estuvo abierta.
+                    // Perfil maestro de alta (9/9/2026). Es lo primero que hay que mirar
+                    // cuando un equipo se comporta distinto a los demás y nadie recuerda
+                    // cómo se lo dio de alta: dice con qué nivel se configuró y cuándo.
+                    "masterProfileId" to policyManager.getAppliedMasterProfileId(),
+                    "masterProfileAt" to policyManager.getAppliedMasterProfileAt(),
                     "captivePortalGuard" to policyManager.isCaptivePortalGuardEnabled(),
                     "captivePortalCoverImages" to policyManager.isCaptivePortalCoverImagesEnabled(),
                     "captivePortalOpens" to policyManager.getCaptivePortalOpens(),
@@ -847,6 +852,98 @@ object FirebaseDeviceSync {
             }
         } catch (e: Exception) {
             android.util.Log.e("FirebaseDeviceSync", "Lista blanca: syncWhitelistState falló: ${e.message}", e)
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PERFILES GUARDADOS EN LA NUBE (9/9/2026) — ver mdm/EnrollmentProfiles.kt
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Baja un perfil de `globalSettings/profiles/<id>` y lo aplica. Lo dispara el comando
+     * FCM `APPLY_PROFILE`, que lleva **solo el id**.
+     *
+     * ─────────────────────────────────────────────────────────────────────────
+     * POR QUÉ EL PERFIL NO PUEDE SEGUIR VIAJANDO POR FCM — ESTÁ MEDIDO
+     * ─────────────────────────────────────────────────────────────────────────
+     *
+     * `sendCommandV8` rechaza con HTTP 413 cualquier `presetJson` de más de 3.000 bytes,
+     * porque el `data` de un mensaje FCM tiene un tope duro de ~4 KB. El perfil completo
+     * de políticas de hoy pesa **2.009 bytes** — el 67 % del tope. Agregarle lo que B.28
+     * dejó anotado como faltante (apps suspendidas, apps ocultas, los interruptores de la
+     * lista blanca) lo lleva a **3.580 bytes**: rechazado.
+     *
+     * O sea que **el perfil completo nunca pudo viajar por FCM**, y B.28 tenía razón sin
+     * saber cuánto le faltaba. Esta ruta lo saca de ahí: el dato queda en la base y por
+     * FCM va el aviso. Es exactamente el patrón que estrenó la lista blanca en B.53, que
+     * es el que hay que usar de acá en adelante para cualquier configuración grande.
+     *
+     * ─────────────────────────────────────────────────────────────────────────
+     * POR QUÉ EL PERFIL SE GUARDA COMO UNA CADENA Y NO COMO UN OBJETO ANIDADO
+     * ─────────────────────────────────────────────────────────────────────────
+     *
+     * Porque **Realtime Database no devuelve el mismo objeto que le diste**: descarta los
+     * arrays vacíos (la clave desaparece), no conserva el orden y puede cambiarte el tipo
+     * numérico. El perfil va firmado con HMAC sobre su forma canónica, así que
+     * cualquiera de esas tres cosas rompe la firma y el equipo rechaza el perfil con
+     * "archivo alterado". **Eso ya pasó y costó una sesión entera: es literalmente B.28**,
+     * donde casi ningún perfil creado desde el panel se podía aplicar.
+     *
+     * Guardándolo como `json` —una cadena— la base no puede tocar el contenido: vuelve
+     * byte por byte y la firma verifica. Es una decisión de una línea que hace imposible
+     * toda esa clase de bug.
+     *
+     * Estructura esperada:
+     * ```
+     * globalSettings/profiles/<id> = { name: "…", createdAt: 123, json: "<el .locksuite entero>" }
+     * ```
+     *
+     * @return true si se leyó, se verificó la firma y se aplicó.
+     */
+    fun pullAndApplyProfile(context: Context, profileId: String): Boolean {
+        val ctx = context.applicationContext
+        if (profileId.isBlank()) return false
+        return try {
+            val ref = FirebaseDatabase.getInstance()
+                .getReference("globalSettings/profiles/$profileId")
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var ok = false
+            withAuth {
+                ref.get()
+                    .addOnSuccessListener { snap ->
+                        try {
+                            val json = snap.child("json").getValue(String::class.java)
+                            if (json.isNullOrBlank()) {
+                                android.util.Log.e(
+                                    "FirebaseDeviceSync",
+                                    "Perfil '$profileId': el nodo no tiene el campo 'json'."
+                                )
+                            } else {
+                                // La firma la verifica importPolicyPresetJson(), que es el
+                                // único lugar del proyecto que sabe hacerlo. Un perfil con
+                                // firma inválida tira SecurityException y NO se aplica.
+                                ok = com.ejemplo.locksuite.mdm.PolicyManager(ctx)
+                                    .importPolicyPresetJson(json)
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("FirebaseDeviceSync", "Perfil '$profileId': error aplicando: ${e.message}", e)
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("FirebaseDeviceSync", "Perfil '$profileId': no se pudo leer: ${e.message}", e)
+                        latch.countDown()
+                    }
+            }
+            // Mismo tope que pullWhitelistConfig: esto corre en un hilo de IO lanzado por
+            // el propio comando FCM, nunca en el hilo principal ni en el lector del túnel.
+            latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            if (ok) syncDeviceInfo(ctx)
+            ok
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "pullAndApplyProfile falló: ${e.message}", e)
+            false
         }
     }
 

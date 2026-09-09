@@ -89,6 +89,28 @@
 
         <!-- Pestaña: Perfiles de Bloqueo (Presets) -->
         <div id="presets-container" class="hidden">
+
+          <!-- ── PERFILES MAESTROS DE ALTA (9/9/2026) ──────────────────────────
+               Los tres niveles vienen DENTRO del APK: no hay que armarlos, no
+               viajan por la red y andan aunque el equipo no tenga todavía cuenta
+               de Google ni Wi-Fi configurado. Van arriba de todo porque el caso
+               frecuente es dar de alta un equipo nuevo, no cargar un respaldo.
+               El detalle de cada nivel está en app/mdm/EnrollmentProfiles.kt. -->
+          <section style="margin-bottom: 28px;">
+            <div style="margin-bottom: 14px;">
+              <h2 style="margin: 0; font-size: 18px;">⚡ Configuración rápida (perfiles de alta)</h2>
+              <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-top: 4px; max-width: 760px;">
+                Tres configuraciones listas, escritas dentro de la app. Un toque deja el celular
+                configurado entero en vez de tener que ir interruptor por interruptor.
+                Después se puede ajustar lo que haga falta desde <strong>Políticas</strong>.
+              </p>
+            </div>
+            <div id="master-profiles-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px;"></div>
+            <p id="master-profile-status" style="font-size: 12px; margin-top: 10px; min-height: 18px; color: var(--accent);"></p>
+          </section>
+
+          <hr style="border: none; border-top: 1px solid var(--navy-light); margin: 0 0 24px 0;" />
+
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <div>
               <h2 style="margin: 0; font-size: 18px;">Perfiles de Bloqueo (Presets)</h2>
@@ -242,6 +264,11 @@
                 <input type="text" id="device-name-input" placeholder="Nombre personalizado (ej: Celular Eli)" />
                 <button id="save-name-btn" class="action-btn">Guardar</button>
               </div>
+              <!-- 9/9/2026 — con qué perfil de alta se configuró este equipo. Es lo
+                   primero que hay que mirar cuando un celular se comporta distinto a
+                   los demás y nadie recuerda cómo se lo dio de alta. Vacío = se
+                   configuró a mano, interruptor por interruptor. -->
+              <p id="device-master-profile" class="hint-text" style="font-size:11px; color: var(--text-gray); margin-top:8px;"></p>
             </div>
 
             <!-- Políticas de Sistema -->
@@ -554,6 +581,17 @@
                 </p>
                 <button id="update-flow-cancel-btn" class="action-btn warning-btn">✖ Cancelar actualización</button>
               </div>
+              <!-- Resultado de la ÚLTIMA actualización, visible aunque no haya ninguna
+                   en curso. Antes el motivo (p.ej. "faltan 180 MB") y el espacio libre
+                   se publicaban al panel pero NO se dibujaban en ningún lado: solo se
+                   veían en la línea efímera del comando al mandarlo, así que reabrir el
+                   panel no mostraba en qué había quedado la última actualización
+                   (B.54 / era el pendiente menor de B.42). -->
+              <div class="sidebar-card hidden" id="update-last-result-card">
+                <h3>🔄 Última actualización</h3>
+                <p id="update-last-result-text" style="font-weight: bold; margin: 4px 0;"></p>
+                <p id="update-last-result-free" class="hint-text" style="margin: 0;"></p>
+              </div>
               <div class="sidebar-card">
                 <h3>Comandos Directos</h3>
                 <button class="action-btn lock-btn" id="sidebar-lock-btn">🔒 Bloquear dispositivo ahora</button>
@@ -819,6 +857,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=31"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>

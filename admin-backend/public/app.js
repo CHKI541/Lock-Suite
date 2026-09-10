@@ -3565,6 +3565,7 @@ const qrCopyBtn = document.getElementById("qr-copy-btn");
 const qrJsonBox = document.getElementById("qr-json");
 const qrStatusMsg = document.getElementById("qr-status-msg");
 const qrPendingList = document.getElementById("qr-pending-list");
+const qrCanvas = document.getElementById("qr-canvas");
 
 function setQrStatus(msg, isError) {
     if (!qrStatusMsg) return;
@@ -3613,8 +3614,27 @@ qrBuildBtn && qrBuildBtn.addEventListener("click", () => {
     };
     payload["android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE"][QR_EXTRA_NIVEL] =
         qrLevelSelect.value;
+    // El QR lleva el JSON COMPACTO, no el indentado: los espacios y saltos del
+    // `null, 2` son bytes de más y empujan el código a una versión más alta, o sea
+    // módulos más chicos y más difíciles de escanear con una cámara vieja. Lo
+    // indentado es solo para mirarlo.
+    const compacto = JSON.stringify(payload);
     if (qrJsonBox) qrJsonBox.value = JSON.stringify(payload, null, 2);
-    setQrStatus("Listo. Copialo y pasalo por un generador de QR.");
+    try {
+        if (qrCanvas) {
+            qrCanvas.innerHTML = LockSuiteQR.svg(compacto, { lado: 320, margen: 4 });
+            qrCanvas.style.display = "block";
+        }
+        const info = LockSuiteQR.generar(compacto);
+        setQrStatus("Listo — código versión " + info.version + ". Escanealo desde la pantalla " +
+            "de bienvenida del equipo reseteado (seis toques).");
+    } catch (e) {
+        // Si el dibujo falla, el JSON igual queda a la vista: se puede armar el
+        // código a mano. Lo que no puede pasar es que no se diga nada (B.42).
+        if (qrCanvas) qrCanvas.style.display = "none";
+        setQrStatus("No se pudo dibujar el código (" + e.message + "). Los datos están " +
+            "abajo: pasalos por un generador de QR.", true);
+    }
 });
 
 qrCopyBtn && qrCopyBtn.addEventListener("click", () => {

@@ -126,13 +126,13 @@ Son dos interruptores separados a propósito: encenderlo **no** hace que bloquee
 
 ---
 
-## 4. B.61 — ALTA POR QR (PARCIAL, LEER LA SECCIÓN 5)
+## 4. B.61 — ALTA POR QR
 
 **Archivos:** `receiver/DeviceAdminReceiver.kt`, `mdm/EnrollmentProfiles.kt`,
 `mdm/PolicyManager.kt`, `util/ApkSignatureVerifier.kt`, `util/FirebaseDeviceSync.kt`,
 `service/LockSuiteFirebaseService.kt`, `admin-backend/functions/index.js`,
 `admin-backend/public/app.js`, `admin-backend/public/index.html`,
-`tools/check_profile_sync.py`.
+`admin-backend/public/qr.js` (nuevo), `tools/check_profile_sync.py`.
 
 **⚠️ Esto necesita un equipo de descarte reseteado de fábrica. No se puede probar en
 uno en uso.**
@@ -147,8 +147,11 @@ uno en uso.**
    **Generar datos del QR**. Tiene que salir el JSON con la huella de firma completa.
    Si dice que no hay huella todavía, es que ningún equipo publicó todavía
    `signatureChecksum`: esperá un ciclo del Watchdog en cualquier equipo actualizado.
-3. Pasá ese JSON por un generador de QR (ver sección 5) y escaneálo en el equipo de
-   descarte reseteado: seis toques en la pantalla de bienvenida.
+3. **El código tiene que dibujarse ahí mismo** (versión 17, 85×85 módulos). Escanealo
+   en el equipo de descarte reseteado: seis toques en la pantalla de bienvenida.
+   ⚠️ **Esta es la única prueba que no se pudo hacer desde el contenedor**: que el
+   código sea correcto está verificado contra un decodificador, pero que *Android lo
+   acepte como aprovisionamiento* solo lo dice un equipo real.
 4. **★ Cuando termine, TIENE QUE PODERSE AGREGAR LA CUENTA DE GOOGLE Y CAMBIAR EL
    IDIOMA.** Es el punto entero de esta función. Si no se puede, el recorte de
    `POST_ALTA` no funcionó y el equipo quedó inservible para el alta.
@@ -159,38 +162,52 @@ uno en uso.**
 
 ---
 
-## 5. ⚠️ LO QUE QUEDÓ SIN TERMINAR, CON EL DIAGNÓSTICO EXACTO
+## 5. EL CODIFICADOR DE QR: POR QUÉ ES PROPIO Y CÓMO SE VERIFICÓ
 
-**El panel no dibuja el QR todavía.** Muestra el JSON con un botón de copiar; hay que
-pasarlo por un generador de QR aparte. El JSON en sí **está verificado** contra la
-documentación de Android y la guía de Samsung Knox, así que sirve tal cual.
+**`admin-backend/public/qr.js` es un codificador escrito para este proyecto.** No se
+usa una biblioteca de un CDN, y no es capricho: `:admin-app` filtra los subrecursos por
+lista blanca de host (`RESOURCE_ALLOWED_HOSTS`), así que un `<script src="https://cdn…">`
+**no cargaría en el celular kosher** y el síntoma sería "el QR anda en la compu y en el
+celular no", sin ningún error visible. Este archivo se sirve del mismo origen que el
+panel y pasa el filtro sin tocar ninguna lista.
 
-**Por qué no se entregó el dibujo, y por dónde seguir.** No se puede usar una biblioteca
-de un CDN: `:admin-app` filtra los subrecursos por lista blanca de host
-(`RESOURCE_ALLOWED_HOSTS`), así que el QR andaría en la computadora y **no** en el
-celular kosher, sin ningún error visible. Se escribió entonces un codificador propio
-para servir del mismo origen, y **no pasó la verificación**, así que se sacó del commit:
-un QR mal armado falla en el equipo con un mensaje inútil, y entregar un codificador
-que no verifica es peor que no entregarlo.
+Hace **modo byte, nivel L, versiones 1 a 40**, y nada más.
 
-El diagnóstico, medido comparando **módulo por módulo** contra la biblioteca `qrcode`
-de Python sobre once cadenas, incluido el payload real de aprovisionamiento:
+**★ La primera vuelta NO pasó la verificación, y tenía dos bugs distintos.** Los dos
+estructurales, ninguno en el álgebra:
 
-- **La selección de versión está bien** (v1, v2, v5, v7, v13, v17 coinciden) una vez que
-  a la implementación de referencia se le fuerza modo byte. Las diferencias iniciales
-  eran porque `python-qrcode` elige modo alfanumérico solo.
-- **Los bits de formato están mal.** En las versiones bajas la diferencia son 8 a 16
-  módulos y **todos caen en la fila 8 y la columna 8**, que es exactamente donde va la
-  información de formato. Es el orden de los 15 bits, o el reparto entre las dos copias,
-  en `colocarFormato()` / `posicionesDeFormato()`.
-- **De la versión 7 en adelante diverge la colocación de datos** (cientos de módulos).
-  Muy probablemente cae de lo mismo: si los módulos de formato/versión no quedan bien
-  marcados como reservados, el zigzag de datos se corre y a partir de ahí no coincide
-  nada.
+1. **Las dos copias de la información de formato estaban traspuestas.** Como ocupan una
+   fila 8 y una columna 8 que se cruzan, el error es perfectamente simétrico y "parece
+   bien" al mirarlo.
+2. **El temporizador se dibujaba antes que los patrones de alineación**, lo que hacía
+   saltear los que caen sobre la línea de tiempo —como `(6, 22)` en la versión 7—.
 
-O sea: **el álgebra (Galois, Reed-Solomon, entrelazado) y la selección de versión están
-bien; lo que falta arreglar es la colocación de formato y de la info de versión.** Es
-media hora de trabajo con el comparador ya escrito.
+El segundo explica el síntoma más confuso: **las versiones 1 a 6 salían perfectas y de
+la 7 en adelante no coincidía un solo módulo.** Falta un patrón entero, el mapa de
+reservados queda corrido, y el zigzag de datos se desplaza desde ahí.
+
+**Si alguna vez esto vuelve a fallar, mirá el orden en que se dibujan los patrones fijos
+y el mapa de reservados antes que el álgebra.**
+
+**Cómo se verificó, por si hay que repetirlo:**
+
+```bash
+pip install qrcode opencv-python-headless --break-system-packages
+# comparar la matriz módulo por módulo, FORZANDO modo byte en la referencia
+#   qrcode.util.QRData(texto.encode(), mode=MODE_8BIT_BYTE)
+#   ERROR_CORRECT_L  (ojo: en python-qrcode vale 1, no 0)
+#   border=0, y mask_pattern fijado al que devuelve el JS
+```
+
+Resultado final: **84 casos idénticos módulo por módulo**, cubriendo las 40 versiones
+(cada una llena y en su borde inferior) más hebreo, acentos y el payload real de
+aprovisionamiento; **10 controles negativos, los 10 detectados** (entre ellos los dos
+bugs de arriba reintroducidos a propósito); y **el círculo cerrado**: se renderizó el
+payload real a imagen, se decodificó con OpenCV, y devolvió **los 608 bytes exactos del
+JSON original**.
+
+**Lo que sigue sin poder verificarse desde acá:** que un equipo Android real acepte ese
+QR. La prueba 3 de la sección 4 es la única que lo dice.
 
 ---
 
@@ -265,5 +282,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
   el panel, con `VERIFY_PIN` declarada como única excepción), `check_profile_sync.py`
   (con las dos simetrías nuevas de B.61, las dos con control negativo) y
   `check_whitelist_sync.py`.
-- **El codificador de QR se comparó módulo por módulo contra `qrcode` de Python y
-  NO pasó**, así que no se entregó. Ver sección 5.
+- **El codificador de QR: 84 casos idénticos módulo por módulo contra `qrcode` de
+  Python sobre las 40 versiones, 10 controles negativos los 10 detectados, y el payload
+  real decodificado con OpenCV devolviendo los 608 bytes exactos.** Ver sección 5 — la
+  primera vuelta no pasó y ahí está lo que se aprendió.

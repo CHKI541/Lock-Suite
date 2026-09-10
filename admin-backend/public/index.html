@@ -272,11 +272,14 @@
               <button id="qr-copy-btn" class="action-btn" style="background: var(--navy-medium); color: var(--text-light); border:1px solid var(--navy-light); padding:9px 16px; border-radius:8px; cursor:pointer;">Copiar</button>
             </div>
             <p id="qr-status-msg" style="font-size:12px; margin-bottom:8px; min-height:18px; color: var(--accent);"></p>
+            <div id="qr-canvas" style="display:none; background:#fff; padding:12px; border-radius:12px; width:max-content; margin-bottom:12px;"></div>
+            <details style="margin-bottom:8px;">
+              <summary style="cursor:pointer; font-size:12px; color: var(--text-gray);">Ver los datos del código (por si hay que armarlo a mano)</summary>
+            </details>
             <textarea id="qr-json" readonly rows="9" style="width:100%; box-sizing:border-box; background: var(--navy-dark); border:1px solid var(--navy-light); color: var(--text-light); padding:10px; border-radius:8px; font-family:monospace; font-size:11px;"></textarea>
             <p class="hint-text" style="font-size:12px; color: var(--text-gray); margin-top:8px;">
-              ⚠️ <strong>Falta el dibujo del QR en el panel.</strong> Por ahora, copiá este texto y
-              pasalo por cualquier generador de códigos QR. No lleva ningún dato secreto: la URL del
-              APK y la huella de la firma son públicas.
+              El texto de arriba es lo que lleva el código adentro. No tiene ningún dato secreto:
+              la URL del APK y la huella de la firma son públicas.
             </p>
             <h3 style="font-size:14px; margin-top:20px; margin-bottom:8px;">Terminar un alta</h3>
             <p class="hint-text" style="font-size:12px; color: var(--text-gray); margin-bottom:12px;">
@@ -975,6 +978,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=37"></script>
+  <script src="qr.js?v=1"></script>
+  <script src="app.js?v=38"></script>
 </body>
 </html>

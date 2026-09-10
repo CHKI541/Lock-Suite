@@ -569,6 +569,30 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     }
                     true
                 }
+                // ── SOLICITUDES DE APPS (10/9/2026, B.59) ──
+                //
+                // Lo manda el panel después de aprobar o rechazar un pedido. El equipo
+                // lee `devices/<id>/appRequests`, le avisa al usuario de lo que todavía
+                // no vio y marca esos pedidos como avisados.
+                //
+                // ⚠️ Este comando NO cambia ninguna política. Lo que abre una app es
+                // `globalSettings/allowedPackages` (más `SYNC_WHITELIST` para los
+                // dominios y `UNSUSPEND_APP`/`UNHIDE_APP` si estaba instalada). Acá
+                // solo se cierra el silencio: que el usuario se entere de la respuesta
+                // sin tener que volver a abrir la Tienda a probar suerte.
+                "SYNC_APP_REQUESTS" -> {
+                    val idToAck = commandId
+                    commandId = null
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val ok = com.ejemplo.locksuite.util.FirebaseDeviceSync
+                            .revisarSolicitudesResueltas(applicationContext)
+                        sendCommandAck(
+                            idToAck, "SYNC_APP_REQUESTS", ok,
+                            if (ok) null else "No se pudo leer devices/<id>/appRequests"
+                        )
+                    }
+                    true
+                }
                 "CLEAR_WHITELIST_AUDIT" -> {
                     com.ejemplo.locksuite.mdm.WhitelistManager.clearAudit()
                     true

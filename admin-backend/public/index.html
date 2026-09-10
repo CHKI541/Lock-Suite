@@ -61,6 +61,11 @@
           <button id="main-tab-presets" class="main-nav-btn" type="button">📋 Perfiles</button>
           <button id="main-tab-global-settings" class="main-nav-btn" type="button">⚙️ Ajustes</button>
           <button id="main-tab-whitelist" class="main-nav-btn" type="button">🛡️ Lista blanca</button>
+          <!-- B.59 — Pedidos de apps. El contador va en la propia pestaña y no en una
+               campanita aparte: la barra de pestañas está siempre visible, así que el
+               número se ve desde cualquier pantalla del panel sin agregar un elemento
+               nuevo que haya que ir a buscar. -->
+          <button id="main-tab-requests" class="main-nav-btn" type="button">🔔 Pedidos<span id="app-requests-badge" class="hidden" style="margin-left:6px; background: var(--alert-red); color:#fff; border-radius:10px; padding:1px 7px; font-size:11px; font-weight:bold;">0</span></button>
         </div>
 
         <main id="devices-container">
@@ -188,6 +193,38 @@
              interruptores (encendido / simulación), que están en la pestaña
              "Políticas" de cada equipo.
              ════════════════════════════════════════════════════════════════ -->
+        <!-- ════════════════════════════════════════════════════════════════
+             PEDIDOS DE APPS (10/9/2026, B.59) — ver app/mdm/AppRequestManager.kt
+             El usuario pide desde la Tienda del celular y acá se aprueba o se
+             rechaza. Aprobar hace las MISMAS tres cosas que "Permitir" de la
+             lista blanca, más despertar la app si estaba suspendida u oculta.
+             ════════════════════════════════════════════════════════════════ -->
+        <div id="requests-container" class="hidden">
+          <div class="sidebar-card" style="margin-bottom: 24px;">
+            <h2>🔔 Pedidos de apps</h2>
+            <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
+              Lo que los usuarios pidieron desde la Tienda de su celular.
+              <strong>Aprobar</strong> hace las mismas tres cosas que «Permitir» en la lista blanca
+              (descargable de tu tienda, no oculta ni suspendida, dominios abiertos) y además
+              le avisa al celular. Te va a pedir el PIN de ese equipo.
+            </p>
+            <p class="hint-text" style="font-size: 12px; color: var(--text-gray); margin-bottom: 16px;">
+              ⚠️ Aprobar <strong>no sube el APK</strong>. Si la app no está en tu tienda, cargala en
+              Ajustes → Tienda de Apps con su URL (y calculá la huella) o el celular la va a ver
+              permitida y no la va a encontrar para bajar.
+            </p>
+            <div style="display:flex; gap:12px; align-items:center; margin-bottom:16px;">
+              <label style="font-size:13px; color: var(--text-gray);">
+                <input type="checkbox" id="requests-show-resolved" /> Mostrar también los ya contestados
+              </label>
+              <span id="requests-status-msg" style="font-size: 13px;"></span>
+            </div>
+            <div id="app-requests-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px;">
+              <p class="loading-text" style="grid-column:1/-1;">Cargando pedidos…</p>
+            </div>
+          </div>
+        </div>
+
         <div id="whitelist-container" class="hidden">
           <div class="sidebar-card" style="margin-bottom: 24px;">
             <h2>🛡️ Lista blanca — catálogo de apps</h2>
@@ -867,6 +904,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=34"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

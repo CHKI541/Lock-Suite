@@ -59,6 +59,14 @@ const ALLOWED_COMMANDS = new Set([
   // Cancelar el periodo de gracia (Nivel 4) sin aplicar el perfil de cierre. Ver
   // app/mdm/GracePeriodManager.kt. Exige PIN como el resto.
   "CANCEL_GRACE_PERIOD",
+  // ── SOLICITUDES DE APPS (10/9/2026, B.59) — ver app/mdm/AppRequestManager.kt ──
+  // Avisa al equipo de que un pedido suyo fue contestado, para que le muestre el
+  // aviso al usuario. NO cambia ninguna politica por si mismo: lo que abre una app
+  // es `globalSettings/allowedPackages` mas SYNC_WHITELIST y UNSUSPEND_APP/UNHIDE_APP.
+  // Exige PIN igual que el resto (no esta en la excepcion de UPDATE_*), porque el
+  // panel lo manda dentro del mismo flujo de aprobacion que si cambia politicas y
+  // pedir el PIN una sola vez para todo el flujo es lo correcto.
+  "SYNC_APP_REQUESTS",
   "BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY",
   "BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN",
   "BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS",

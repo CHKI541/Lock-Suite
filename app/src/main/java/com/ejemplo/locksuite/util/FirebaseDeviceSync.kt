@@ -868,6 +868,213 @@ object FirebaseDeviceSync {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // SOLICITUDES DE APPS (10/9/2026, B.59) — ver mdm/AppRequestManager.kt
+    // ─────────────────────────────────────────────────────────────────────────
+    //
+    // El usuario pide desde la Tienda, el administrador aprueba desde el panel.
+    // Toda la DECISIÓN vive en AppRequestManager, que es Kotlin puro y tiene banco
+    // de pruebas; acá está solamente la parte que habla con Firebase.
+    //
+    // ⚠️ El nodo `devices/<id>/appRequests` NO decide si una app se puede instalar.
+    // Eso lo decide `globalSettings/allowedPackages`, que solo escribe un
+    // administrador autenticado. Un equipo que se inventara `status: "approved"` en
+    // su propio subárbol no consigue nada. Ver el encabezado de AppRequestManager.
+
+    /** Lee los pedidos de este equipo. `onResult` corre en el hilo que traiga Firebase. */
+    fun leerSolicitudesApp(
+        context: Context,
+        onResult: (List<com.ejemplo.locksuite.mdm.AppRequestManager.Solicitud>) -> Unit
+    ) {
+        val ctx = context.applicationContext
+        try {
+            withAuth {
+                FirebaseDatabase.getInstance()
+                    .getReference("devices/${deviceId(ctx)}/appRequests")
+                    .get()
+                    .addOnSuccessListener { snap -> onResult(parsearSolicitudes(snap)) }
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("FirebaseDeviceSync", "Solicitudes: no se pudieron leer: ${e.message}", e)
+                        // Lista vacía y no un error mudo: la Tienda tiene que poder
+                        // abrirse igual, solo que sin el estado de los pedidos.
+                        onResult(emptyList())
+                    }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "Solicitudes: leerSolicitudesApp falló: ${e.message}", e)
+            onResult(emptyList())
+        }
+    }
+
+    private fun parsearSolicitudes(
+        snap: com.google.firebase.database.DataSnapshot
+    ): List<com.ejemplo.locksuite.mdm.AppRequestManager.Solicitud> =
+        snap.children.mapNotNull { hijo ->
+            // El nombre real se lee del campo `packageName` y NO de la clave: la clave
+            // cambia `.` por `_` y esa transformación no es reversible cuando el
+            // paquete ya tenía un `_` (está afirmado en el banco de pruebas).
+            val pkg = hijo.child("packageName").getValue(String::class.java)
+                ?: hijo.key?.replace("_", ".")
+                ?: return@mapNotNull null
+            com.ejemplo.locksuite.mdm.AppRequestManager.Solicitud(
+                packageName = pkg,
+                label = hijo.child("label").getValue(String::class.java) ?: pkg,
+                estado = hijo.child("status").getValue(String::class.java)
+                    ?: com.ejemplo.locksuite.mdm.AppRequestManager.PENDIENTE,
+                pedidaEnMs = hijo.child("requestedAt").getValue(Long::class.java) ?: 0L,
+                resueltaEnMs = hijo.child("resolvedAt").getValue(Long::class.java) ?: 0L,
+                avisada = hijo.child("notified").getValue(Boolean::class.java) ?: false
+            )
+        }
+
+    /**
+     * Manda un pedido. Devuelve **siempre** un veredicto, haya entrado o no — un botón
+     * que no dice nada es el bug de B.28/B.42/B.54. El texto para el usuario sale de
+     * `AppRequestManager.motivo(veredicto, idioma)`, y el banco de pruebas afirma que
+     * ningún veredicto se queda sin texto en ninguno de los tres idiomas.
+     *
+     * Devolver el veredicto y no el texto es lo que le permite a la pantalla saber si
+     * el pedido **entró de verdad** (y recién ahí pintar el botón como "Pedida"). Con
+     * un String no se podía distinguir "entró" de "no entró" sin comparar cadenas.
+     *
+     * La decisión la toma [com.ejemplo.locksuite.mdm.AppRequestManager.decidir] con lo
+     * que la pantalla ya tiene cargado — no se vuelve a consultar la red para decidir,
+     * porque la Tienda ya leyó `allowedPackages` y los pedidos al abrirse. Y se toma
+     * **acá adentro** a propósito: si la pantalla decidiera y después llamara a
+     * escribir, tarde o temprano aparece un camino que escribe sin decidir.
+     */
+    fun enviarSolicitudApp(
+        context: Context,
+        paqueteCrudo: String?,
+        etiqueta: String,
+        nota: String?,
+        permitidas: Set<String>,
+        existentes: Collection<com.ejemplo.locksuite.mdm.AppRequestManager.Solicitud>
+    ): com.ejemplo.locksuite.mdm.AppRequestManager.Veredicto {
+        val ctx = context.applicationContext
+        val veredicto = com.ejemplo.locksuite.mdm.AppRequestManager.decidir(
+            paqueteCrudo, permitidas, existentes, System.currentTimeMillis()
+        )
+        if (veredicto != com.ejemplo.locksuite.mdm.AppRequestManager.Veredicto.OK) return veredicto
+
+        // decidir() ya devolvió OK, así que normalizarPaquete no puede dar null acá.
+        val paquete = com.ejemplo.locksuite.mdm.AppRequestManager.normalizarPaquete(paqueteCrudo)
+            ?: return com.ejemplo.locksuite.mdm.AppRequestManager.Veredicto.PAQUETE_INVALIDO
+        val clave = com.ejemplo.locksuite.mdm.AppRequestManager.claveFirebase(paquete)
+        val cuerpo = com.ejemplo.locksuite.mdm.AppRequestManager.cuerpo(
+            paquete, etiqueta, nota, System.currentTimeMillis()
+        )
+        try {
+            withAuth {
+                FirebaseDatabase.getInstance()
+                    .getReference("devices/${deviceId(ctx)}/appRequests/$clave")
+                    .setValue(cuerpo)
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("FirebaseDeviceSync", "Solicitudes: no se pudo escribir $clave: ${e.message}", e)
+                    }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "Solicitudes: enviarSolicitudApp falló: ${e.message}", e)
+        }
+        return veredicto
+    }
+
+    /**
+     * Lo que dispara el comando FCM `SYNC_APP_REQUESTS`: busca pedidos ya contestados
+     * que el usuario todavía no vio, le avisa, y los marca como avisados.
+     *
+     * **Por qué hace falta un aviso y no alcanza con que la Tienda lo muestre:** el
+     * usuario pidió una app y no tiene forma de saber cuándo le contestaron. Sin esto,
+     * la única manera de enterarse es volver a abrir la Tienda a ver si cambió — que es
+     * el mismo modo de falla mudo que B.54 arregló en la actualización de apps.
+     */
+    fun revisarSolicitudesResueltas(context: Context): Boolean {
+        val ctx = context.applicationContext
+        return try {
+            val ref = FirebaseDatabase.getInstance()
+                .getReference("devices/${deviceId(ctx)}/appRequests")
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var ok = false
+            withAuth {
+                ref.get()
+                    .addOnSuccessListener { snap ->
+                        try {
+                            val avisos = com.ejemplo.locksuite.mdm.AppRequestManager
+                                .avisosPendientes(parsearSolicitudes(snap))
+                            for (aviso in avisos) {
+                                avisarSolicitudResuelta(ctx, aviso)
+                                ref.child(com.ejemplo.locksuite.mdm.AppRequestManager.claveFirebase(aviso.packageName))
+                                    .child("notified")
+                                    .setValue(true)
+                            }
+                            ok = true
+                        } catch (e: Exception) {
+                            android.util.Log.e("FirebaseDeviceSync", "Solicitudes: error avisando: ${e.message}", e)
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("FirebaseDeviceSync", "Solicitudes: no se pudo leer appRequests: ${e.message}", e)
+                        latch.countDown()
+                    }
+            }
+            // Mismo tope que pullWhitelistConfig: corre en un hilo de IO lanzado por el
+            // propio comando FCM, nunca en el principal ni en el lector del túnel.
+            latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            ok
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "Solicitudes: revisarSolicitudesResueltas falló: ${e.message}", e)
+            false
+        }
+    }
+
+    private const val CANAL_SOLICITUDES = "locksuite_app_requests"
+
+    private fun avisarSolicitudResuelta(
+        context: Context,
+        aviso: com.ejemplo.locksuite.mdm.AppRequestManager.Aviso
+    ) {
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+                ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val canal = android.app.NotificationChannel(
+                    CANAL_SOLICITUDES,
+                    "Pedidos de apps",
+                    android.app.NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    description = "Avisa cuando el administrador contesta un pedido de app"
+                    setShowBadge(true)
+                }
+                nm.createNotificationChannel(canal)
+            }
+            val titulo = if (aviso.aprobada) "✅ ${aviso.label}: aprobada" else "❌ ${aviso.label}: rechazada"
+            val texto = if (aviso.aprobada) {
+                "Ya podés instalarla desde la Tienda de LockSuite."
+            } else {
+                "El administrador no aprobó este pedido."
+            }
+            // Un id por paquete: si hay tres pedidos contestados salen tres avisos y no
+            // uno pisando al anterior. `hashCode()` puede ser negativo y eso está bien,
+            // el id de notificación es un Int cualquiera mientras sea estable.
+            val id = 47_000 + (aviso.packageName.hashCode() and 0xFFFF)
+            val n = androidx.core.app.NotificationCompat.Builder(context, CANAL_SOLICITUDES)
+                .setContentTitle(titulo)
+                .setContentText(texto)
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(texto))
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(id, n)
+        } catch (e: Exception) {
+            // Que no se pueda notificar NO puede tumbar el ciclo: el estado igual queda
+            // guardado y la Tienda lo va a mostrar la próxima vez que se abra.
+            android.util.Log.w("FirebaseDeviceSync", "Solicitudes: no se pudo notificar: ${e.message}")
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // PERFILES GUARDADOS EN LA NUBE (9/9/2026) — ver mdm/EnrollmentProfiles.kt
     // ─────────────────────────────────────────────────────────────────────────
 

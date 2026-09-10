@@ -76,6 +76,11 @@ function startRealtimeSync() {
     devicesListener && database.ref("devices").off("value", devicesListener), devicesListener = database.ref("devices").on("value", e => {
         const t = e.val() || {};
         currentDevicesData = t, renderDevicesList(t), selectedDeviceId && t[selectedDeviceId] && updateSidebarUI(selectedDeviceId, t[selectedDeviceId])
+        // B.59 — los pedidos viven dentro de este mismo árbol, así que se refrescan
+        // acá y no con un listener aparte sobre `devices` (sería bajarlo dos veces).
+        // El número de la pestaña se actualiza siempre; la lista, solo si está abierta.
+        typeof updateAppRequestsBadge === "function" && updateAppRequestsBadge();
+        requestsContainer && !requestsContainer.classList.contains("hidden") && renderAppRequests();
         // Si hay un grupo abierto, refrescar la lista de dispositivos seleccionables por si cambiaron de nombre o estado
         if (selectedGroupId && currentGroupsData[selectedGroupId]) {
             renderGroupDevicesSelector(currentGroupsData[selectedGroupId]);
@@ -1759,13 +1764,22 @@ const pkgKey = pkg => pkg.replace(/\./g, "_");
 let whitelistDecisions = {};   // { "com_waze": "allow" | "block" }
 let whitelistCustom = {};      // { "ar_com_x": {label, packageName, allow:[], block:[]} }
 
+// ── PEDIDOS DE APPS (10/9/2026, B.59) — ver app/mdm/AppRequestManager.kt ──
+const mainTabRequests = document.getElementById("main-tab-requests");
+const requestsContainer = document.getElementById("requests-container");
+const appRequestsList = document.getElementById("app-requests-list");
+const appRequestsBadge = document.getElementById("app-requests-badge");
+const requestsStatusMsg = document.getElementById("requests-status-msg");
+const requestsShowResolved = document.getElementById("requests-show-resolved");
+
 const mainNavTabs = [
     { btn: mainTabDevices, container: devicesContainer },
     { btn: mainTabGroups, container: groupsContainer, onOpen: () => closeDeviceSidebar() },
     { btn: mainTabArchived, container: archivedContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
     { btn: mainTabPresets, container: presetsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); loadPresetsList && loadPresetsList(); } },
     { btn: mainTabGlobalSettings, container: globalSettingsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
-    { btn: mainTabWhitelist, container: whitelistContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderWhitelistCatalog(); } }
+    { btn: mainTabWhitelist, container: whitelistContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderWhitelistCatalog(); } },
+    { btn: mainTabRequests, container: requestsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderAppRequests(); } }
 ];
 
 function switchMainTab(activeTabObj) {
@@ -3513,6 +3527,192 @@ async function syncStoreAllowedPackage(pkg, permitir) {
     // que se actualiza solo. No se toca acá para no pisar lo que el usuario esté
     // escribiendo en ese momento.
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PEDIDOS DE APPS (10/9/2026, B.59) — ver app/mdm/AppRequestManager.kt
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Los pedidos viven en `devices/<id>/appRequests/<paquete_con_guiones>`, o sea
+// DENTRO del árbol de dispositivos que el panel ya escucha en tiempo real
+// (`currentDevicesData`). Por eso acá no hay un `listener` nuevo: agregar uno sobre
+// `devices` sería bajar dos veces el mismo árbol entero en cada cambio.
+//
+// El nombre del paquete se lee del campo `packageName` y NO de la clave: la clave
+// cambia `.` por `_` y esa transformación no se puede revertir cuando el paquete ya
+// tenía un `_` (`com.a_b` y `com.a.b` producen la misma clave). El campo guardado es
+// la única fuente confiable — el mismo criterio que usa el celular al parsear.
+
+/** Todos los pedidos de toda la flota, aplanados. */
+function collectAppRequests() {
+    const salida = [];
+    Object.entries(currentDevicesData || {}).forEach(([deviceId, dev]) => {
+        const pedidos = (dev && dev.appRequests) || {};
+        Object.entries(pedidos).forEach(([clave, p]) => {
+            if (!p) return;
+            salida.push({
+                deviceId,
+                deviceName: (dev.name || (dev.info && dev.info.name) || dev.model || (dev.info && dev.info.model) || deviceId),
+                key: clave,
+                packageName: p.packageName || clave.replace(/_/g, "."),
+                label: p.label || p.packageName || clave,
+                note: p.note || "",
+                status: p.status || "pending",
+                requestedAt: p.requestedAt || 0,
+                resolvedAt: p.resolvedAt || 0
+            });
+        });
+    });
+    // Pendientes primero y, dentro de cada grupo, el más viejo arriba: lo que más
+    // tiempo lleva esperando es lo primero que hay que contestar.
+    return salida.sort((a, b) =>
+        (a.status === "pending" ? 0 : 1) - (b.status === "pending" ? 0 : 1) ||
+        a.requestedAt - b.requestedAt);
+}
+
+/** Cantidad de pendientes de toda la flota, para el número de la pestaña. */
+function updateAppRequestsBadge() {
+    if (!appRequestsBadge) return;
+    const n = collectAppRequests().filter(p => p.status === "pending").length;
+    appRequestsBadge.textContent = String(n);
+    appRequestsBadge.classList.toggle("hidden", n === 0);
+}
+
+function setRequestsStatus(msg, isError) {
+    if (!requestsStatusMsg) return;
+    requestsStatusMsg.textContent = msg || "";
+    requestsStatusMsg.style.color = isError ? "var(--alert-red)" : "var(--accent)";
+    if (msg) setTimeout(() => { if (requestsStatusMsg.textContent === msg) requestsStatusMsg.textContent = ""; }, 8000);
+}
+
+function renderAppRequests() {
+    updateAppRequestsBadge();
+    if (!appRequestsList) return;
+    const verResueltos = requestsShowResolved && requestsShowResolved.checked;
+    const todos = collectAppRequests().filter(p => verResueltos || p.status === "pending");
+
+    appRequestsList.innerHTML = "";
+    if (todos.length === 0) {
+        appRequestsList.innerHTML = '<p class="loading-text" style="grid-column:1/-1;">' +
+            (verResueltos ? "Todavía no hay ningún pedido." : "No hay pedidos esperando respuesta.") + "</p>";
+        return;
+    }
+
+    todos.forEach(p => {
+        const card = document.createElement("div");
+        card.className = "group-card";
+        const cuando = p.requestedAt ? new Date(p.requestedAt).toLocaleString() : "—";
+        const color = p.status === "approved" ? "#00E676" : p.status === "rejected" ? "var(--alert-red)" : "var(--accent)";
+        const etiqueta = p.status === "approved" ? "Aprobada" : p.status === "rejected" ? "Rechazada" : "Esperando";
+        card.innerHTML =
+            '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">' +
+              '<div style="min-width:0;">' +
+                '<strong style="font-size:14px;"></strong>' +
+                '<div style="font-size:11px; color:var(--text-gray); word-break:break-all;"></div>' +
+              '</div>' +
+              '<span style="font-size:11px; font-weight:bold; white-space:nowrap; color:' + color + ';">' + etiqueta + '</span>' +
+            '</div>' +
+            '<div style="font-size:12px; color:var(--text-gray); margin-top:8px;">Pedida por <strong class="js-dev"></strong></div>' +
+            '<div style="font-size:11px; color:var(--text-gray);">' + cuando + '</div>' +
+            '<div class="js-note" style="font-size:12px; margin-top:6px; font-style:italic;"></div>' +
+            '<div class="js-acciones" style="display:flex; gap:8px; margin-top:12px;"></div>';
+        // El texto va por textContent y no dentro del HTML de arriba: `label`, `note` y
+        // el nombre del equipo los escribe el USUARIO DEL CELULAR, así que meterlos por
+        // innerHTML sería dejar que el celular inyecte HTML en el panel del
+        // administrador. El paquete ya viene validado desde el equipo, pero el panel no
+        // puede confiar en eso: la validación vive en el otro lado de la red.
+        card.querySelector("strong").textContent = p.label;
+        card.querySelectorAll("div")[1].textContent = p.packageName;
+        card.querySelector(".js-dev").textContent = p.deviceName;
+        card.querySelector(".js-note").textContent = p.note ? "«" + p.note + "»" : "";
+
+        const acciones = card.querySelector(".js-acciones");
+        if (p.status === "pending") {
+            const ok = document.createElement("button");
+            ok.className = "action-btn";
+            ok.style.cssText = "background:#00E676; color:var(--navy-dark); font-weight:bold; border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:12px;";
+            ok.textContent = "✔ Aprobar";
+            ok.addEventListener("click", () => resolveAppRequest(p, true, ok));
+            const no = document.createElement("button");
+            no.className = "action-btn";
+            no.style.cssText = "background:var(--alert-red); color:#fff; font-weight:bold; border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:12px;";
+            no.textContent = "✖ Rechazar";
+            no.addEventListener("click", () => resolveAppRequest(p, false, no));
+            acciones.appendChild(ok);
+            acciones.appendChild(no);
+        }
+        appRequestsList.appendChild(card);
+    });
+}
+
+/**
+ * Aprueba o rechaza un pedido.
+ *
+ * APROBAR hace lo mismo que «Permitir» en la lista blanca —que ya es el "un solo
+ * toque" de B.53— y después despierta la app en ESE equipo. Se reusa
+ * `setWhitelistDecision()` en vez de repetir su lógica: si mañana permitir pasa a
+ * hacer una cuarta cosa, aprobar un pedido la hace sola. Duplicarla acá sería
+ * estrenar la cuarta repetición del bug de `no_apps_control` (B.28).
+ *
+ * ⚠️ EL ORDEN NO ES CASUAL. Primero se guarda la decisión (que abre los dominios en
+ * el catálogo y suma el paquete a `allowedPackages`), después se sincroniza el
+ * catálogo al equipo, y recién al final se lo despierta. Al revés, la app quedaría
+ * des-suspendida unos segundos ANTES de que sus dominios resuelvan: abriría y no
+ * tendría internet, que es exactamente el síntoma que `pullWhitelistConfig` comenta
+ * haber tenido que ordenar por la misma razón.
+ *
+ * Si el celular está apagado, los comandos FCM fallan y se dice cuáles: el estado
+ * queda igual guardado en la base y `SYNC_WHITELIST` se reintenta desde el botón de
+ * la lista blanca. Lo que NO puede pasar es que falle en silencio (B.42).
+ */
+async function resolveAppRequest(p, aprobar, btn) {
+    if (btn) btn.disabled = true;
+    try {
+        const ref = database.ref("devices/" + p.deviceId + "/appRequests/" + p.key);
+        await ref.update({
+            status: aprobar ? "approved" : "rejected",
+            resolvedAt: Date.now(),
+            // Se reinicia el aviso: el equipo tiene que contarle al usuario ESTA
+            // respuesta aunque ya le hubiera avisado de una anterior sobre la misma app.
+            notified: false
+        });
+
+        if (aprobar) {
+            // 1) Las tres cosas de «Permitir» (catálogo de dominios + tienda).
+            await setWhitelistDecision(p.packageName, "allow");
+            // 2) Que el catálogo llegue a ESE equipo.
+            const fallidos = [];
+            try { await runCommandOnDevice(p.deviceId, "SYNC_WHITELIST"); } catch (e) { fallidos.push("SYNC_WHITELIST"); }
+            // 3) Despertarla si estaba suspendida u oculta. Si no está instalada, el
+            //    equipo responde que no la encontró y no pasa nada: es lo esperable
+            //    cuando el pedido es justamente para instalarla por primera vez.
+            try { await runCommandOnDevice(p.deviceId, "UNSUSPEND_APP", p.packageName); } catch (e) { fallidos.push("UNSUSPEND_APP"); }
+            try { await runCommandOnDevice(p.deviceId, "UNHIDE_APP", p.packageName); } catch (e) { fallidos.push("UNHIDE_APP"); }
+            // 4) Avisarle al usuario del celular.
+            try { await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS"); } catch (e) { fallidos.push("SYNC_APP_REQUESTS"); }
+
+            if (fallidos.length) {
+                setRequestsStatus("Aprobada y guardada, pero el celular no contestó a: " +
+                    fallidos.join(", ") + ". Se aplica cuando vuelva a estar en línea.", true);
+            } else {
+                setRequestsStatus("«" + p.label + "» aprobada para " + p.deviceName + ".");
+            }
+        } else {
+            try {
+                await runCommandOnDevice(p.deviceId, "SYNC_APP_REQUESTS");
+                setRequestsStatus("Pedido rechazado. Se le avisó al celular.");
+            } catch (e) {
+                setRequestsStatus("Pedido rechazado y guardado, pero el celular no contestó: se le va a avisar cuando vuelva a estar en línea.", true);
+            }
+        }
+    } catch (err) {
+        setRequestsStatus("Error: " + err.message, true);
+    } finally {
+        if (btn) btn.disabled = false;
+        renderAppRequests();
+    }
+}
+
+requestsShowResolved && requestsShowResolved.addEventListener("change", renderAppRequests);
 
 function renderWhitelistCatalog() {
     if (!whitelistAppsList) return;

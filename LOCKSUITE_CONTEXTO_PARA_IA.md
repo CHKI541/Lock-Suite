@@ -828,7 +828,7 @@ El camino: Ajustes → Google → Gestionar tu cuenta de Google → Datos y priv
 
 ---
 
-**B.44 — LOS OTROS AGUJEROS DEL MISMO TIPO. [AUDITADO 4/9; NADA PARCHEADO]**
+**B.44 — ~~LOS OTROS AGUJEROS DEL MISMO TIPO~~ → [ATACADO DE RAÍZ EL 10/9 CON UN DETECTOR ESTRUCTURAL, ver B.60; SIN COMPILAR NI PROBAR]**
 
 Salió de la pregunta del dueño: *"analizame bien si pueden llegar a haber más agujeros de ese estilo"*. Sí, hay. Lista completa con el porqué en `INSTRUCCIONES_ANTIGRAVITY_2026-09-04_CUENTA_GOOGLE.md` §4; acá el resumen ordenado por lo que cuesta explotarlos.
 
@@ -1254,11 +1254,75 @@ Durante la gracia queda abierto —a propósito— lo dudoso: la tienda (`DISALL
 
 ---
 
+**B.59 — PEDIR UNA APP DESDE EL CELULAR Y APROBARLA DE UN TOQUE. Cierra la segunda mitad del PROMPT A. [ESCRITO, TYPE-CHECKEADO Y PROBADO EN BANCO EL 10/9 (tarde); SIN COMPILAR NI PROBAR EN EQUIPO]**
+
+Detalle, orden de prueba y commit: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-10_SOLICITUDES_IAB_QR.md`**. (La primera mitad del PROMPT A, el checksum, la cerró B.58 el mismo día.)
+
+**El problema.** Para que un equipo pudiera instalar una app nueva, el administrador tenía que **adivinarlo de antemano**. Si no lo adivinó, el usuario veía la app en la Tienda con un botón **"Bloqueada"** deshabilitado y no tenía forma de decir nada: el único canal era llamar por teléfono y dictarle el nombre del paquete. **"Bloqueada" deja de existir como estado final** — ahora dice "Pedir".
+
+Archivo nuevo **`mdm/AppRequestManager.kt`**, casi todo funciones puras (sin un solo import de Android, a propósito). Los tres modos de falla que evita están escritos en su encabezado: (a) una clave de Firebase inválida rompe la escritura **en silencio**, y acá el texto lo escribe el usuario final, así que `normalizarPaquete()` valida ANTES de tocar la red; (b) **spam** — el botón "Pedir" es lo único nuevo que se puede tocar en un celular restringido, así que hay tope de pendientes (20) y espera de 24 h para repedir algo rechazado; (c) **el pedido mudo** — `decidir()` nunca devuelve "no" sin un motivo que la pantalla pueda escribir, y el banco afirma que ningún veredicto se queda sin texto en ninguno de los tres idiomas.
+
+**Aprobar reusa `setWhitelistDecision()`**, que ya es el "un solo toque" de B.53, en vez de repetir su lógica: si mañana permitir hace una cuarta cosa, aprobar la hace sola. **Y el orden importa**: primero el catálogo (dominios + `allowedPackages`), después `SYNC_WHITELIST`, y recién al final `UNSUSPEND_APP`/`UNHIDE_APP` — al revés la app se abriría unos segundos **antes** de que sus dominios resuelvan, que es el mismo motivo por el que `pullWhitelistConfig` ya comenta haber tenido que ordenar sus dos pasos.
+
+⚠️ **Aprobar NO sube el APK.** Si la app no está cargada en la Tienda, el usuario la va a ver permitida y no la va a encontrar para bajar. El panel lo dice en la propia pantalla.
+
+**`tools/check_command_sync.py` (nuevo).** Compara los comandos que manda el panel, los que permite `ALLOWED_COMMANDS` y los que ejecuta el celular — el `when` **más** el registro declarativo `PolicySpec` de B.33, que si no da 40 falsos positivos. El modo de falla que busca es **el mudo**: un comando que la Function permite y el `when` no matchea sale, llega, y el panel muestra el tilde verde igual. Hoy: 183 ejecuta el celular, 184 permite la Function, y la única diferencia es `VERIFY_PIN`, declarada como excepción con su motivo.
+
+**Lo que queda abierto:** no hay pedidos por grupo (misma razón que B.12), y el aviso al usuario depende de que el equipo esté en línea cuando se aprueba (si no, le llega al reconectar).
+
+---
+
+**B.60 — DETECTOR ESTRUCTURAL DE NAVEGADORES EMBEBIDOS. Cierra B.44 de raíz. [ESCRITO, TYPE-CHECKEADO Y PROBADO EN BANCO EL 10/9 (tarde); APAGADO DE FÁBRICA; SIN COMPILAR NI PROBAR EN EQUIPO]**
+
+El "IAB Finder" de MB Smart, traído acá. **No necesita la lista blanca global de WebView que el dueño rechazó el 4/9** (textual: "lista blanca no quiero", B.45).
+
+**La definición es lo importante, y es lo que lo hace seguro:** un WebView no es el problema; un WebView **por el que el usuario puede ir a cualquier lado**, sí. Media app del catálogo tiene WebViews adentro (la ayuda de Waze, los términos de Mercado Pago, la ficha de una app en Play Store), y bloquear "todo lo que tenga un WebView" sería la lista blanca por la puerta de atrás. Lo que se detecta es **la barra de direcciones o el juego de controles de navegación** — una señal estructural, que es la regla que el proyecto ya tenía escrita en B.19 punto 3.
+
+Archivo nuevo **`mdm/EmbeddedBrowserDetector.kt`**, puro. El servicio arma un **retrato** del árbol en UN recorrido y la decisión vive allá.
+
+⚠️ **Tres cosas que no hay que "simplificar", porque el falso positivo ya se pagó tres veces** (B.43 bloqueó la cuenta de Google entera, B.50 dejó a alguien sin Wi-Fi en un aeropuerto, B.15 casi impidió abrir Ajustes): **apagado de fábrica y en simulación de fábrica**, con dos interruptores separados (encenderlo NO alcanza para que bloquee); **la auditoría se publica al panel bloquee o no** (es la pieza que hizo usable B.53, y acá pesa más porque el universo de apps es abierto); y **las exclusiones se evalúan antes que todo y viven en la función pura** para que el banco pueda afirmar que siguen pasando de largo — portal cautivo, alta de cuenta de Google (`minutemaid`) y `:admin-app`.
+
+**Camino caliente:** corre SOLO en cambio de ventana, con antirrebote de 1,5 s por paquete, con `MAX_TREE_DEPTH`/`MAX_NODES_PER_SCAN` y un tope propio de 30 cadenas por tipo. B.13 pasó una sesión entera sacando de ahí cosas razonables en sí mismas que mataban la fluidez.
+
+**★ EL BANCO ENCONTRÓ UN BUG REAL, Y DEL TIPO CARO.** Contando *palabras* de navegación, `swipe_refresh_layout` —el widget de deslizar-para-actualizar que tiene media app de Android— más un botón que dijera "recargar" contaban **dos** y bloqueaban la app. Pero son **el mismo control en dos idiomas**. Ahora los controles están agrupados por FUNCIÓN y se piden dos funciones distintas.
+
+---
+
+**B.61 — ALTA POR QR Y CIERRE DE ALTA EN DOS TIEMPOS. [ESCRITO Y TYPE-CHECKEADO EL 10/9 (tarde); ⚠️ PARCIAL: FALTA DIBUJAR EL QR EN EL PANEL]**
+
+Dar de alta un equipo deja de necesitar una PC con ADB, drivers y depuración USB.
+
+**Lo que más pensamiento pidió, y es el punto más fácil de embarrar:** el Nivel 1 bloquea `DISALLOW_MODIFY_ACCOUNTS` y `DISALLOW_CONFIG_LOCALE`. El aprovisionamiento corre **antes** de que el instalador agregue la cuenta de Google y fije el idioma, así que aplicar el perfil entero ahí **deja un equipo que no se puede terminar de dar de alta**. Es el mismo error de razonamiento que ya costó B.41 punto 3 y B.43: LockSuite se instala con el equipo SIN cuenta, o sea que *"todavía no hay cuenta"* es **el estado de fábrica del procedimiento**, no un caso raro.
+
+La salida: **`EnrollmentProfiles.POST_ALTA`** marca esas dos, el QR aplica el perfil recortado (se **omiten**, no se ponen en `false`: el importador trata "clave ausente" como "no se toca"), queda la marca `enrollment_pending`, y el panel muestra **"Terminar alta"** → `FINISH_ENROLLMENT`. Mientras tanto el equipo **ya está protegido** por todo el resto, incluido el piso anti-manipulación entero.
+
+**Las claves del JSON están VERIFICADAS contra la documentación de Android y la guía de Samsung Knox, no escritas de memoria.** Se usa **`..._SIGNATURE_CHECKSUM` y no `..._PACKAGE_CHECKSUM`**: el primero identifica **a quién firmó** (hash del certificado), así que un QR impreso sobrevive a cada actualización; el segundo identifica un APK exacto y **invalidaría todos los QR en cada versión** — inaceptable en un proyecto que va por la 0.6.48. Y la huella no se pide a mano: la calcula cada equipo (`ApkSignatureVerifier.checksumDeFirmaParaQr`, base64 `URL_SAFE|NO_PADDING|NO_WRAP`, que es exactamente el `tr '+/' '-_' | tr -d '='` de la receta oficial) y la publica en `signatureChecksum`. El primer equipo se da de alta por ADB como siempre y desde ahí el panel ya tiene el dato.
+
+**`check_profile_sync.py` suma dos simetrías más**, las dos contra la forma del bug de B.28: que `POST_ALTA` no nombre restricciones que ningún perfil usa (una entrada muerta daría el alta por completa sin haber aplicado esa restricción) y que la clave del nivel dentro de `ADMIN_EXTRAS_BUNDLE` diga lo mismo en el Kotlin y en el panel.
+
+⚠️ **LO QUE FALTA, DICHO DE FRENTE: el panel no dibuja el QR.** Muestra el JSON verificado con un botón de copiar; hay que pasarlo por un generador aparte. **No se puede usar una biblioteca de un CDN**: `:admin-app` filtra los subrecursos por lista blanca de host, así que el QR andaría en la computadora y **no** en el celular kosher, sin ningún error visible. Se escribió un codificador propio para servir del mismo origen y **no pasó la verificación** (comparación módulo por módulo contra `qrcode` de Python sobre once cadenas), así que **se sacó del commit**: un codificador de QR que no verifica es peor que no entregarlo. **Diagnóstico medido:** el álgebra (Galois, Reed-Solomon, entrelazado) y la selección de versión están **bien**; lo que está mal son **los bits de formato** (8-16 módulos de diferencia, todos en la fila 8 y la columna 8) y, de v7 en adelante, la colocación de datos —que muy probablemente cae de lo mismo, si los módulos de formato/versión no quedan bien marcados como reservados. Media hora de trabajo con el comparador ya escrito.
+
+---
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
+
+**10/9 (tarde) — Claude: pedidos de apps, detector de navegadores embebidos y alta por QR. Ver B.59, B.60 y B.61.**
+
+Pedido del dueño: *"hacé todo"* sobre los prompts A–D de `PROMPTS_PARA_OTRAS_CONVERSACIONES_2026-09-09.md`, y *"fijate qué falta de ahí"* — porque en paralelo otra conversación había cerrado la primera mitad del PROMPT A.
+
+1. **Lo primero fue mirar qué había hecho la otra sesión, y eso cambió el plan entero.** El PROMPT A traía como bloqueante *"B.6 sigue abierto"*, y B.6 **ya estaba cerrado** por la sesión de B.58 de esa misma madrugada — cuyo trabajo, además, **todavía no está aplicado en el disco**: vive como parche en `Claude outputs/B58_tienda_y_gracia.patch`. Todo lo de esta sesión se escribió **encima de ese parche aplicado**, y se entrega como una segunda tanda de commits que se aplica después. No se pisó nada.
+2. **B.59 — se cerró la segunda mitad del PROMPT A.** El botón "Bloqueada" de la Tienda **deja de existir como estado final**: ahora dice "Pedir". Antes, si el administrador no había adivinado de antemano qué app iba a necesitar esa persona, el usuario no tenía **ningún** canal salvo llamar por teléfono y dictar el nombre del paquete.
+3. **B.60 — se cerró B.44 de raíz, sin la lista blanca que el dueño ya había rechazado.** Un detector estructural: no una lista de apps conocidas, sino "esta pantalla tiene una barra de direcciones o los controles de un navegador". Viene **apagado y en simulación**, con dos interruptores separados.
+4. **B.61 — el alta por QR quedó a mitad, y se entrega dicho.** Lo difícil está resuelto (el perfil se aplica recortado para que el equipo se pueda terminar de dar de alta, y el resto va con un botón "Terminar alta"); lo que falta es **dibujar el código en el panel**.
+5. **★ El banco de pruebas encontró un bug real y del tipo caro**, antes de que llegara a un equipo: contando *palabras* de navegación en vez de *funciones*, cualquier app con `SwipeRefreshLayout` y un botón "recargar" quedaba clasificada como navegador y se bloqueaba. Son el mismo control en dos idiomas.
+6. **★ Y dos controles negativos encontraron dos casos flojos del propio banco**, que decían afirmar algo y no lo afirmaban: el de `minutemaid` traía las dos palabras de la exclusión en la misma cadena, y el de "la URL de solo lectura no alcanza" no ponía la URL en ningún lado. Los dos se reescribieron. **Es la razón por la que los controles negativos no son un trámite.**
+7. **★ Se decidió NO entregar un codificador de QR que no verifica.** Se escribió uno propio (no se puede usar un CDN: `:admin-app` filtra por lista blanca de host y el síntoma sería "anda en la compu y en el celular no"), se comparó módulo por módulo contra `qrcode` de Python, no pasó, y **se sacó del commit** con el diagnóstico exacto escrito. El álgebra está bien; están mal los bits de formato.
+8. **Verificación: 185 aserciones de comportamiento en dos bancos que compilan LOS ARCHIVOS REALES**, 0 fallas, con 23 controles negativos (21 detectados; los otros 2 resultaron guardas redundantes y **se cuentan como tales, no como detectados**). Type-check con `kotlinc` 2.0.21 del código **extraído** de los archivos reales, 0 errores / 0 warnings, con 13 controles negativos más, los 13 detectados. Los **tres** chequeos de simetría en verde, incluido `tools/check_command_sync.py`, nuevo.
+9. **Próximo paso:** aplicar los dos parches en orden (primero el de B.58), correr los tres chequeos, compilar, y seguir los órdenes de prueba de `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_SOLICITUDES_IAB_QR.md`. **Lo primero al desplegar sigue siendo calcular las huellas de la tienda** (B.58), o parece que se rompió la Tienda.
 
 **10/9 — Claude: se cierra B.6 (checksum obligatorio de APK), perfil con vencimiento y selector de celular. Ver B.58.**
 
@@ -1304,6 +1368,15 @@ Pedido del dueño: que actualizar apps funcione **siempre y en cualquier idioma*
 ---
 
 ## Estado del repo (git)
+
+**10/9 (tarde):** al arrancar la sesión, lo commiteado y desplegado era **0.6.48 / código 111** (`199a2de`), con el working tree **limpio y byte-idéntico al clon** en todo lo revisado. Antigravity ya había commiteado y desplegado B.57.
+
+⚠️ **HAY DOS TANDAS DE TRABAJO SIN APLICAR, Y VAN EN ESTE ORDEN:**
+
+1. `Claude outputs/B58_tienda_y_gracia.patch` — B.6 cerrado + Nivel 4 con vencimiento + selector de celular. **De la sesión de la madrugada del 10/9, que no pudo escribir a disco porque se cortó el puente.**
+2. `Claude outputs/B59_B61_solicitudes_iab_qr.patch` — B.59 + B.60 + B.61, **tres commits** cuyo padre es el commit del parche 1. Si el 1 no se aplicó, el 2 no aplica.
+
+Los dos se aplican con `git am`. **Esta sesión tampoco pudo commitear en el disco** (`device_bash` no monta la carpeta desde hace diez sesiones, y sin él no hay `git`), así que el commit real lo corre Antigravity. Los mensajes ya vienen adentro de los parches.
 
 **9/9:** al arrancar la sesión, lo commiteado era **0.6.47 / código 110** (`413b419`) — Antigravity ya había commiteado y desplegado B.53 (lista blanca) por encima de 0.6.46. La sección C anterior, que decía "0.6.46 + B.53 sin commitear", había quedado desactualizada; **se confía en el estado real del repo, no en esa sección** (regla de "puede haber más de un agente"). El working tree estaba limpio y byte-idéntico al clon en los siete archivos tocados (validado contra `device_list_dir`).
 

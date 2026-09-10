@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Dominios por app — LockSuite</title>
+  <link rel="stylesheet" href="styles.css?v=23" />
+  <link rel="stylesheet" href="panel2.css?v=1" />
+</head>
+<body class="ls-body">
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       EDITOR GLOBAL DE "QUÉ DOMINIO DE CADA APP ES KOSHER".
+
+       Pedido del dueño, textual: "necesito que me armes una sección también para
+       decidir de forma global qué dominios son kosher y cuáles no en cada app
+       (poné lo que ya hiciste, así puedo corregir si te equivocaste) y que haya
+       también opción de permitir/bloquear todo excepto…".
+
+       Las listas que se ven acá las escribió una IA leyendo documentación, no
+       midiendo las apps. Algunas van a estar mal. Hasta hoy no había forma de
+       corregirlas sin recompilar la app: los bloqueos del catálogo se escriben
+       después de todos los permisos, así que ganaban siempre.
+       ══════════════════════════════════════════════════════════════════════ -->
+
+  <header class="ls-top">
+    <div>
+      <h1>Dominios por app</h1>
+      <div class="ls-sub">Configuración GLOBAL — rige para toda la flota</div>
+    </div>
+    <span class="ls-chip warn" id="d-pend">sin cambios</span>
+    <div class="ls-top-spacer"></div>
+    <input class="ls-input" id="d-buscar" type="search" placeholder="Buscar app o dominio…" style="width:min(320px,42vw)" />
+    <a class="ls-btn ls-btn-sm" href="index.html">← Panel</a>
+  </header>
+
+  <div class="ls-layout">
+    <main class="ls-main" style="padding-left:24px">
+
+      <div class="ls-card" style="border-left:4px solid var(--accent)">
+        <h3>Cómo leer esta pantalla</h3>
+        <p class="ls-hint" style="margin:0">
+          Cada app tiene dos listas. <b style="color:var(--success-green)">Permitidos</b> son los
+          dominios que resuelven cuando la app está permitida;
+          <b style="color:var(--alert-red)">No kosher</b> son los que se bloquean
+          <b>siempre</b> —esté la app permitida, prohibida o sin marcar, y con la lista blanca
+          encendida o apagada—. Un dominio permitido cubre también sus subdominios, así que
+          permitir <code>mercadopago.com</code> es permitir <i>todo</i> lo que está abajo, y los
+          de la lista roja son las excepciones que se le recortan.
+        </p>
+        <p class="ls-hint" style="margin:10px 0 0">
+          <b>Lo que está en gris con la marca «de fábrica»</b> lo escribí yo leyendo documentación,
+          no midiendo la app. Si alguno está mal, sacalo de ahí con la ✕: eso es exactamente lo que
+          esta pantalla vino a permitir. Nada de lo que toques acá recompila la app — se guarda en
+          Firebase y los celulares lo leen.
+        </p>
+      </div>
+
+      <div class="ls-card">
+        <h3>Infraestructura y bloqueos fijos</h3>
+        <p class="ls-hint">Estas dos listas <b>no se editan desde acá</b>, y es a propósito.
+          La primera son los dominios sin los cuales un equipo deja de ser rescatable (el canal de
+          comandos del panel, Play Store, la detección de portal cautivo, la hora, los
+          certificados); la segunda son los rincones no kosher de servicios que por lo demás hacen
+          falta. Si hiciera falta abrir o cerrar uno de estos en un equipo puntual, se hace con
+          <b>forzar permitir / forzar prohibir</b> en la sección DNS de la ficha de ese celular,
+          que le gana a todo.</p>
+        <details>
+          <summary style="cursor:pointer; color:var(--accent); font-weight:600; font-size:13px">Ver las dos listas</summary>
+          <div id="d-fijas" style="margin-top:12px"></div>
+        </details>
+      </div>
+
+      <div class="ls-card">
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center">
+          <select class="ls-select" id="d-filtro">
+            <option value="todas">Todas las apps</option>
+            <option value="conbloqueos">Solo las que tienen dominios no kosher</option>
+            <option value="editadas">Solo las que ya corregí</option>
+            <option value="sinbloqueos">Solo las que no tienen ninguno</option>
+          </select>
+          <button class="ls-btn ls-btn-sm" id="d-agregar-app">+ Agregar una app que no está</button>
+          <div class="ls-top-spacer"></div>
+          <button class="ls-btn ls-btn-primary" id="d-enviar">📤 Enviar a todos los celulares</button>
+        </div>
+      </div>
+
+      <div id="d-apps"></div>
+
+      <div class="ls-card" id="d-envio-card" style="display:none">
+        <h3>Envío</h3>
+        <div class="ls-progress" id="d-envio"></div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="catalog.js?v=1"></script>
+  <script src="policies.js?v=1"></script>
+  <script src="comun.js?v=1"></script>
+  <script src="dominios.js?v=1"></script>
+</body>
+</html>

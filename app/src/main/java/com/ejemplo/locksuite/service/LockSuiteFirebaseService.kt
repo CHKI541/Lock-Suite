@@ -111,7 +111,12 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
             "HIDE_APP", "UNHIDE_APP", "SUSPEND_APP", "UNSUSPEND_APP", 
             "BLOCK_WEBVIEW", "UNBLOCK_WEBVIEW", "SET_IMAGE_BLOCK_NONE", 
             "SET_IMAGE_BLOCK_LAYER_1", "SET_IMAGE_BLOCK_LAYER_2", "SET_IMAGE_BLOCK_BOTH",
-            "BLOCK_APP_INTERNET", "UNBLOCK_APP_INTERNET"
+            "BLOCK_APP_INTERNET", "UNBLOCK_APP_INTERNET",
+            // Las reglas DNS mandan el DOMINIO por este mismo parámetro. Van acá para
+            // que un comando sin dominio se rechace con un motivo en vez de aplicarse
+            // sobre una lista vacía y contestar "listo" sin haber hecho nada.
+            "SET_DOMAIN_RULE_BLOCK", "SET_DOMAIN_RULE_ALLOW",
+            "SET_DOMAIN_RULE_FORCE_BLOCK", "SET_DOMAIN_RULE_FORCE_ALLOW", "REMOVE_DOMAIN_RULE"
         )
         if (requiresPackages.contains(command) && packagesList.isEmpty()) {
             android.util.Log.w("LockSuiteFCM", "Comando $command requiere una lista de paquetes, pero se recibió vacía.")
@@ -556,6 +561,42 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 "SET_WHITELIST_ENFORCE" -> policyManager.setWhitelistSimulation(false)
                 "ENABLE_WHITELIST_SHARED_CDN" -> policyManager.setWhitelistSharedCdnAllowed(true)
                 "DISABLE_WHITELIST_SHARED_CDN" -> policyManager.setWhitelistSharedCdnAllowed(false)
+                // ── REGLAS DNS DESDE EL PANEL (10/9/2026) ──
+                //
+                // Hasta hoy las reglas de dominio solo se podían tocar desde la pantalla
+                // del PROPIO celular: no había ningún comando para esto y el panel no
+                // tenía sección de DNS. O sea que el pedido del dueño que B.53 cita
+                // textual —*"si yo quiero permitir o prohibir específicamente un dominio
+                // lo pueda hacer desde la sección dns en forzar prohibir/permitir"*—
+                // estaba resuelto a medias: la mecánica existía, la forma de llegar a
+                // ella desde el panel no.
+                //
+                // Importa más desde el 10/9, porque `FORCE_ALLOW` pasó a ser LA salida de
+                // emergencia de los dominios no kosher que ahora se bloquean siempre
+                // (ver WhitelistManager.alwaysBlockedInAppDomains). Una salida de
+                // emergencia a la que solo se llega teniendo el teléfono en la mano no es
+                // una salida de emergencia.
+                //
+                // El dominio viaja en `packages`, que es el parámetro de propósito
+                // general que ya usan HIDE_APP y compañía. `setRule` levanta la VPN sola
+                // si hacía falta, así que no hay nada más que hacer acá.
+                "SET_DOMAIN_RULE_BLOCK", "SET_DOMAIN_RULE_ALLOW",
+                "SET_DOMAIN_RULE_FORCE_BLOCK", "SET_DOMAIN_RULE_FORCE_ALLOW" -> {
+                    val tipo = when (command) {
+                        "SET_DOMAIN_RULE_BLOCK" -> com.ejemplo.locksuite.dns.RuleType.BLOCK
+                        "SET_DOMAIN_RULE_ALLOW" -> com.ejemplo.locksuite.dns.RuleType.ALLOW
+                        "SET_DOMAIN_RULE_FORCE_BLOCK" -> com.ejemplo.locksuite.dns.RuleType.FORCE_BLOCK
+                        else -> com.ejemplo.locksuite.dns.RuleType.FORCE_ALLOW
+                    }
+                    val manager = com.ejemplo.locksuite.dns.DomainRuleManager(this)
+                    packagesList.forEach { manager.setRule(it, tipo) }
+                    true
+                }
+                "REMOVE_DOMAIN_RULE" -> {
+                    val manager = com.ejemplo.locksuite.dns.DomainRuleManager(this)
+                    packagesList.forEach { manager.clearRule(it) }
+                    true
+                }
                 "SYNC_WHITELIST" -> {
                     val idToAck = commandId
                     commandId = null

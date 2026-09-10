@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Ficha del celular — LockSuite</title>
+  <link rel="stylesheet" href="styles.css?v=23" />
+  <link rel="stylesheet" href="panel2.css?v=1" />
+</head>
+<body class="ls-body">
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       FICHA COMPLETA DE UN CELULAR.
+
+       Se abre en pestaña nueva desde el panel (`celular.html?id=<ANDROID_ID>`),
+       así se pueden tener varios equipos abiertos a la vez y comparar.
+
+       Por qué existe, en una línea: para configurar UN celular había que pasar
+       por la barra lateral (22 tarjetas, 78 casillas), la pestaña Lista blanca,
+       la pestaña Perfiles y la pestaña Ajustes — y dos de esas cuatro son
+       configuración GLOBAL, así que tocar ahí le cambiaba la configuración a
+       toda la flota. Acá está todo lo de este equipo junto, y lo que es global
+       está marcado como global.
+       ══════════════════════════════════════════════════════════════════════ -->
+
+  <header class="ls-top">
+    <div>
+      <h1 id="c-nombre">Cargando…</h1>
+      <div class="ls-sub" id="c-id">—</div>
+    </div>
+    <span class="ls-chip" id="c-conexion"><span class="ls-dot off"></span>—</span>
+    <span class="ls-chip" id="c-bateria">🔋 —</span>
+    <span class="ls-chip" id="c-version">—</span>
+    <div class="ls-top-spacer"></div>
+    <input class="ls-input" id="c-buscar" type="search" placeholder="Buscar app, dominio o política…  (/)" style="width:min(320px,42vw)" />
+    <a class="ls-btn ls-btn-sm" href="index.html" title="Volver al panel">← Panel</a>
+  </header>
+
+  <div class="ls-layout">
+    <nav class="ls-rail" id="c-rail">
+      <button data-sec="resumen" class="active">📋 Resumen</button>
+      <button data-sec="rapida">⚡ Configuración rápida</button>
+      <button data-sec="apps">📱 Apps y dominios <span class="ls-rail-count" id="cnt-apps"></span></button>
+      <button data-sec="politicas">🔒 Políticas <span class="ls-rail-count" id="cnt-pol"></span></button>
+      <button data-sec="dns">🌐 DNS</button>
+      <button data-sec="tienda">🏪 Tienda</button>
+      <button data-sec="acciones">⚙️ Acciones</button>
+    </nav>
+
+    <main class="ls-main">
+
+      <!-- ── RESUMEN ────────────────────────────────────────────────────── -->
+      <section class="ls-section active" data-sec="resumen">
+        <h2>Resumen</h2>
+        <p class="ls-lead">Lo que hay que mirar primero: si el equipo responde, si el filtro está
+          funcionando de verdad, y qué está mal ahora mismo.</p>
+        <div id="c-alertas"></div>
+        <div class="ls-grid">
+          <div class="ls-card"><h3>Identificación</h3><div id="c-ident"></div></div>
+          <div class="ls-card"><h3>Salud del filtro</h3><div id="c-salud"></div></div>
+          <div class="ls-card"><h3>Configuración aplicada</h3><div id="c-config"></div></div>
+        </div>
+        <div class="ls-card">
+          <h3>Nombre del celular</h3>
+          <p class="ls-hint">El panel manda: si el celular tiene otro nombre guardado, adopta este.</p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <input class="ls-input" id="c-nombre-input" placeholder="Celular de…" style="flex:1 1 240px" />
+            <button class="ls-btn ls-btn-primary" id="c-nombre-btn">Guardar</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── CONFIGURACIÓN RÁPIDA ──────────────────────────────────────── -->
+      <section class="ls-section" data-sec="rapida">
+        <h2>Configuración rápida</h2>
+        <p class="ls-lead">Un perfil deja el equipo entero configurado de un toque, en vez de tocar
+          71 interruptores uno por uno. Se aplica <b>a este celular</b> — no hace falta elegirlo en
+          ninguna lista, ya estás en su ficha.</p>
+        <div id="c-gracia"></div>
+        <div id="c-perfiles"></div>
+        <div class="ls-card">
+          <h3>Perfiles guardados</h3>
+          <p class="ls-hint">Los que armaste vos desde la pestaña Perfiles del panel.</p>
+          <div id="c-presets"></div>
+        </div>
+      </section>
+
+      <!-- ── APPS Y DOMINIOS ───────────────────────────────────────────── -->
+      <section class="ls-section" data-sec="apps">
+        <h2>Apps y dominios</h2>
+        <p class="ls-lead">Una sola lista. Cada app está en uno de tres estados, y ese estado decide
+          <b>las tres cosas a la vez</b>: si se ve y se puede abrir en el celular, si se puede bajar
+          de la Tienda, y qué dominios suyos resuelven.</p>
+
+        <div class="ls-card">
+          <h3>Modo del filtro</h3>
+          <p class="ls-hint">Lo único que cambia entre los tres modos es qué pasa con las apps
+            <b>sin marcar</b>. Las prohibidas quedan cerradas siempre, y los dominios no kosher que
+            viven adentro de una app permitida quedan bloqueados en los tres modos.</p>
+          <div class="ls-modes" id="c-modos"></div>
+          <div style="margin-top:12px" id="c-cdn"></div>
+        </div>
+
+        <div class="ls-card">
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px">
+            <input class="ls-input" id="c-apps-buscar" placeholder="Filtrar por nombre, paquete o dominio…" style="flex:1 1 260px" />
+            <select class="ls-select" id="c-apps-filtro">
+              <option value="todas">Todas</option>
+              <option value="instaladas">Solo instaladas en este celular</option>
+              <option value="allow">Permitidas</option>
+              <option value="block">Prohibidas</option>
+              <option value="unset">Sin marcar</option>
+              <option value="propias">Con decisión propia de este celular</option>
+              <option value="tienda">En la Tienda</option>
+            </select>
+            <a class="ls-btn ls-btn-sm" href="dominios.html" target="_blank" rel="noopener">✏️ Editar dominios (global) ↗</a>
+          </div>
+          <div id="c-apps"></div>
+        </div>
+      </section>
+
+      <!-- ── POLÍTICAS ─────────────────────────────────────────────────── -->
+      <section class="ls-section" data-sec="politicas">
+        <h2>Políticas</h2>
+        <p class="ls-lead">Los interruptores del sistema. Se marcan acá y se mandan todos juntos con
+          el botón de abajo, en vez de esperar la confirmación del celular uno por uno.</p>
+        <div class="ls-card">
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px">
+            <input class="ls-input" id="c-pol-buscar" placeholder="Buscar política…" style="flex:1 1 240px" />
+            <label style="font-size:12.5px; color:var(--text-gray); display:flex; gap:6px; align-items:center">
+              <input type="checkbox" id="c-pol-solo-on" /> Solo las encendidas
+            </label>
+            <button class="ls-btn ls-btn-sm" id="c-pol-expandir">Abrir todo</button>
+          </div>
+          <div id="c-politicas"></div>
+        </div>
+        <div class="ls-card" id="c-especiales-card">
+          <h3>⚠️ Interruptores que se tratan aparte</h3>
+          <p class="ls-hint">Estos tres pueden dejar el equipo sin protección, sin poder marcar el
+            código de recuperación, o sin forma de operarlo con el dedo. No entran en el lote: se
+            aplican de a uno y con confirmación.</p>
+          <div id="c-especiales"></div>
+        </div>
+      </section>
+
+      <!-- ── DNS ───────────────────────────────────────────────────────── -->
+      <section class="ls-section" data-sec="dns">
+        <h2>DNS</h2>
+        <p class="ls-lead">Reglas de este celular. <b>Forzar</b> le gana a todo lo demás —incluida la
+          lista de dominios no kosher y la infraestructura—, así que es la salida de emergencia
+          cuando algo quedó cerrado y hace falta abrirlo ya.</p>
+        <div class="ls-card">
+          <h3>Agregar regla</h3>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <input class="ls-input" id="c-dns-dominio" placeholder="ejemplo.com" style="flex:1 1 240px" />
+            <select class="ls-select" id="c-dns-tipo">
+              <option value="FORCE_ALLOW">Forzar permitir</option>
+              <option value="FORCE_BLOCK">Forzar prohibir</option>
+              <option value="ALLOW">Permitir (normal)</option>
+              <option value="BLOCK">Prohibir (normal)</option>
+            </select>
+            <button class="ls-btn ls-btn-primary" id="c-dns-add">Agregar</button>
+          </div>
+          <div id="c-dns-lista" style="margin-top:14px"></div>
+        </div>
+        <div class="ls-card">
+          <h3>Dominios que quedaron afuera</h3>
+          <p class="ls-hint">Lo que el filtro estricto bloqueó (o habría bloqueado, en simulación).
+            Es de acá de donde se completan las listas mirando el equipo real en vez de adivinar.</p>
+          <div id="c-auditoria"></div>
+        </div>
+      </section>
+
+      <!-- ── TIENDA ────────────────────────────────────────────────────── -->
+      <section class="ls-section" data-sec="tienda">
+        <h2>Tienda</h2>
+        <p class="ls-lead">Lo que este celular puede instalar. Una app se habilita permitiéndola en
+          <b>Apps y dominios</b>; acá se ve si además está cargada en la Tienda para poder bajarla.</p>
+        <div class="ls-card"><div id="c-tienda"></div></div>
+        <div class="ls-card">
+          <h3>Pedidos de este celular</h3>
+          <p class="ls-hint">Apps que el usuario pidió desde la Tienda del teléfono.</p>
+          <div id="c-pedidos"></div>
+        </div>
+      </section>
+
+      <!-- ── ACCIONES ──────────────────────────────────────────────────── -->
+      <section class="ls-section" data-sec="acciones">
+        <h2>Acciones</h2>
+        <p class="ls-lead">Cosas que pasan una vez, no configuración.</p>
+        <div class="ls-card">
+          <h3>Mantenimiento</h3>
+          <div style="display:flex; gap:8px; flex-wrap:wrap" id="c-acciones"></div>
+          <div class="ls-progress" id="c-acciones-log"></div>
+        </div>
+        <div class="ls-card">
+          <h3>Actualizar una app</h3>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <input class="ls-input" id="c-upd-pkg" placeholder="com.ejemplo.app" style="flex:1 1 240px" />
+            <button class="ls-btn" id="c-upd-btn">Actualizar por Play Store</button>
+          </div>
+          <div id="c-upd-estado" style="margin-top:10px; font-size:13px; color:var(--text-gray)"></div>
+        </div>
+        <div class="ls-card">
+          <h3>PIN de administrador</h3>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <input class="ls-input" id="c-pin-nuevo" placeholder="PIN nuevo (4 a 16 dígitos)" style="flex:1 1 200px" />
+            <button class="ls-btn" id="c-pin-btn">Cambiar PIN</button>
+          </div>
+        </div>
+        <div class="ls-card" style="border-color: rgba(239,68,68,.35)">
+          <h3>⚠️ Zona de peligro</h3>
+          <p class="ls-hint">Suspender LockSuite levanta <b>todas</b> las protecciones, incluidas las
+            que impiden desinstalarlo y restaurar de fábrica. Usalo solo con el equipo a la vista.</p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap" id="c-peligro"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Barra de cambios pendientes -->
+  <div class="ls-cart" id="c-cart">
+    <b id="c-cart-n">0 cambios sin aplicar</b>
+    <span class="ls-cart-detail" id="c-cart-detalle"></span>
+    <button class="ls-btn" id="c-cart-descartar">Descartar</button>
+    <button class="ls-btn ls-btn-primary" id="c-cart-aplicar">Aplicar</button>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="catalog.js?v=1"></script>
+  <script src="policies.js?v=1"></script>
+  <script src="comun.js?v=1"></script>
+  <script src="celular.js?v=1"></script>
+</body>
+</html>

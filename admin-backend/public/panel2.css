@@ -1,0 +1,282 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+ * panel2.css — estilos de las pantallas nuevas (10/9/2026).
+ *
+ * Archivo APARTE de styles.css a propósito: las pantallas nuevas no pueden
+ * romper el panel viejo, ni siquiera por un selector demasiado ancho. Todo lo de
+ * acá va prefijado `ls-` y solo reusa las VARIABLES de color de styles.css, que
+ * es lo que hace que las dos pantallas se vean de la misma familia.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+.ls-body {
+  margin: 0;
+  background: var(--navy-dark);
+  color: var(--text-light);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+/* ── Reset de los botones heredados de styles.css ──────────────────────────
+ * `styles.css` tiene un `button { width: 100%; … }` global (línea ~120), pensado
+ * para los botones grandes del panel viejo, que son de ancho completo. Acá casi
+ * todos los botones son chicos y van en fila, así que sin este reset TODOS salen
+ * estirados de lado a lado: el de "Dominios" de cada app se convertía en una
+ * barra, y los del carrito quedaban uno debajo del otro.
+ *
+ * Se resetea solo dentro de `.ls-body`, que es exclusivo de las pantallas nuevas,
+ * así que el panel viejo no se entera. Se descubrió renderizando la página, no
+ * leyéndola — un `node --check` verde no dice nada del aspecto.
+ *
+ * ⚠️ Va con `:where()`, y eso NO es un adorno. `:where()` no suma especificidad,
+ * así que este bloque pesa lo mismo que el `button` de styles.css y le gana solo
+ * por venir después en la cascada — mientras que cualquier clase propia
+ * (`.ls-btn-primary`, `.ls-seg button.on-allow`) le sigue ganando a él.
+ *
+ * La primera versión decía `.ls-body button` y eso pesa (0,1,1): le ganaba a
+ * `.ls-btn-primary` (0,1,0) y **dejaba al botón «Guardar» sin fondo**, o sea un
+ * botón principal invisible sobre fondo oscuro. Se vio en la captura, no leyendo.
+ * ───────────────────────────────────────────────────────────────────────── */
+:where(.ls-body) button {
+  width: auto;
+  box-shadow: none;
+  background: none;
+  font-size: inherit;
+  font-weight: inherit;
+  border-radius: 8px;
+}
+:where(.ls-body) button:hover { transform: none; }
+
+/* ── Cabecera fija ─────────────────────────────────────────────────────── */
+.ls-top {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 12px 20px;
+  background: var(--navy-medium);
+  border-bottom: 1px solid var(--navy-border);
+}
+.ls-top h1 { font-size: 18px; margin: 0; line-height: 1.2; }
+.ls-top .ls-sub { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+.ls-top-spacer { flex: 1 1 auto; }
+
+.ls-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.ls-dot.on { background: var(--success-green); }
+.ls-dot.idle { background: var(--warning-yellow); }
+.ls-dot.off { background: var(--text-muted); }
+
+.ls-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: var(--navy-light); color: var(--text-gray); white-space: nowrap;
+}
+.ls-chip.ok { background: var(--success-green-bg); color: var(--success-green); }
+.ls-chip.warn { background: rgba(245, 158, 11, 0.14); color: var(--warning-yellow); }
+.ls-chip.bad { background: var(--alert-red-bg); color: var(--alert-red); }
+
+/* ── Estructura ────────────────────────────────────────────────────────── */
+.ls-layout { display: flex; align-items: flex-start; gap: 0; }
+.ls-rail {
+  position: sticky; top: 57px; align-self: flex-start;
+  width: 210px; flex: 0 0 210px; padding: 16px 10px;
+  border-right: 1px solid var(--navy-border);
+  max-height: calc(100vh - 57px); overflow-y: auto;
+}
+.ls-rail button {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; color: var(--text-gray);
+  padding: 10px 12px; border-radius: 8px; cursor: pointer;
+  font-size: 13.5px; font-weight: 600; margin-bottom: 2px;
+}
+.ls-rail button:hover { background: var(--navy-medium); color: var(--text-light); }
+.ls-rail button.active { background: var(--navy-light); color: var(--accent); }
+.ls-rail .ls-rail-count {
+  float: right; font-size: 11px; font-weight: 700; color: var(--text-muted);
+}
+
+.ls-main { flex: 1 1 auto; padding: 20px 24px 120px; min-width: 0; }
+.ls-section { display: none; }
+.ls-section.active { display: block; }
+.ls-section > h2 {
+  font-size: 20px; margin: 0 0 4px;
+}
+.ls-section > .ls-lead { color: var(--text-gray); font-size: 13px; margin: 0 0 18px; max-width: 78ch; }
+
+.ls-card {
+  background: var(--navy-medium); border: 1px solid var(--navy-border);
+  border-radius: 12px; padding: 16px 18px; margin-bottom: 16px;
+}
+.ls-card > h3 { margin: 0 0 10px; font-size: 15px; }
+.ls-card .ls-hint { color: var(--text-gray); font-size: 12.5px; margin: 0 0 12px; line-height: 1.5; }
+
+.ls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.ls-kv { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--navy-border); }
+.ls-kv:last-child { border-bottom: none; }
+.ls-kv span:first-child { color: var(--text-gray); }
+.ls-kv span:last-child { text-align: right; }
+
+/* ── Botones ───────────────────────────────────────────────────────────── */
+.ls-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--navy-light); color: var(--text-light);
+  border: 1px solid var(--navy-border); border-radius: 8px;
+  padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  text-decoration: none;
+}
+.ls-btn:hover { border-color: var(--navy-border-hover); }
+.ls-btn:disabled { opacity: .45; cursor: not-allowed; }
+.ls-btn-primary { background: var(--accent); color: #0B192C; border-color: transparent; }
+.ls-btn-danger { background: var(--alert-red-bg); color: var(--alert-red); border-color: rgba(239,68,68,.3); }
+.ls-btn-sm { padding: 5px 10px; font-size: 12px; }
+
+.ls-input, .ls-select {
+  background: var(--navy-dark); color: var(--text-light);
+  border: 1px solid var(--navy-light); border-radius: 8px;
+  padding: 8px 11px; font-size: 13px; font-family: inherit;
+}
+.ls-input:focus, .ls-select:focus { outline: none; border-color: var(--accent); }
+.ls-input.ls-wide { width: 100%; box-sizing: border-box; }
+
+/* ── Selector de modo (lista negra / blanca) ───────────────────────────── */
+.ls-modes { display: flex; gap: 10px; flex-wrap: wrap; }
+.ls-mode {
+  /* Es un <button>: los navegadores centran su contenido con una caja anónima, así
+     que sin `display:block` el <b> y el <small> salen uno al lado del otro en vez
+     de apilados. Otra que solo se ve renderizando. */
+  display: block;
+  flex: 1 1 220px; text-align: left; cursor: pointer;
+  background: var(--navy-dark); border: 2px solid var(--navy-light);
+  border-radius: 10px; padding: 12px 14px; color: var(--text-light);
+}
+.ls-mode:hover { border-color: var(--navy-border-hover); }
+.ls-mode.active { border-color: var(--accent); background: var(--navy-light); }
+.ls-mode b { display: block; font-size: 13.5px; margin-bottom: 3px; }
+.ls-mode small { color: var(--text-gray); font-size: 11.5px; line-height: 1.45; display: block; }
+
+/* ── Lista de apps ─────────────────────────────────────────────────────── */
+.ls-approw {
+  border: 1px solid var(--navy-border); border-radius: 10px;
+  margin-bottom: 8px; background: var(--navy-dark); overflow: hidden;
+}
+.ls-approw.st-allow { border-left: 3px solid var(--success-green); }
+.ls-approw.st-block { border-left: 3px solid var(--alert-red); }
+.ls-approw.st-unset { border-left: 3px solid var(--text-muted); }
+.ls-approw.pending { box-shadow: inset 0 0 0 1px var(--accent); }
+
+.ls-apphead { display: flex; align-items: center; gap: 12px; padding: 10px 12px; flex-wrap: wrap; }
+.ls-appname { font-weight: 700; font-size: 14px; }
+.ls-apppkg { font-family: monospace; font-size: 11px; color: var(--text-muted); }
+.ls-appgrow { flex: 1 1 240px; min-width: 0; }
+.ls-apphead > .ls-seg, .ls-apphead > .ls-btn { flex: 0 0 auto; }
+
+.ls-seg { display: inline-flex; border: 1px solid var(--navy-light); border-radius: 8px; overflow: hidden; }
+.ls-seg button {
+  background: var(--navy-dark); color: var(--text-gray); border: none;
+  padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+.ls-seg button + button { border-left: 1px solid var(--navy-light); }
+.ls-seg button:hover { background: var(--navy-light); color: var(--text-light); }
+.ls-seg button.on-allow { background: var(--success-green); color: #0B192C; }
+.ls-seg button.on-block { background: var(--alert-red); color: #fff; }
+.ls-seg button.on-unset { background: var(--navy-light); color: var(--text-light); }
+
+.ls-appbody { padding: 0 12px 12px; border-top: 1px solid var(--navy-border); }
+.ls-domlist { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.ls-dom {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: monospace; font-size: 11.5px; padding: 4px 9px; border-radius: 6px;
+  background: var(--navy-light); color: var(--text-gray);
+}
+.ls-dom.allow { background: var(--success-green-bg); color: var(--success-green); }
+.ls-dom.block { background: var(--alert-red-bg); color: var(--alert-red); }
+.ls-dom.off { opacity: .45; text-decoration: line-through; }
+.ls-dom button {
+  background: none; border: none; color: inherit; cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 0 0 0 2px; opacity: .7;
+}
+.ls-dom button:hover { opacity: 1; }
+.ls-domtitle { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); margin-top: 10px; }
+
+/* ── Barra de cambios pendientes ───────────────────────────────────────── */
+.ls-cart {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 12px 20px;
+  background: var(--navy-light); border-top: 2px solid var(--accent);
+  box-shadow: 0 -6px 24px rgba(0,0,0,.45);
+  transform: translateY(110%); transition: transform .18s ease;
+}
+.ls-cart.show { transform: translateY(0); }
+.ls-cart b { font-size: 14px; flex: 0 0 auto; }
+.ls-cart .ls-btn { flex: 0 0 auto; }
+.ls-cart .ls-cart-detail { color: var(--text-gray); font-size: 12px; flex: 1 1 320px; min-width: 0; }
+
+.ls-progress { margin-top: 10px; font-size: 12.5px; }
+.ls-progress div { padding: 3px 0; border-bottom: 1px solid var(--navy-border); }
+.ls-progress .ok { color: var(--success-green); }
+.ls-progress .bad { color: var(--alert-red); }
+.ls-progress .wait { color: var(--text-gray); }
+
+/* ── Avisos flotantes ──────────────────────────────────────────────────── */
+.ls-toasts { position: fixed; right: 16px; bottom: 84px; z-index: 90; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, 90vw); }
+.ls-toast {
+  background: var(--navy-medium); border: 1px solid var(--navy-border);
+  border-left: 4px solid var(--accent-cyan);
+  border-radius: 8px; padding: 11px 14px; font-size: 13px; line-height: 1.45;
+  box-shadow: var(--card-shadow); transition: opacity .3s;
+}
+.ls-toast.ok { border-left-color: var(--success-green); }
+.ls-toast.error { border-left-color: var(--alert-red); }
+.ls-toast.warn { border-left-color: var(--warning-yellow); }
+
+/* ── Políticas ─────────────────────────────────────────────────────────── */
+.ls-polgroup { margin-bottom: 6px; }
+.ls-polgroup > summary {
+  cursor: pointer; padding: 10px 12px; font-weight: 700; font-size: 13.5px;
+  background: var(--navy-dark); border-radius: 8px; list-style: none;
+}
+.ls-polgroup > summary::-webkit-details-marker { display: none; }
+.ls-polgroup > summary::before { content: "▸ "; color: var(--accent); }
+.ls-polgroup[open] > summary::before { content: "▾ "; }
+.ls-polrow {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 12px; border-bottom: 1px solid var(--navy-border); font-size: 13px;
+}
+.ls-polrow:last-child { border-bottom: none; }
+.ls-polrow.pending { background: rgba(241,196,15,.07); }
+.ls-polrow label { flex: 1 1 auto; cursor: pointer; }
+.ls-polrow .ls-polmark { font-size: 11px; color: var(--accent); font-weight: 700; }
+
+/* interruptor */
+.ls-sw { position: relative; width: 42px; height: 23px; flex: 0 0 42px; }
+.ls-sw input { opacity: 0; width: 0; height: 0; position: absolute; }
+.ls-sw span {
+  position: absolute; inset: 0; background: var(--navy-light);
+  border-radius: 999px; cursor: pointer; transition: background .15s;
+}
+.ls-sw span::after {
+  content: ""; position: absolute; left: 3px; top: 3px;
+  width: 17px; height: 17px; border-radius: 50%; background: var(--text-gray);
+  transition: transform .15s, background .15s;
+}
+.ls-sw input:checked + span { background: var(--success-green); }
+.ls-sw input:checked + span::after { transform: translateX(19px); background: #fff; }
+.ls-sw input:disabled + span { opacity: .4; cursor: not-allowed; }
+
+/* ── Tabla ─────────────────────────────────────────────────────────────── */
+.ls-tablewrap { overflow-x: auto; }
+.ls-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ls-table th, .ls-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--navy-border); }
+.ls-table th { color: var(--text-gray); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+
+.ls-empty { color: var(--text-muted); font-size: 13px; padding: 14px 0; }
+
+/* ── Teléfono ──────────────────────────────────────────────────────────── */
+@media (max-width: 820px) {
+  .ls-layout { flex-direction: column; }
+  .ls-rail {
+    position: static; width: auto; flex: 1 1 auto; max-height: none;
+    display: flex; gap: 6px; overflow-x: auto; border-right: none;
+    border-bottom: 1px solid var(--navy-border); padding: 10px;
+  }
+  .ls-rail button { width: auto; white-space: nowrap; }
+  .ls-rail .ls-rail-count { display: none; }
+  .ls-main { padding: 16px 14px 130px; }
+}

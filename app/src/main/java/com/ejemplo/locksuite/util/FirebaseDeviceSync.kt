@@ -641,7 +641,23 @@ object FirebaseDeviceSync {
                     // syncWhitelistState() aparte y solo cuando cambió.
                     "whitelistEnabled" to policyManager.isWhitelistModeEnabled(),
                     "whitelistSimulation" to policyManager.isWhitelistSimulation(),
-                    "whitelistSharedCdn" to policyManager.isWhitelistSharedCdnAllowed()
+                    "whitelistSharedCdn" to policyManager.isWhitelistSharedCdnAllowed(),
+
+                    // ── Reglas DNS de este equipo (10/9/2026) ──
+                    //
+                    // Se publican para que el panel pueda MOSTRARLAS. Antes solo se veían
+                    // en la pantalla del propio celular, así que desde el panel se podía
+                    // (ahora) poner una regla y no había forma de saber cuáles había —
+                    // ni de sacar una que ya no hiciera falta. Un forzar-permitir que
+                    // nadie recuerda haber puesto es un agujero silencioso.
+                    //
+                    // Son decenas de entradas como mucho y se escriben con el resto del
+                    // estado, sin un ciclo propio, así que no agregan ni un despertar.
+                    "dnsRules" to com.ejemplo.locksuite.dns.DomainRuleManager(context)
+                        .getAllRules()
+                        .entries
+                        .associate { (dominio, tipo) -> dominio.replace(".", "_") to
+                            mapOf("domain" to dominio, "rule" to tipo.name) }
                 )
                 // Restricciones del registro declarativo (mdm/PolicySpec.kt). Se agregan
                 // desde la misma lista que las aplica, así una restricción nueva aparece en
@@ -760,18 +776,33 @@ object FirebaseDeviceSync {
                                 obj.put("block", org.json.JSONArray(
                                     child.child("block").children.mapNotNull { it.getValue(String::class.java) }
                                 ))
+                                // 10/9/2026: dominios del catálogo DE FÁBRICA que el panel
+                                // desbloqueó a mano. Es la única forma de corregir una
+                                // decisión del catálogo sin recompilar la app — ver
+                                // WhitelistManager.blockedDomainsOf().
+                                obj.put("unblock", org.json.JSONArray(
+                                    child.child("unblock").children.mapNotNull { it.getValue(String::class.java) }
+                                ))
                                 customJson.put(pkg, obj)
                             }
                             wl.replaceCustomApps(customJson.toString())
 
+                            // ── CATÁLOGO GLOBAL ──
+                            // Se reemplaza el mapa ENTERO en vez de recorrer paquete por
+                            // paquete. Ver replaceGlobalDecisions(): recorrer solo lo que
+                            // viene en el nodo dejaba a una app borrada del catálogo con
+                            // su decisión vieja pegada al equipo para siempre.
+                            val globalJson = org.json.JSONObject()
                             snap.child("decisions").children.forEach { child ->
                                 val pkg = child.key?.replace("_", ".") ?: return@forEach
-                                when (child.getValue(String::class.java)) {
-                                    com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW -> wl.allowApp(pkg)
-                                    com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK -> wl.blockApp(pkg)
-                                    else -> wl.unsetApp(pkg)
+                                val state = child.getValue(String::class.java) ?: return@forEach
+                                if (state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW ||
+                                    state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK) {
+                                    globalJson.put(pkg, state)
                                 }
                             }
+                            wl.replaceGlobalDecisions(globalJson.toString())
+
                             ok = true
                         } catch (e: Exception) {
                             android.util.Log.e("FirebaseDeviceSync", "Lista blanca: error aplicando la config: ${e.message}", e)
@@ -787,10 +818,83 @@ object FirebaseDeviceSync {
             // Tope alto pero finito: esto corre en un hilo de IO lanzado por el propio
             // comando FCM, nunca en el hilo principal ni en el lector del túnel.
             latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            // ── OVERRIDES DE ESTE EQUIPO ──
+            // Va DESPUÉS del catálogo global, secuencialmente y en ESTE hilo, no anidado
+            // dentro del listener de arriba: ese listener corre en el hilo principal, y
+            // un `latch.await()` adentro lo congelaría hasta que Firebase conteste.
+            if (ok) {
+                pullDeviceAppPolicy(ctx)
+                // Comparar y corregir en vez de ordenar (B.15 punto 3). Recién acá está
+                // el estado efectivo completo —global + override—, así que este es el
+                // único momento en que se puede saber qué apps ocultar y cuáles destapar.
+                try { com.ejemplo.locksuite.mdm.WhitelistManager(ctx).reconcileApps() } catch (e: Exception) {
+                    android.util.Log.w("FirebaseDeviceSync", "Lista blanca: reconcile falló: ${e.message}")
+                }
+            }
             if (ok) syncWhitelistState(ctx)
             ok
         } catch (e: Exception) {
             android.util.Log.e("FirebaseDeviceSync", "Lista blanca: pullWhitelistConfig falló: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * Lee `devices/<id>/appPolicy` — las decisiones de apps PROPIAS DE ESTE EQUIPO, que
+     * le ganan al catálogo global.
+     *
+     * ★ 10/9/2026. Cierra el pendiente que B.53 dejó anotado textual: *"el catálogo se
+     * aplica igual a todos los equipos; el lugar natural es un
+     * `devices/<id>/whitelistOverrides` que se lea después del global"*. Se llama
+     * `appPolicy` y no `whitelistOverrides` porque ya no es solo de la lista blanca: es
+     * la decisión de permitir/prohibir esa app en este equipo, que rige también con el
+     * filtro estricto apagado (cierra sus dominios, la oculta y la suspende).
+     *
+     * **Falla ABIERTO a propósito, y hay que saberlo:** si el nodo no se puede leer, el
+     * equipo se queda con el catálogo global en vez de quedarse sin ninguna
+     * configuración. Un error de red no puede ser lo que le devuelva a un usuario las
+     * apps que el administrador le cerró; y al revés, tampoco puede dejar un equipo con
+     * todo cerrado por un timeout. El mapa anterior sigue en preferencias hasta que una
+     * lectura buena lo reemplace.
+     */
+    private fun pullDeviceAppPolicy(context: Context): Boolean {
+        val ctx = context.applicationContext
+        return try {
+            val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(ctx)}/appPolicy")
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var ok = false
+            withAuth {
+                ref.get()
+                    .addOnSuccessListener { snap ->
+                        try {
+                            val json = org.json.JSONObject()
+                            snap.children.forEach { child ->
+                                val pkg = child.key?.replace("_", ".") ?: return@forEach
+                                val state = child.getValue(String::class.java) ?: return@forEach
+                                if (state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW ||
+                                    state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK ||
+                                    state == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_UNSET) {
+                                    json.put(pkg, state)
+                                }
+                            }
+                            com.ejemplo.locksuite.mdm.WhitelistManager(ctx)
+                                .replaceDeviceDecisions(json.toString())
+                            ok = true
+                        } catch (e: Exception) {
+                            android.util.Log.e("FirebaseDeviceSync", "appPolicy: error aplicando: ${e.message}", e)
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.w("FirebaseDeviceSync", "appPolicy: no se pudo leer: ${e.message}")
+                        latch.countDown()
+                    }
+            }
+            latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            ok
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "appPolicy: pullDeviceAppPolicy falló: ${e.message}", e)
             false
         }
     }

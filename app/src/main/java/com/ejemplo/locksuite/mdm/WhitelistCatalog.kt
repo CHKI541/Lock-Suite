@@ -63,9 +63,17 @@ object WhitelistCatalog {
         /** Dominios que resuelven si la app está permitida. Los subdominios se heredan. */
         val allow: List<String>,
         /**
-         * Dominios que se bloquean SIEMPRE que esta app esté permitida — la parte no
-         * kosher de una app por lo demás aceptable (los GIF de Tenor, las ofertas de
-         * Mercado Pago, el foro de Waze). Gana sobre `allow` por ser más específico.
+         * Dominios NO KOSHER que viven adentro de esta app — los GIF de Tenor, las
+         * ofertas de Mercado Pago, el foro de Waze, los juegos de DiDi.
+         *
+         * ★ 10/9/2026: se bloquean **siempre**, esté la app permitida, prohibida o sin
+         * marcar, y con el modo lista blanca encendido o apagado. Antes decía "siempre
+         * que esta app esté permitida" y era literal: si la app no tenía una decisión
+         * guardada, estos dominios resolvían. Ver `WhitelistManager.alwaysBlockedInAppDomains()`.
+         *
+         * Gana sobre `allow` por ser más específico y por escribirse después.
+         * Para corregir una entrada equivocada desde el panel, sin recompilar, está
+         * `unblock` en el catálogo personalizado.
          */
         val block: List<String> = emptyList(),
         /** Nota para el panel: por qué esta app necesita revisarse con la simulación. */

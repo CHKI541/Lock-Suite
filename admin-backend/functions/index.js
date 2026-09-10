@@ -132,6 +132,15 @@ const ALLOWED_COMMANDS = new Set([
   "SET_WHITELIST_SIMULATION", "SET_WHITELIST_ENFORCE",
   "ENABLE_WHITELIST_SHARED_CDN", "DISABLE_WHITELIST_SHARED_CDN",
   "SYNC_WHITELIST", "CLEAR_WHITELIST_AUDIT",
+  // ── Reglas DNS por equipo desde el panel (10/9/2026) ──
+  //
+  // El dominio viaja en `packages`. Hasta hoy estas reglas solo se podian tocar
+  // desde la pantalla del propio celular, y eso dejaba la salida de emergencia
+  // del filtro fuera del alcance del administrador: FORCE_ALLOW es lo unico que
+  // le gana a TODO —a la lista de dominios no kosher, a la lista negra global y
+  // hasta a la infraestructura—, asi que tiene que poder tocarse desde el panel.
+  "SET_DOMAIN_RULE_BLOCK", "SET_DOMAIN_RULE_ALLOW",
+  "SET_DOMAIN_RULE_FORCE_BLOCK", "SET_DOMAIN_RULE_FORCE_ALLOW", "REMOVE_DOMAIN_RULE",
   // Selector de foto de contactos / Google Illustrations (4/9/2026)
   "BLOCK_CONTACT_PHOTO_PICKER", "UNBLOCK_CONTACT_PHOTO_PICKER",
   "ENABLE_ACC_BOUNCE_SETTINGS", "DISABLE_ACC_BOUNCE_SETTINGS",

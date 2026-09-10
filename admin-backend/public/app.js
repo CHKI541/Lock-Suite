@@ -176,6 +176,17 @@ function renderDevicesList(e) {
             ev.stopPropagation();
             openAppsUpdateModal(e, t);
         });
+        // 10/9/2026 — ficha completa en pestaña nueva (celular.html). Va envuelto en
+        // un guard por si esta version de index.html no tiene el boton: el panel
+        // viejo tiene que seguir funcionando igual si las dos partes se despliegan
+        // desfasadas, que es justo lo que paso el 31/8 y costo media sesion (B.22).
+        const fullBtn = n.querySelector(".open-full-btn");
+        if (fullBtn) {
+            fullBtn.addEventListener("click", ev => {
+                ev.stopPropagation();
+                window.open("celular.html?id=" + encodeURIComponent(e), "_blank", "noopener");
+            });
+        }
         devicesContainer.appendChild(n);
     })) : devicesContainer.innerHTML = '<p class="loading-text">Todavía no hay dispositivos registrados.</p>'
 }
@@ -250,6 +261,12 @@ async function relinkCommandSecret(deviceId) {
 
 async function openDeviceSidebar(e, t) {
     selectedDeviceId = e;
+
+    // 10/9/2026 — el enlace a la ficha completa apunta a ESTE equipo. Con guard,
+    // por lo mismo de arriba: si index.html y app.js se despliegan desfasados, el
+    // panel viejo tiene que seguir entero.
+    const openFull = document.getElementById("sidebar-open-full");
+    if (openFull) openFull.href = "celular.html?id=" + encodeURIComponent(e);
 
     // Antes que nada: si el equipo avisó que perdió la credencial de comandos, ofrecer
     // arreglarlo. Si no, el administrador entra al panel, toca interruptores, y ninguno

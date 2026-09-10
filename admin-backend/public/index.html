@@ -61,6 +61,11 @@
           <button id="main-tab-presets" class="main-nav-btn" type="button">📋 Perfiles</button>
           <button id="main-tab-global-settings" class="main-nav-btn" type="button">⚙️ Ajustes</button>
           <button id="main-tab-whitelist" class="main-nav-btn" type="button">🛡️ Lista blanca</button>
+          <!-- 10/9/2026: editor global de "qué dominio de cada app es kosher".
+               Es una página aparte porque es configuración GLOBAL y conviene que se
+               vea como tal: lo que se toca ahí rige para toda la flota. -->
+          <a id="main-tab-dominios" class="main-nav-btn" href="dominios.html" target="_blank"
+             rel="noopener" style="text-decoration:none">🌐 Dominios por app ↗</a>
           <!-- B.59 — Pedidos de apps. El contador va en la propia pestaña y no en una
                campanita aparte: la barra de pestañas está siempre visible, así que el
                número se ve desde cualquier pantalla del panel sin agregar un elemento
@@ -355,6 +360,11 @@
             <p id="sidebar-device-version" class="device-version" style="font-size: 11px; color: var(--text-gray); margin-top: 2px;"></p>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
+            <!-- 10/9/2026: la salida hacia la ficha completa. La barra lateral queda
+                 como vista rápida y la configuración de verdad se hace allá. -->
+            <a id="sidebar-open-full" class="action-btn" target="_blank" rel="noopener"
+               style="text-decoration:none; white-space:nowrap; padding:6px 10px; font-size:12px;"
+               title="Abrir la ficha completa de este celular en una pestaña nueva">🗂️ Ficha completa ↗</a>
             <button id="sidebar-expand-btn" class="expand-btn" title="Expandir/Contraer" style="background: none; border: none; color: var(--text-gray); font-size: 20px; cursor: pointer; padding: 4px 8px; transition: color 0.2s;">↔</button>
             <button id="sidebar-close-btn" class="close-btn">&times;</button>
           </div>
@@ -928,7 +938,13 @@
       </div>
       <p class="last-seen"></p>
       <div class="card-action-bar">
-        <button class="action-btn view-details-btn" type="button">⚙️ Administrar Celular</button>
+        <!-- 10/9/2026: la ficha COMPLETA se abre en pestaña nueva (celular.html).
+             Es la pantalla donde se configura; la barra lateral de acá queda como
+             vista rápida. Abrir en pestaña nueva fue pedido explícito del dueño
+             ("se puede abrir pestaña nueva, así es más cómodo") y además permite
+             tener varios equipos abiertos a la vez para compararlos. -->
+        <button class="action-btn open-full-btn" type="button">🗂️ Ficha completa ↗</button>
+        <button class="action-btn view-details-btn" type="button">⚙️ Vista rápida</button>
         <button class="action-btn quick-update-btn" type="button">🔄 Actualizar</button>
       </div>
     </div>
@@ -979,6 +995,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script src="qr.js?v=1"></script>
-  <script src="app.js?v=38"></script>
+  <script src="app.js?v=39"></script>
 </body>
 </html>

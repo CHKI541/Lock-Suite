@@ -68,8 +68,28 @@ class WhitelistManager(private val context: Context) {
         const val KEY_ENABLED = "whitelist_mode_enabled"
         const val KEY_SIMULATION = "whitelist_mode_simulation"
         const val KEY_ALLOW_SHARED_CDN = "whitelist_allow_shared_cdn"
-        /** JSON: {"pkg": "allow"|"block"} — decisión por app. */
+        /** JSON: {"pkg": "allow"|"block"} — decisión GLOBAL por app (catálogo de la flota). */
         const val KEY_DECISIONS = "whitelist_decisions"
+
+        /**
+         * JSON: {"pkg": "allow"|"block"|"unset"} — decisión PROPIA DE ESTE EQUIPO, que le
+         * gana a la global.
+         *
+         * ★ 10/9/2026. B.53 dejó anotado como pendiente que *"el catálogo se aplica igual
+         * a todos los equipos; si algún día hace falta una app permitida en un celular y
+         * no en otro, el lugar natural es un `devices/<id>/whitelistOverrides` que se lea
+         * después del global"*. Esto es eso, y resultó ser lo que hacía falta para que la
+         * ficha de un celular pueda ser una pantalla de verdad: sin overrides, todo lo
+         * que el administrador tocara en la ficha de UN equipo se lo aplicaba a la flota
+         * entera, que es la sorpresa más cara que puede dar un panel de MDM.
+         *
+         * `unset` se guarda EXPLÍCITO y no se borra la clave: "en este equipo esta app no
+         * está marcada" es una decisión distinta de "en este equipo no dije nada", porque
+         * la primera tiene que poder anular un `allow` global. Es el mismo cuidado que
+         * `EnrollmentProfiles.POST_ALTA` con la diferencia entre "clave ausente" y
+         * "clave en false" (B.61).
+         */
+        const val KEY_DEVICE_DECISIONS = "whitelist_device_decisions"
         /** JSON: {"pkg": {"label":…, "allow":[…], "block":[…], "apkUrl":…}} — apps agregadas desde el panel. */
         const val KEY_CUSTOM = "whitelist_custom_apps"
 
@@ -176,17 +196,24 @@ class WhitelistManager(private val context: Context) {
          * una regla por nodo: la última escritura sobre el MISMO dominio gana, y entre
          * dominios distintos gana el más específico. De menos a más prioritario:
          *
-         *   1. CDN compartidos            (ALLOW, y solo si el interruptor está)
+         *   1. CDN compartidos             (ALLOW, y solo si el interruptor está)
          *   2. dominios de apps permitidas (ALLOW)
-         *   3. bloqueos de apps permitidas (BLOCK)  ← Tenor en Mensajes, ofertas en MP
-         *   4. dominios de apps prohibidas (BLOCK)  ← se cierran enteros
-         *   5. infraestructura             (FORCE_ALLOW)
+         *   3. dominios de apps prohibidas (BLOCK)  ← se cierran enteros
+         *   4. infraestructura             (FORCE_ALLOW)
+         *   5. no kosher dentro de apps    (BLOCK)  ← ofertas de MP, foro de Waze, Tenor…
          *   6. bloqueos fijos              (BLOCK)  ← le ganan hasta a la infraestructura
          *
-         * El 3 va después de TODOS los permisos del 2 para que no dependa del orden del
-         * mapa cuál de dos apps ganó sobre un dominio compartido. El 6 va último porque
-         * `tenor.googleapis.com` tiene que ganarle a `googleapis.com` del 5 aunque
-         * alguien agregue una app personalizada que lo permita.
+         * **El 5 es nuevo del 10/9/2026 y antes era el viejo paso 3.** Era "bloqueos de
+         * las apps PERMITIDAS" y corría antes de la infraestructura; ahora es "bloqueos de
+         * TODAS las apps del catálogo, marcadas o no" y corre después. El porqué completo
+         * está en `alwaysBlockedInAppDomains()`: en resumen, que un host sea contenido no
+         * kosher es una propiedad del host y no de la decisión sobre la app, así que no
+         * puede depender de que el administrador haya marcado esa app.
+         *
+         * El 5 y el 6 van después de TODOS los permisos para que no dependa del orden del
+         * mapa cuál de dos apps ganó sobre un dominio compartido, y van últimos porque
+         * `tenor.googleapis.com` tiene que ganarle a `googleapis.com` del 4 aunque alguien
+         * agregue una app personalizada que lo permita.
          */
         /**
          * Dominios permitidos de una app: los del catálogo de fábrica **más** los que el
@@ -206,8 +233,73 @@ class WhitelistManager(private val context: Context) {
         private fun allowedDomainsOf(pkg: String, custom: Map<String, CustomApp>): List<String> =
             (WhitelistCatalog.entryFor(pkg)?.allow ?: emptyList()) + (custom[pkg]?.allow ?: emptyList())
 
-        private fun blockedDomainsOf(pkg: String, custom: Map<String, CustomApp>): List<String> =
-            (WhitelistCatalog.entryFor(pkg)?.block ?: emptyList()) + (custom[pkg]?.block ?: emptyList())
+        /**
+         * Dominios no kosher de una app: los del catálogo de fábrica **menos los que el
+         * panel haya desbloqueado explícitamente**, más los que el panel haya agregado.
+         *
+         * **El `unblock` existe porque el catálogo de fábrica lo escribió una IA leyendo
+         * documentación, no midiendo la app.** Si una de esas decisiones está mal —por
+         * ejemplo marcar como "marketplace" un host que Mercado Pago necesita para
+         * pagar—, antes no había forma de corregirla desde el panel: los bloqueos se
+         * escriben después de todos los permisos, así que ganaban siempre y la única
+         * salida era un `FORCE_ALLOW` por equipo en la sección DNS. Ahora la corrección
+         * es global y vive donde se ve la lista.
+         *
+         * **No es simétrico con `allow` a propósito.** Para SACAR un dominio permitido de
+         * fábrica no hace falta nada nuevo: alcanza con ponerlo en `block`, que se
+         * escribe después. Para sacar un BLOQUEO no alcanzaba con nada, porque no hay
+         * nada que se escriba después. Por eso el campo nuevo es este y solo este.
+         */
+        private fun blockedDomainsOf(pkg: String, custom: Map<String, CustomApp>): List<String> {
+            val factory = WhitelistCatalog.entryFor(pkg)?.block ?: emptyList()
+            val unblocked = (custom[pkg]?.unblock ?: emptyList()).map { normalizeDomain(it) }.toSet()
+            return factory.filter { normalizeDomain(it) !in unblocked } + (custom[pkg]?.block ?: emptyList())
+        }
+
+        /**
+         * ★ 10/9/2026 — LOS DOMINIOS NO KOSHER DE UNA APP SE CIERRAN AUNQUE LA APP ESTÉ
+         * PERMITIDA, Y AUNQUE EL MODO LISTA BLANCA ESTÉ APAGADO.
+         *
+         * Pedido textual del dueño: *"aunque hagamos modo lista negra, las apps mismas
+         * que permita tienen que quedar bloqueados sus dominios no kosher"*.
+         *
+         * **Tenía razón y era un agujero medido.** Hasta hoy, las listas `block` del
+         * catálogo solo entraban al Trie para las apps que tuvieran una DECISIÓN
+         * explícita guardada (`allow` o `block`). O sea que en un equipo normal —modo
+         * lista negra, catálogo sin tocar, `decisions` vacío— los **39 dominios no
+         * kosher que viven dentro de apps que el equipo usa** resolvían todos:
+         * `ofertas.mercadopago.com` y los 9 hosts del marketplace de Mercado Libre,
+         * `support/help/forum/blog.waze.com`, los 6 de juegos y streaming de DiDi,
+         * `translate.google.com` (que traduce páginas enteras, o sea un proxy de
+         * navegación), y Tenor/Giphy dentro de Mensajes. Solo 8 dominios se cerraban
+         * siempre, los de `BLOCK_ALWAYS`.
+         *
+         * La decisión de permitir o prohibir una app es una cosa; que un host de esa app
+         * sea contenido no kosher es **una propiedad del host**, no de la decisión. Por
+         * eso ahora se aplica sobre TODO el catálogo y TODAS las apps personalizadas, sin
+         * mirar el estado, y se escribe en la misma pasada final que `BLOCK_ALWAYS`.
+         *
+         * **NO lleva interruptor, y es deliberado.** Esta sesión existe porque el panel
+         * tenía 75 interruptores y el dueño lo describió como "mareador": agregar el 76
+         * para algo que él pidió de forma incondicional sería ir para atrás. Y vale la
+         * lección de B.43: *"un interruptor apagado por defecto solo protege a quien se
+         * acuerde de encenderlo"*. La salida de emergencia ya existe y es mejor que un
+         * interruptor porque es por dominio y por equipo: un `FORCE_ALLOW` de la sección
+         * DNS se resuelve ANTES que esto y gana (punto 1 del orden de precedencia). Para
+         * corregir el catálogo para toda la flota está `unblock`, arriba.
+         */
+        private fun alwaysBlockedInAppDomains(custom: Map<String, CustomApp>): List<String> {
+            val out = mutableListOf<String>()
+            for (entry in WhitelistCatalog.APPS) out.addAll(blockedDomainsOf(entry.packageName, custom))
+            // Las apps personalizadas que el panel agregó y que NO están en el catálogo
+            // de fábrica: sus bloqueos valen igual. `blockedDomainsOf` ya fusiona las dos
+            // fuentes, así que para las que sí están en el catálogo esto no duplica nada
+            // (y un duplicado sería inocuo: misma regla sobre el mismo nodo del Trie).
+            for (pkg in custom.keys) {
+                if (WhitelistCatalog.entryFor(pkg) == null) out.addAll(blockedDomainsOf(pkg, custom))
+            }
+            return out
+        }
 
         fun buildRules(
             decisions: Map<String, String>,
@@ -226,17 +318,23 @@ class WhitelistManager(private val context: Context) {
             }
 
             for ((pkg, state) in decisions) {
-                if (state != STATE_ALLOW) continue
-                for (d in blockedDomainsOf(pkg, custom)) rules[normalizeDomain(d)] = RuleType.BLOCK
-            }
-
-            for ((pkg, state) in decisions) {
                 if (state != STATE_BLOCK) continue
                 val todos = allowedDomainsOf(pkg, custom) + blockedDomainsOf(pkg, custom)
                 for (d in todos) rules[normalizeDomain(d)] = RuleType.BLOCK
             }
 
             for (d in WhitelistCatalog.INFRASTRUCTURE) rules[normalizeDomain(d)] = RuleType.FORCE_ALLOW
+
+            // ── PASADA FINAL DE BLOQUEOS ──
+            // Va DESPUÉS de la infraestructura a propósito: si un host estuviera por
+            // error en las dos listas, acá gana el bloqueo. Es el mismo motivo por el que
+            // BLOCK_ALWAYS ya estaba último — `tenor.googleapis.com` tiene que ganarle a
+            // `googleapis.com`, y ninguna app personalizada puede destapar un bloqueo
+            // fijo escribiendo un permiso.
+            //
+            // Los dos van juntos porque son la misma idea: contenido no kosher que vive
+            // adentro de algo que por lo demás hace falta. Ver alwaysBlockedInAppDomains.
+            for (d in alwaysBlockedInAppDomains(custom)) rules[normalizeDomain(d)] = RuleType.BLOCK
 
             for (d in WhitelistCatalog.BLOCK_ALWAYS) rules[normalizeDomain(d)] = RuleType.BLOCK
 
@@ -282,17 +380,38 @@ class WhitelistManager(private val context: Context) {
     private fun readDecisions(): JSONObject =
         try { JSONObject(prefs().getString(KEY_DECISIONS, "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
 
+    private fun readDeviceDecisions(): JSONObject =
+        try { JSONObject(prefs().getString(KEY_DEVICE_DECISIONS, "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
+
     private fun readCustom(): JSONObject =
         try { JSONObject(prefs().getString(KEY_CUSTOM, "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
 
+    /** Estado EFECTIVO: lo propio de este equipo si existe, si no lo global. */
     fun stateOf(packageName: String): String =
+        allDecisions()[packageName] ?: STATE_UNSET
+
+    /** Solo el catálogo de la flota, sin el override. Para que la UI pueda decir de dónde viene. */
+    fun globalStateOf(packageName: String): String =
         readDecisions().optString(packageName, STATE_UNSET).ifEmpty { STATE_UNSET }
 
-    /** Todas las decisiones guardadas, para la UI y para el reporte al panel. */
+    /** `null` si este equipo no tiene decisión propia para esa app. */
+    fun deviceStateOf(packageName: String): String? {
+        val json = readDeviceDecisions()
+        if (!json.has(packageName)) return null
+        return json.optString(packageName, STATE_UNSET).ifEmpty { STATE_UNSET }
+    }
+
+    /**
+     * Todas las decisiones EFECTIVAS, para la UI, para el Trie y para el reporte al panel.
+     * El override del equipo se aplica encima del catálogo global, y por eso se escribe
+     * segundo: la última escritura sobre la misma clave gana, igual que en el Trie.
+     */
     fun allDecisions(): Map<String, String> {
-        val json = readDecisions()
         val out = mutableMapOf<String, String>()
-        for (key in json.keys()) out[key] = json.optString(key, STATE_UNSET)
+        val global = readDecisions()
+        for (key in global.keys()) out[key] = global.optString(key, STATE_UNSET)
+        val device = readDeviceDecisions()
+        for (key in device.keys()) out[key] = device.optString(key, STATE_UNSET)
         return out
     }
 
@@ -319,7 +438,79 @@ class WhitelistManager(private val context: Context) {
     /** Vuelve la app a "sin marcar": no se toca, pero tampoco se le abren dominios. */
     fun unsetApp(packageName: String): Boolean = setState(packageName, STATE_UNSET)
 
-    private fun setState(packageName: String, state: String): Boolean {
+    /**
+     * UN SOLO TOQUE, pero SOLO PARA ESTE EQUIPO. Es lo que usan la ficha del celular en
+     * el panel y la pantalla del propio teléfono: tocar una app ahí no puede cambiarle la
+     * configuración a toda la flota.
+     *
+     * `state` puede ser `unset`, y ahí el override se guarda igual (queda "sin marcar en
+     * este equipo", anulando un `allow`/`block` global). Para volver a heredar el
+     * catálogo global está `clearDeviceState()`.
+     */
+    fun setDeviceState(packageName: String, state: String): Boolean =
+        setState(packageName, state, deviceLevel = true)
+
+    /** Este equipo vuelve a heredar lo que diga el catálogo global para esa app. */
+    fun clearDeviceState(packageName: String): Boolean {
+        val pkg = packageName.trim()
+        if (pkg.isEmpty()) return false
+        val json = readDeviceDecisions()
+        if (!json.has(pkg)) return true
+        json.remove(pkg)
+        prefs().edit().putString(KEY_DEVICE_DECISIONS, json.toString()).apply()
+        reload()
+        return try {
+            applyAppSideEffects(pkg, stateOf(pkg), STATE_BLOCK)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * Reemplaza los overrides de este equipo con lo que mandó el panel.
+     *
+     * Reemplaza en vez de fusionar, por el mismo motivo que `replaceCustomApps()`:
+     * fusionar hace imposible QUITAR un override desde el panel. El panel siempre manda
+     * el mapa completo del equipo.
+     */
+    fun replaceDeviceDecisions(json: String): Boolean {
+        return try {
+            val parsed = JSONObject(json)
+            prefs().edit().putString(KEY_DEVICE_DECISIONS, parsed.toString()).apply()
+            reload()
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("WhitelistManager", "JSON de overrides por equipo inválido: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Reemplaza el catálogo GLOBAL con lo que mandó el panel.
+     *
+     * ★ Corrige de paso un bug de B.53 que nadie había mirado: `pullWhitelistConfig`
+     * recorría solo los paquetes presentes en el nodo de Firebase, así que **una app
+     * borrada del catálogo se quedaba con su decisión vieja en el equipo para siempre**.
+     * Prohibías una app, la sacabas del catálogo, y seguía oculta sin que el panel
+     * mostrara ningún motivo. Reemplazar el mapa entero lo cierra: lo que ya no está
+     * queda en `unset`, y `reconcileApps()` la destapa en la próxima vuelta del Watchdog
+     * (comparar y corregir, la lección de B.15 punto 3).
+     */
+    fun replaceGlobalDecisions(json: String): Boolean {
+        return try {
+            val parsed = JSONObject(json)
+            prefs().edit().putString(KEY_DECISIONS, parsed.toString()).apply()
+            reload()
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("WhitelistManager", "JSON de decisiones globales inválido: ${e.message}")
+            false
+        }
+    }
+
+    private fun setState(packageName: String, state: String, deviceLevel: Boolean = false): Boolean {
         val pkg = packageName.trim()
         if (pkg.isEmpty()) return false
 
@@ -332,14 +523,21 @@ class WhitelistManager(private val context: Context) {
             return false
         }
 
-        val json = readDecisions()
-        if (state == STATE_UNSET) json.remove(pkg) else json.put(pkg, state)
-        prefs().edit().putString(KEY_DECISIONS, json.toString()).apply()
+        val previous = stateOf(pkg)
+        val key = if (deviceLevel) KEY_DEVICE_DECISIONS else KEY_DECISIONS
+        val json = if (deviceLevel) readDeviceDecisions() else readDecisions()
+        // En el mapa del EQUIPO, `unset` se guarda explícito: tiene que poder anular un
+        // `allow` global. En el GLOBAL se borra la clave, que es lo que siempre hizo.
+        if (state == STATE_UNSET && !deviceLevel) json.remove(pkg) else json.put(pkg, state)
+        prefs().edit().putString(key, json.toString()).apply()
 
         reload()
 
         return try {
-            applyAppSideEffects(pkg, state)
+            // El efecto sobre la app se decide con el estado EFECTIVO, no con el que se
+            // acaba de escribir: si el catálogo global dice `block` y este equipo escribe
+            // `unset`, lo que corresponde es destapar, no "no hacer nada".
+            applyAppSideEffects(pkg, stateOf(pkg), previous)
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -365,7 +563,7 @@ class WhitelistManager(private val context: Context) {
      * `PolicyManager.deferIfSuspended`). La decisión igual queda guardada y
      * `reconcileApps()` la aplica cuando se reanude.
      */
-    private fun applyAppSideEffects(packageName: String, state: String) {
+    private fun applyAppSideEffects(packageName: String, state: String, previous: String = STATE_UNSET) {
         val policyManager = PolicyManager(context)
         if (policyManager.isLockSuiteSuspended()) {
             android.util.Log.i("WhitelistManager", "LockSuite suspendido: $packageName queda guardado sin aplicar")
@@ -386,8 +584,23 @@ class WhitelistManager(private val context: Context) {
                 controller.hideApp(packageName, false)
                 controller.suspendApp(packageName, false)
             }
-            // STATE_UNSET: no se toca la app. Se queda sin dominios (punto 2 de la
-            // cabecera) pero visible, que es lo que se eligió.
+            STATE_UNSET -> {
+                // Volver a "sin marcar" no toca la app… SALVO que veníamos de
+                // `block`, en cuyo caso la que la ocultó fue la lista blanca y
+                // tiene que destaparla. Sin esta rama, quitarle el override a un
+                // equipo (o sacar la app del catálogo global) dejaba la app
+                // oculta para siempre y el panel mostrándola como "sin marcar":
+                // el administrador ve una app sin bloquear que el usuario no
+                // encuentra por ningún lado, sin ningún motivo a la vista.
+                //
+                // Se mira `previous` y no el estado real de la app a propósito:
+                // así una app que el administrador ocultó A MANO desde la sección
+                // Aplicaciones no se destapa sola por pasar por acá.
+                if (previous == STATE_BLOCK) {
+                    controller.hideApp(packageName, false)
+                    controller.suspendApp(packageName, false)
+                }
+            }
         }
     }
 
@@ -436,7 +649,14 @@ class WhitelistManager(private val context: Context) {
         val packageName: String,
         val label: String,
         val allow: List<String>,
-        val block: List<String>
+        val block: List<String>,
+        /**
+         * Dominios del catálogo DE FÁBRICA que el panel desbloqueó a mano. Ver
+         * `blockedDomainsOf()`: es la única forma de corregir una decisión del catálogo
+         * sin recompilar, y hace falta porque esas listas las escribió una IA leyendo
+         * documentación y no midiendo la app.
+         */
+        val unblock: List<String> = emptyList()
     )
 
     fun customApps(): List<CustomApp> {
@@ -449,7 +669,8 @@ class WhitelistManager(private val context: Context) {
                     packageName = key,
                     label = obj.optString("label", key),
                     allow = jsonArrayToList(obj.optJSONArray("allow")),
-                    block = jsonArrayToList(obj.optJSONArray("block"))
+                    block = jsonArrayToList(obj.optJSONArray("block")),
+                    unblock = jsonArrayToList(obj.optJSONArray("unblock"))
                 )
             )
         }
@@ -507,17 +728,15 @@ class WhitelistManager(private val context: Context) {
         publish(DomainRuleTrie.build(rules), isEnabled(), isSimulation())
     }
 
-    /** Cuántos dominios tiene cargados la lista blanca ahora mismo (para el panel). */
-    fun ruleCount(): Int {
-        var n = WhitelistCatalog.INFRASTRUCTURE.size + WhitelistCatalog.BLOCK_ALWAYS.size
-        if (isSharedCdnAllowed()) n += WhitelistCatalog.SHARED_CDN.size
-        val custom = customApps().associateBy { it.packageName }
-        for ((pkg, state) in allDecisions()) {
-            if (state == STATE_UNSET) continue
-            // Mismo criterio que buildRules(): catálogo + panel, no uno u otro.
-            n += (WhitelistCatalog.entryFor(pkg)?.let { it.allow.size + it.block.size } ?: 0) +
-                 (custom[pkg]?.let { it.allow.size + it.block.size } ?: 0)
-        }
-        return n
-    }
+    /**
+     * Cuántos dominios tiene cargados la lista blanca ahora mismo (para el panel).
+     *
+     * Se calcula llamando a `buildRules()` en vez de sumando a mano las mismas listas.
+     * Antes eran dos cuentas en paralelo y ya se habían desincronizado: la versión vieja
+     * ignoraba a las apps sin marcar, que desde el 10/9 sí aportan sus bloqueos no
+     * kosher, así que el panel habría mostrado menos reglas de las que rigen. Es barato
+     * (decenas de entradas) y por construcción no puede volver a diferir.
+     */
+    fun ruleCount(): Int =
+        buildRules(allDecisions(), customApps().associateBy { it.packageName }, isSharedCdnAllowed()).size
 }

@@ -361,10 +361,34 @@ object SelfUpdater {
             val pendingIntent = PendingIntent.getBroadcast(context, 9922, intent, flags)
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
             val triggerAtMs = android.os.SystemClock.elapsedRealtime() + 120_000
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+
+            // ⚠️ 10/9/2026 — ES EL MISMO BUG QUE B.54 ARREGLÓ EN `UpdateFlowManager`, Y
+            // ESTA COPIA HABÍA QUEDADO AFUERA.
+            //
+            // Desde Android 12 (API 31), `setExactAndAllowWhileIdle` exige permiso de
+            // alarma exacta. Sin él lanza `SecurityException`, esta función devolvía
+            // `false`, `prepareTemporaryInstallAccess()` tiraba `IllegalStateException`…
+            // y entonces **la Tienda no instalaba absolutamente nada y la
+            // autoactualización tampoco**, con el mensaje "No se pudieron preparar los
+            // permisos temporales de instalación", que no dice ni de lejos que el
+            // problema es un permiso de alarmas. El Manifest declara `SCHEDULE_EXACT_ALARM`
+            // y `USE_EXACT_ALARM` desde B.54, así que en el caso normal hay permiso — pero
+            // en Android 12 el usuario lo puede revocar desde Ajustes → Alarmas y
+            // recordatorios, y ahí se caía la Tienda entera sin ninguna pista.
+            //
+            // Igual que en B.54: se verifica en caliente y se cae a `setAndAllowWhileIdle`,
+            // que NO necesita permiso y dispara igual en Doze. **La red de seguridad
+            // inexacta es infinitamente mejor que no abrir la ventana de instalación**:
+            // acá el cierre de seguridad puede llegar unos minutos tarde, contra la
+            // alternativa de que la Tienda no funcione nunca.
+            val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pendingIntent)
+            } else if (canExact) {
                 alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pendingIntent)
             } else {
-                alarmManager.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pendingIntent)
+                alarmManager.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pendingIntent)
+                Log.w("SelfUpdater", "Sin permiso de alarma exacta: cierre de instalacion programado inexacto")
             }
             return true
         } catch (e: Exception) {
@@ -397,18 +421,32 @@ object SelfUpdater {
                 val newLocation = conn.getHeaderField("Location")
                 if (!newLocation.isNullOrBlank()) {
                     conn.disconnect()
-                    currentUrl = if (newLocation.startsWith("http://") || newLocation.startsWith("https://")) {
+                    val nextUrl = if (newLocation.startsWith("http://") || newLocation.startsWith("https://")) {
                         newLocation
                     } else {
                         URL(URL(currentUrl), newLocation).toString()
                     }
+                    // No se sigue un redirect que BAJE de https a http. La huella SHA-256
+                    // que exige la Tienda (B.58) ya impide instalar un archivo cambiado,
+                    // pero un salto a texto plano expone igual qué APK baja cada equipo y
+                    // no hace falta para nada: todos los orígenes reales de este proyecto
+                    // (GitHub Releases, Firebase Hosting, S3) son https de punta a punta.
+                    if (currentUrl.startsWith("https://") && nextUrl.startsWith("http://")) {
+                        conn.disconnect()
+                        throw IOException("Redireccion insegura de https a http, descarga cancelada")
+                    }
+                    currentUrl = nextUrl
                     redirects++
                     continue
                 }
             }
             return conn
         }
-        return URL(currentUrl).openConnection() as HttpURLConnection
+        // Sin esto se devolvía una conexión NUEVA, sin timeouts y sin User-Agent, sobre
+        // la última URL de una cadena que ya había dado siete saltos: o sea que un bucle
+        // de redirecciones terminaba en una descarga que podía colgarse para siempre.
+        // Un error claro es mejor: el llamador lo muestra y el panel lo registra.
+        throw IOException("Demasiadas redirecciones (7) al descargar el APK")
     }
 
     private fun fetchVersionManifest(): String {

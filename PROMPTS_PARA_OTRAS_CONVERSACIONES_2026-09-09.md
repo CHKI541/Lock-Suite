@@ -37,7 +37,14 @@ LO QUE YA EXISTE Y NO HAY QUE REHACER (verificalo antes de escribir una línea):
   · util/ApkSignatureVerifier.kt (B.37) ya compara la firma del APK descargado contra la
     del paquete instalado.
 
-⚠️ BLOQUEANTE QUE VA PRIMERO, Y NO ES OPCIONAL: B.6 SIGUE ABIERTO.
+✅ ACTUALIZACIÓN DEL 10/9: LA TAREA 1 DE ESTE PROMPT (EL CHECKSUM) YA ESTÁ HECHA.
+B.6 se cerró en B.58: existe `util/ApkChecksum.kt`, `storeApps` lleva `sha256`, el panel
+lo calcula solo al cargar una app y tiene botón para recalcular, y el celular no instala
+una entrada sin huella. Verificá que esté antes de rehacerlo, y SALTEÁ el bloque de abajo
+—queda como historial de por qué era bloqueante—. Empezá directo en "DESPUÉS DE ESO, LA
+FUNCIÓN". Lo que falta de este prompt es solo el flujo de PEDIR una app.
+
+⚠️ (HISTÓRICO) BLOQUEANTE QUE IBA PRIMERO: B.6 ESTABA ABIERTO.
 ApkSignatureVerifier solo puede comparar contra un paquete YA INSTALADO. La tienda
 administrada instala apps por PRIMERA vez, así que ahí no hay contra qué comparar: hoy se
 descarga y se instala un APK sin verificar absolutamente nada. B.37 lo dice explícito

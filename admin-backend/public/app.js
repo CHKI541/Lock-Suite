@@ -1866,6 +1866,16 @@ const MASTER_PROFILES = [
         tone: "work"
     },
     {
+        id: "gracia",
+        label: "Nivel 4 — Período de gracia",
+        icon: "⏳",
+        summary: "Bloquea todo lo claramente no kosher y deja lo dudoso a criterio del usuario, con la tienda abierta. Al vencer el plazo se cierra solo.",
+        warning: "Mientras dure, el equipo queda más abierto: puede instalar apps y usar su lanzador normal. A cambio, LockSuite va anotando qué dominios usa de verdad — miralos en la pestaña Lista blanca antes de que cierre.",
+        tone: "grace",
+        // El único nivel que pide un dato más al aplicarlo. Ver GracePeriodManager.
+        needsDuration: true
+    },
+    {
         id: "base_minima",
         label: "Nivel 3 — Base mínima",
         icon: "🛠️",
@@ -1875,6 +1885,32 @@ const MASTER_PROFILES = [
     }
 ];
 
+// Mismos valores que `GracePeriodManager.DURACIONES` en el Kotlin. Se cierran a una
+// lista en vez de aceptar un número libre porque un valor mal tipeado no da error en
+// ningún lado: el equipo se cierra al instante o no se cierra nunca.
+const GRACE_DURACIONES = [
+    ["2 horas", 2 * 60 * 60 * 1000],
+    ["12 horas", 12 * 60 * 60 * 1000],
+    ["1 día", 24 * 60 * 60 * 1000],
+    ["2 días", 2 * 24 * 60 * 60 * 1000],
+    ["3 días", 3 * 24 * 60 * 60 * 1000],
+    ["1 semana", 7 * 24 * 60 * 60 * 1000],
+    ["2 semanas", 14 * 24 * 60 * 60 * 1000],
+    ["1 mes", 30 * 24 * 60 * 60 * 1000]
+];
+
+/** "2 d 4 h" / "3 h 20 min" / "8 min". Vacío si no queda nada. */
+function formatearRestante(ms) {
+    if (!ms || ms <= 0) return "";
+    const min = Math.floor(ms / 60000);
+    const dias = Math.floor(min / 1440);
+    const horas = Math.floor((min % 1440) / 60);
+    const mins = min % 60;
+    if (dias > 0) return `${dias} d ${horas} h`;
+    if (horas > 0) return `${horas} h ${mins} min`;
+    return `${mins} min`;
+}
+
 function masterProfileLabel(id) {
     const p = MASTER_PROFILES.find(x => x.id === id);
     return p ? p.label : "";
@@ -1883,11 +1919,93 @@ function masterProfileLabel(id) {
 function renderMasterProfiles() {
     const host = document.getElementById("master-profiles-list");
     if (!host) return;
+
+    // ── EL SELECTOR DE CELULAR (10/9/2026) ────────────────────────────────────
+    //
+    // Antes, tocar "Aplicar" sin un celular seleccionado abría un prompt() pidiendo que
+    // se PEGARA el ID del dispositivo. El dueño lo reportó así: "si pongo aplicar, ¿a qué
+    // usuario se lo pondrá?" — y tenía razón: pedirle a alguien que copie un ANDROID_ID
+    // es exactamente la fricción que estos perfiles venían a eliminar. Este desplegable
+    // lo reemplaza, y de paso deja escrito en el botón a quién se le va a aplicar, que es
+    // lo que evita el clic equivocado.
+    const picker = document.getElementById("master-profile-device");
+    if (picker) {
+        const previo = picker.value || selectedDeviceId || "";
+        const entradas = Object.entries(currentDevicesData || {});
+        picker.innerHTML = "";
+        if (entradas.length === 0) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "— no hay celulares dados de alta —";
+            picker.appendChild(opt);
+        } else {
+            const vacio = document.createElement("option");
+            vacio.value = "";
+            vacio.textContent = "— elegí un celular —";
+            picker.appendChild(vacio);
+            entradas
+                .map(([id, d]) => ({
+                    id,
+                    nombre: field(d, "deviceName", "") || field(d, "model", "") || id,
+                    perfil: field(d, "masterProfileId", "")
+                }))
+                .sort((a, b) => a.nombre.localeCompare(b.nombre))
+                .forEach(d => {
+                    const opt = document.createElement("option");
+                    opt.value = d.id;
+                    const sufijo = d.perfil ? ` — ${masterProfileLabel(d.perfil) || d.perfil}` : "";
+                    opt.textContent = d.nombre + sufijo;
+                    picker.appendChild(opt);
+                });
+        }
+        picker.value = (previo && currentDevicesData[previo]) ? previo : "";
+        if (!picker.dataset.wired) {
+            picker.dataset.wired = "1";
+            picker.addEventListener("change", renderMasterProfiles);
+        }
+    }
+
+    const targetId = picker ? picker.value : selectedDeviceId;
+    const dev = targetId ? currentDevicesData[targetId] : null;
+    const devName = dev ? (field(dev, "deviceName", "") || field(dev, "model", "") || targetId) : null;
+    const appliedId = dev ? field(dev, "masterProfileId", "") : "";
+    const graceActive = dev ? field(dev, "graceActive", false) === true : false;
+    const graceRestante = dev ? field(dev, "graceRemainingMs", 0) : 0;
+
     host.innerHTML = "";
 
-    const dev = selectedDeviceId ? currentDevicesData[selectedDeviceId] : null;
-    const devName = dev ? (dev.deviceName || dev.model || selectedDeviceId) : null;
-    const appliedId = dev ? (dev.masterProfileId || "") : "";
+    // Si el celular elegido está en período de gracia, se dice arriba de todo y con el
+    // tiempo que falta: es el dato que decide si hay que hacer algo o esperar.
+    const aviso = document.getElementById("master-profile-grace");
+    if (aviso) {
+        if (graceActive) {
+            const destino = masterProfileLabel(field(dev, "graceTargetProfile", "")) || "Nivel 1";
+            aviso.innerHTML =
+                `⏳ <strong>${devName}</strong> está en período de gracia: ` +
+                `faltan <strong>${formatearRestante(graceRestante) || "menos de un minuto"}</strong> ` +
+                `y después se aplica solo <strong>${destino}</strong>. ` +
+                `<button id="grace-cancel-btn" style="margin-left:8px; background:var(--navy-light); color:var(--text-light); border:none; padding:4px 10px; border-radius:6px; cursor:pointer; font-size:11px;">Cancelar el vencimiento</button>`;
+            aviso.style.display = "block";
+            const cancelBtn = document.getElementById("grace-cancel-btn");
+            if (cancelBtn) {
+                cancelBtn.addEventListener("click", () => {
+                    if (confirm(`Cancelar el vencimiento de ${devName}.\n\nEl equipo se QUEDA como está ahora (más abierto) y ya no se cierra solo. ¿Seguimos?`)) {
+                        runCommandOnDevice(targetId, "CANCEL_GRACE_PERIOD");
+                    }
+                });
+            }
+        } else {
+            const motivo = dev ? field(dev, "graceLastCloseReason", "") : "";
+            if (motivo) {
+                // "vencido (tiempo de uso…)" significa que cerró por el acumulador y no
+                // por el reloj: alguien movió la hora del equipo. Vale mostrarlo.
+                aviso.textContent = `⏳ Último período de gracia: ${motivo}.`;
+                aviso.style.display = "block";
+            } else {
+                aviso.style.display = "none";
+            }
+        }
+    }
 
     MASTER_PROFILES.forEach(profile => {
         const card = document.createElement("div");
@@ -1916,57 +2034,119 @@ function renderMasterProfiles() {
         summary.textContent = profile.summary;
 
         // El aviso NO va escondido en un tooltip ni en la documentación: es lo único
-        // que la persona lee seguro antes de tocar el botón, y en dos de los tres
+        // que la persona lee seguro antes de tocar el botón, y en tres de los cuatro
         // niveles dice algo que puede arruinar un alta si se ignora.
         const warn = document.createElement("p");
-        warn.style.cssText =
-            "margin:0; font-size:11px; line-height:1.5; padding:8px 10px; border-radius:8px;" +
-            (profile.tone === "loose"
-                ? "background: rgba(231,76,60,.12); color:#e79b93; border-left:3px solid #e74c3c;"
+        const fondo = profile.tone === "loose"
+            ? "background: rgba(231,76,60,.12); color:#e79b93; border-left:3px solid #e74c3c;"
+            : (profile.tone === "grace"
+                ? "background: rgba(52,152,219,.12); color:#8fc4e8; border-left:3px solid #3498db;"
                 : "background: rgba(241,196,15,.10); color:#e6c86a; border-left:3px solid #f1c40f;");
+        warn.style.cssText =
+            "margin:0; font-size:11px; line-height:1.5; padding:8px 10px; border-radius:8px;" + fondo;
         warn.textContent = (profile.tone === "loose" ? "⚠️ " : "ℹ️ ") + profile.warning;
+
+        // Solo el Nivel 4 pide datos extra: cuánto dura y con qué cierra.
+        let duracionSel = null;
+        let destinoSel = null;
+        if (profile.needsDuration) {
+            const fila = document.createElement("div");
+            fila.style.cssText = "display:flex; flex-direction:column; gap:6px; font-size:11px; color: var(--text-gray);";
+
+            const l1 = document.createElement("label");
+            l1.textContent = "Se cierra dentro de:";
+            duracionSel = document.createElement("select");
+            duracionSel.style.cssText = "background: var(--navy-dark); border:1px solid var(--navy-light); color: var(--text-light); padding:6px 8px; border-radius:6px; font-size:12px;";
+            GRACE_DURACIONES.forEach(([etiqueta, ms]) => {
+                const o = document.createElement("option");
+                o.value = String(ms);
+                o.textContent = etiqueta;
+                if (etiqueta === "2 días") o.selected = true;
+                duracionSel.appendChild(o);
+            });
+
+            const l2 = document.createElement("label");
+            l2.textContent = "Y al cerrar aplica:";
+            destinoSel = document.createElement("select");
+            destinoSel.style.cssText = duracionSel.style.cssText;
+            MASTER_PROFILES.filter(p => !p.needsDuration).forEach(p => {
+                const o = document.createElement("option");
+                o.value = p.id;
+                o.textContent = p.label;
+                if (p.id === "kosher_estricto") o.selected = true;
+                destinoSel.appendChild(o);
+            });
+
+            fila.appendChild(l1); fila.appendChild(duracionSel);
+            fila.appendChild(l2); fila.appendChild(destinoSel);
+            card.appendChild(head);
+            card.appendChild(summary);
+            card.appendChild(warn);
+            card.appendChild(fila);
+        } else {
+            card.appendChild(head);
+            card.appendChild(summary);
+            card.appendChild(warn);
+        }
 
         const btn = document.createElement("button");
         btn.className = "action-btn";
         btn.style.cssText =
             "margin-top:auto; background: var(--success-green); color:#fff; font-weight:bold;" +
             "font-size:12px; padding:10px 12px; border:none; border-radius:8px; cursor:pointer; width:100%;";
-        btn.textContent = devName ? `⚡ Aplicar a ${devName}` : "⚡ Aplicar…";
-        btn.addEventListener("click", () => applyMasterProfile(profile));
+        // Sin celular elegido el botón queda DESHABILITADO y lo dice, en vez de abrir un
+        // prompt pidiendo un ID. Un botón que se puede tocar y después te pide datos que
+        // no tenés es peor que uno que dice qué falta.
+        if (!targetId) {
+            btn.textContent = "Elegí un celular arriba";
+            btn.disabled = true;
+            btn.style.background = "var(--navy-light)";
+            btn.style.color = "var(--text-gray)";
+            btn.style.cursor = "not-allowed";
+        } else {
+            btn.textContent = `⚡ Aplicar a ${devName}`;
+            btn.addEventListener("click", () => applyMasterProfile(profile, targetId, {
+                graceMs: duracionSel ? Number(duracionSel.value) : 0,
+                graceTarget: destinoSel ? destinoSel.value : "kosher_estricto"
+            }));
+        }
 
-        card.appendChild(head);
-        card.appendChild(summary);
-        card.appendChild(warn);
         card.appendChild(btn);
         host.appendChild(card);
     });
 }
 
-function applyMasterProfile(profile) {
+function applyMasterProfile(profile, targetId, extras) {
     const status = document.getElementById("master-profile-status");
-    let targetId = selectedDeviceId;
-    if (!targetId) {
-        targetId = prompt("¿A qué celular querés aplicarle este perfil? Pegá su ID, o elegí uno en la pestaña 'Celulares' para no tener que escribirlo:", "");
-        if (!targetId || !targetId.trim()) return;
-        targetId = targetId.trim();
-    }
+    if (!targetId) return;
     const dev = currentDevicesData[targetId];
-    const devName = dev ? (dev.deviceName || dev.model || targetId) : targetId;
+    const devName = dev ? (field(dev, "deviceName", "") || field(dev, "model", "") || targetId) : targetId;
 
     // Confirmación con el aviso adentro. Aplicar un perfil toca ~50 políticas de una;
     // que la persona lo confirme leyendo lo que puede salir mal es más barato que
     // deshacerlo después, y en el Nivel 1 lo que puede salir mal es que el equipo
     // quede sin poder dar de alta la cuenta de Google.
+    let detalle = "";
+    if (profile.needsDuration) {
+        const etiqueta = (GRACE_DURACIONES.find(d => d[1] === extras.graceMs) || ["?"])[0];
+        const destino = masterProfileLabel(extras.graceTarget) || extras.graceTarget;
+        detalle = `\nDura ${etiqueta}, y al vencer se aplica solo "${destino}".\n`;
+    }
     const ok = confirm(
         `Aplicar "${profile.label}" a ${devName}.\n\n` +
-        `${profile.summary}\n\n` +
+        `${profile.summary}\n` + detalle + `\n` +
         `⚠️ ${profile.warning}\n\n` +
         `¿Seguimos?`
     );
     if (!ok) return;
 
     if (status) status.textContent = `Enviando "${profile.label}" a ${devName}…`;
-    runCommandOnDevice(targetId, "APPLY_MASTER_PROFILE", null, null, null, { level: profile.id });
+    const params = { level: profile.id };
+    if (profile.needsDuration) {
+        params.graceMs = extras.graceMs;
+        params.graceTarget = extras.graceTarget;
+    }
+    runCommandOnDevice(targetId, "APPLY_MASTER_PROFILE", null, null, null, params);
 }
 
 function loadPresetsList() {
@@ -3039,8 +3219,60 @@ if (saveGlobalAllowedPackagesBtn) {
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECKSUM DE LOS APK DE LA TIENDA (10/9/2026) — cierra B.6. Ver app/util/ApkChecksum.kt
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// El celular instala las apps de la tienda EN SILENCIO y con privilegio de Device Owner.
+// `ApkSignatureVerifier` (B.37) no puede protegerlas porque compara contra el paquete YA
+// instalado, y estas son primeras instalaciones. Sin el sha256, cualquiera que pudiera
+// cambiar el contenido servido en `apkUrl` conseguiría ejecución silenciosa con
+// privilegios en toda la flota.
+//
+// El hash se calcula ACÁ, en el navegador, al cargar la app. No se le pide al
+// administrador que lo pegue a mano: un paso manual en un control de seguridad es un
+// paso que se va a saltear, y la protección queda decorativa.
+
+/** sha256 en hexadecimal minúscula de un ArrayBuffer, con `crypto.subtle`. */
+async function sha256Hex(buffer) {
+    const hash = await crypto.subtle.digest("SHA-256", buffer);
+    return Array.from(new Uint8Array(hash))
+        .map(b => b.toString(16).padStart(2, "0"))
+        .join("");
+}
+
+/**
+ * Descarga el APK y devuelve su sha256.
+ *
+ * Puede fallar por CORS si el APK está hospedado fuera de Firebase (GitHub Releases, por
+ * ejemplo, no manda `Access-Control-Allow-Origin`). En ese caso NO se inventa nada ni se
+ * guarda la entrada sin hash: se le dice al administrador cómo calcularlo en su PC. Que
+ * el paso manual exista solo para ese caso es distinto de pedirlo siempre.
+ */
+async function calcularSha256DeUrl(url) {
+    const resp = await fetch(url, { cache: "no-store" });
+    if (!resp.ok) throw new Error(`el servidor respondió HTTP ${resp.status}`);
+    return await sha256Hex(await resp.arrayBuffer());
+}
+
+function explicarFalloDeHash(url, err) {
+    return (
+        "No se pudo descargar el APK desde el panel para calcular su huella.\n\n" +
+        `Motivo: ${err.message}\n\n` +
+        "Suele ser CORS: el navegador no puede leer archivos de otro dominio (GitHub " +
+        "Releases, Drive, etc.) desde esta página. Dos salidas:\n\n" +
+        "  1. Subir el APK a Firebase Hosting (admin-backend/public/) y usar esa URL. Es " +
+        "lo recomendado: además deja de depender de un tercero.\n" +
+        "  2. Calcular la huella en tu PC y pegarla:\n" +
+        "       PowerShell:  Get-FileHash .\\app.apk -Algorithm SHA256\n" +
+        "       CMD:         certutil -hashfile app.apk SHA256\n\n" +
+        "Sin la huella, el celular NO va a instalar esa app: no tiene forma de saber que " +
+        "el archivo que baja es el que subiste."
+    );
+}
+
 if (addStoreAppBtn) {
-    addStoreAppBtn.addEventListener("click", () => {
+    addStoreAppBtn.addEventListener("click", async () => {
         const label = storeAppLabel.value.trim();
         const pkg = storeAppPackage.value.trim();
         const url = storeAppUrl.value.trim();
@@ -3053,21 +3285,72 @@ if (addStoreAppBtn) {
             return;
         }
         const key = pkg.replace(/\./g, "_");
+        const textoOriginal = addStoreAppBtn.textContent;
         addStoreAppBtn.disabled = true;
-        database.ref("storeApps/" + key).set({
-            label: label,
-            packageName: pkg,
-            apkUrl: url
-        }).then(() => {
+        try {
+            addStoreAppBtn.textContent = "⏳ Descargando para verificar…";
+            let sha256;
+            try {
+                sha256 = await calcularSha256DeUrl(url);
+            } catch (err) {
+                const manual = prompt(
+                    explicarFalloDeHash(url, err) + "\n\nSi ya la calculaste, pegala acá:",
+                    ""
+                );
+                if (!manual || !/^[0-9a-fA-F]{64}$/.test(manual.trim())) {
+                    alert("No se agregó la app: sin una huella sha256 válida de 64 caracteres, el celular no la instalaría.");
+                    return;
+                }
+                sha256 = manual.trim().toLowerCase();
+            }
+            addStoreAppBtn.textContent = "⏳ Guardando…";
+            await database.ref("storeApps/" + key).set({
+                label: label,
+                packageName: pkg,
+                apkUrl: url,
+                sha256: sha256,
+                sha256At: Date.now()
+            });
             storeAppLabel.value = "";
             storeAppPackage.value = "";
             storeAppUrl.value = "";
-        }).catch(err => {
+        } catch (err) {
             alert("Error al agregar: " + err.message);
-        }).finally(() => {
+        } finally {
             addStoreAppBtn.disabled = false;
-        });
+            addStoreAppBtn.textContent = textoOriginal;
+        }
     });
+}
+
+/**
+ * Recalcula la huella de una entrada existente. Es lo que arregla en un clic las apps
+ * cargadas antes del 10/9, que no tienen `sha256` y por eso el celular no instala.
+ *
+ * ⚠️ Es también lo que hay que correr **cada vez que se reemplaza el APK en esa URL**: el
+ * archivo cambia y la huella publicada deja de coincidir, y ahí el celular hace lo
+ * correcto —no instalar— pero el administrador lo ve como "dejó de andar". El botón dice
+ * la fecha del último cálculo justamente para que eso se pueda razonar.
+ */
+async function recalcularShaTienda(key, app, boton) {
+    const textoOriginal = boton.textContent;
+    boton.disabled = true;
+    boton.textContent = "⏳ Verificando…";
+    try {
+        const sha256 = await calcularSha256DeUrl(app.apkUrl);
+        await database.ref("storeApps/" + key).update({ sha256: sha256, sha256At: Date.now() });
+    } catch (err) {
+        const manual = prompt(explicarFalloDeHash(app.apkUrl, err) + "\n\nSi ya la calculaste, pegala acá:", "");
+        if (manual && /^[0-9a-fA-F]{64}$/.test(manual.trim())) {
+            await database.ref("storeApps/" + key)
+                .update({ sha256: manual.trim().toLowerCase(), sha256At: Date.now() });
+        } else if (manual !== null) {
+            alert("Esa huella no tiene forma de sha256 (64 caracteres hexadecimales). No se guardó.");
+        }
+    } finally {
+        boton.disabled = false;
+        boton.textContent = textoOriginal;
+    }
 }
 
 function renderStoreApps(storeApps) {
@@ -3085,14 +3368,36 @@ function renderStoreApps(storeApps) {
         card.style.display = "flex";
         card.style.flexDirection = "column";
         card.style.justifyContent = "space-between";
+        // 10/9/2026 (B.6) — el estado del checksum es lo primero que hay que ver de una
+        // entrada, porque sin él el celular NO la instala. Una entrada sin sha256 se
+        // muestra en rojo y con el botón que lo arregla: si solo se mostrara el error en
+        // el celular, el administrador tendría que ir a buscarlo ahí.
+        const tieneSha = typeof app.sha256 === "string" && /^[0-9a-f]{64}$/i.test(app.sha256);
+        const shaFecha = app.sha256At ? new Date(app.sha256At).toLocaleDateString() : null;
+        const shaHtml = tieneSha
+            ? `<p style="font-size:11px; color:var(--success-green); margin:6px 0 0 0;" title="${app.sha256}">
+                 ✓ Verificable${shaFecha ? ` — huella calculada el ${shaFecha}` : ""}
+               </p>`
+            : `<p style="font-size:11px; color:#e79b93; margin:6px 0 0 0;">
+                 ⚠ Sin huella sha256: <strong>los celulares no la van a instalar.</strong>
+               </p>`;
         card.innerHTML = `
             <div>
                 <h3 style="margin-top:0; margin-bottom:8px;">${app.label}</h3>
                 <p style="font-size:12px; color:var(--text-gray); margin: 4px 0;"><strong>Paquete:</strong> ${app.packageName}</p>
                 <p style="font-size:11px; color:var(--accent); word-break:break-all; margin: 4px 0;"><strong>URL:</strong> ${app.apkUrl}</p>
+                ${shaHtml}
             </div>
-            <button class="action-btn delete-btn" style="background:var(--alert-red); margin-top:12px; align-self:flex-start; font-size:12px; padding:6px 12px; color:white; border-radius:6px; font-weight:bold; border:none; cursor:pointer;">Eliminar</button>
+            <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+              <button class="action-btn sha-btn" style="background:${tieneSha ? "var(--navy-light)" : "var(--accent)"}; color:${tieneSha ? "var(--text-light)" : "var(--navy-dark)"}; font-size:12px; padding:6px 12px; border-radius:6px; font-weight:bold; border:none; cursor:pointer;">
+                ${tieneSha ? "↻ Recalcular huella" : "🔒 Calcular huella"}
+              </button>
+              <button class="action-btn delete-btn" style="background:var(--alert-red); font-size:12px; padding:6px 12px; color:white; border-radius:6px; font-weight:bold; border:none; cursor:pointer;">Eliminar</button>
+            </div>
         `;
+        card.querySelector(".sha-btn").addEventListener("click", ev => {
+            recalcularShaTienda(key, app, ev.currentTarget);
+        });
         card.querySelector(".delete-btn").addEventListener("click", () => {
             if (confirm(`¿Seguro que querés quitar "${app.label}" de la tienda?`)) {
                 database.ref("storeApps/" + key).remove();

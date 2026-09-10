@@ -65,6 +65,17 @@ class BootReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             android.util.Log.e("BootReceiver", "Error re-aplicando restricciones: ${e.message}")
         }
+
+        // Período de gracia: cerrar acá si venció mientras el equipo estaba apagado.
+        // Va DESPUÉS de reaplicar restricciones, no antes: si cerrara primero, aplicaría
+        // el perfil de cierre y `reapplyAllRestrictions()` lo pisaría a continuación con
+        // las preferencias viejas. El orden es el que hace que el cierre sobreviva al
+        // arranque. Ver mdm/GracePeriodManager.kt.
+        try {
+            com.ejemplo.locksuite.mdm.GracePeriodManager.checkAndHarden(context)
+        } catch (e: Exception) {
+            android.util.Log.e("BootReceiver", "Error chequeando el período de gracia: ${e.message}")
+        }
         
         // Sincronizar el estado del dispositivo con Firebase
         try {

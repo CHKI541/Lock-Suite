@@ -182,6 +182,16 @@ class WatchdogForegroundService : Service() {
                 e.printStackTrace()
             }
 
+            // Período de gracia: acá se chequea para que el cierre se sienta puntual
+            // (hasta 20 s de retraso en vez de hasta 15 min). Quien lo GARANTIZA es el
+            // WatchdogWorker, que sobrevive a que muera el proceso; esto es comodidad.
+            // Sin período activo son dos lecturas de preferencias. Ver GracePeriodManager.
+            try {
+                com.ejemplo.locksuite.mdm.GracePeriodManager.checkAndHarden(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             // ── BATERÍA (2/9/2026) ────────────────────────────────────────────────────
             // Los dos bloques de abajo hacían un startForegroundService() en CADA ciclo de
             // 20 s: 4.320 arranques por día de la VPN y otros tantos de la marca de agua,

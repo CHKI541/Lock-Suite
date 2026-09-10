@@ -56,6 +56,9 @@ const ALLOWED_COMMANDS = new Set([
   // Los dos EXIGEN PIN: cambian politicas del equipo, asi que no van en la
   // excepcion de UPDATE_* de mas abajo.
   "APPLY_MASTER_PROFILE", "APPLY_PROFILE",
+  // Cancelar el periodo de gracia (Nivel 4) sin aplicar el perfil de cierre. Ver
+  // app/mdm/GracePeriodManager.kt. Exige PIN como el resto.
+  "CANCEL_GRACE_PERIOD",
   "BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY",
   "BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN",
   "BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS",
@@ -265,7 +268,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
 
     const {
       deviceId, command, packages, devicePin, rememberDevice, newPin,
-      enabled, presetJson, profileId, level
+      enabled, presetJson, profileId, level, graceMs, graceTarget
     } = req.body || {};
 
     if (!deviceId || typeof deviceId !== "string") {
@@ -381,12 +384,40 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       // el celular no reconozca se descarta alla sin decir nada. Si se agrega un
       // nivel en EnrollmentProfiles.kt hay que agregarlo aca tambien, y
       // tools/check_profile_sync.py lo verifica.
-      const LEVELS = new Set(["kosher_estricto", "trabajo", "base_minima"]);
+      const LEVELS = new Set(["kosher_estricto", "trabajo", "base_minima", "gracia"]);
       if (typeof level !== "string" || !LEVELS.has(level)) {
         res.status(400).json({ error: `Nivel de perfil desconocido: ${level}` });
         return;
       }
       payload.level = level;
+
+      // El perfil de gracia (Nivel 4) EXIGE una duracion. Sin ella el celular lo
+      // rechaza, y esta bien que asi sea: un perfil de gracia sin vencimiento es un
+      // equipo que queda mas abierto de lo normal PARA SIEMPRE — literal el riesgo
+      // que B.11 dejo anotado para la suspension. Se valida aca tambien para que el
+      // panel reciba la causa en vez de un ack de rechazo diez segundos despues.
+      if (level === "gracia") {
+        const ms = Number(graceMs);
+        const UN_MINUTO = 60 * 1000;
+        const NOVENTA_DIAS = 90 * 24 * 60 * 60 * 1000;
+        if (!Number.isFinite(ms) || ms < UN_MINUTO || ms > NOVENTA_DIAS) {
+          res.status(400).json({
+            error: "El periodo de gracia necesita una duracion entre 1 minuto y 90 dias.",
+          });
+          return;
+        }
+        // El perfil de cierre no puede ser la gracia misma: se reabriria sola para
+        // siempre. Es el mismo tipo de rulo que GracePeriodManager evita al limpiar
+        // el estado ANTES de aplicar el perfil destino.
+        const CIERRES = new Set(["kosher_estricto", "trabajo", "base_minima"]);
+        const destino = typeof graceTarget === "string" ? graceTarget : "kosher_estricto";
+        if (!CIERRES.has(destino)) {
+          res.status(400).json({ error: `Perfil de cierre invalido: ${destino}` });
+          return;
+        }
+        payload.graceMs = String(Math.round(ms));
+        payload.graceTarget = destino;
+      }
     } else if (command === "APPLY_PROFILE") {
       // Solo el id: el perfil se lee de globalSettings/profiles/<id> desde el
       // celular. El formato se valida para no armar una ruta de Firebase invalida

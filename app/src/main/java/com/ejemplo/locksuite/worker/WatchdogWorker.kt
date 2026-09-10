@@ -64,6 +64,22 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
         }
         try {
             com.ejemplo.locksuite.util.BootGate.healStuckProxy(applicationContext, "WatchdogWorker 15 min")
+
+            // ── PERÍODO DE GRACIA: EL CIERRE LO GARANTIZA ESTE WORKER (10/9/2026) ──
+            //
+            // Va acá y no solo en el ciclo de 20 s del servicio de primer plano, porque
+            // este Worker es **lo único del proyecto que sobrevive a que muera el
+            // proceso**. Un equipo cuya gracia venza con LockSuite caído tiene que
+            // cerrarse igual: si no, queda abierto para siempre, que es literal el riesgo
+            // que B.11 dejó anotado para la suspensión ("no hay expiración automática").
+            //
+            // Cuando no hay período activo son dos lecturas de preferencias: no mueve la
+            // aguja del costo de este ciclo.
+            try {
+                com.ejemplo.locksuite.mdm.GracePeriodManager.checkAndHarden(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }

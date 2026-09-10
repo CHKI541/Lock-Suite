@@ -1709,10 +1709,30 @@ class PolicyManager(private val context: Context) {
      *
      * @return `false` si el id no existe o si el perfil no se pudo aplicar.
      */
-    fun applyMasterProfile(profileId: String?): Boolean {
+    /**
+     * @param graceDurationMs solo para el perfil de gracia (`LEVEL_GRACE`): cuánto dura
+     *   el período antes de que el equipo se cierre solo. Se ignora en los demás.
+     * @param graceTarget qué perfil se aplica cuando vence la gracia.
+     */
+    fun applyMasterProfile(
+        profileId: String?,
+        graceDurationMs: Long = 0L,
+        graceTarget: String = EnrollmentProfiles.LEVEL_STRICT
+    ): Boolean {
         val data = EnrollmentProfiles.buildData(profileId) ?: run {
             android.util.Log.w("PolicyManager", "Perfil maestro desconocido: $profileId")
             return false
+        }
+        // Aplicar CUALQUIER otro perfil cancela una gracia en curso, y hay que hacerlo
+        // ANTES de aplicar. Si no, el equipo quedaría con las políticas del perfil nuevo y
+        // un temporizador vivo del anterior, que a los dos días le aplicaría encima el
+        // perfil de cierre sin que nadie lo pidiera. Es la misma clase de estado
+        // fantasma que B.15 punto 3 ("se recordaba 'ya lo apliqué' en una variable") y
+        // que costó el vaivén de "se suspenden y vuelven a aparecer".
+        if (profileId != EnrollmentProfiles.LEVEL_GRACE &&
+            GracePeriodManager.isActive(context)
+        ) {
+            GracePeriodManager.cancel(context, "reemplazado por el perfil '$profileId'")
         }
         return try {
             val rootObj = org.json.JSONObject()
@@ -1730,6 +1750,14 @@ class PolicyManager(private val context: Context) {
                     .putString("master_profile_id", profileId)
                     .putLong("master_profile_at", System.currentTimeMillis())
                     .apply()
+
+                // El temporizador arranca DESPUÉS de aplicar, no antes: si aplicar
+                // fallara, quedaría un equipo sin las políticas de la gracia pero con la
+                // cuenta regresiva corriendo, y a los dos días se "cerraría" algo que
+                // nunca se abrió.
+                if (profileId == EnrollmentProfiles.LEVEL_GRACE && graceDurationMs > 0L) {
+                    GracePeriodManager.start(context, graceDurationMs, graceTarget)
+                }
             }
             applied
         } catch (e: Exception) {

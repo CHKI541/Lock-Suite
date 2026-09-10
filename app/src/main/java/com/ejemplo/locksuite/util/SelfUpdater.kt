@@ -37,6 +37,14 @@ object SelfUpdater {
                 val json = JSONObject(responseText)
                 val serverVersionCode = json.optInt("versionCode", 0)
                 val apkUrl = json.optString("url", "")
+                // 10/9/2026 — la mitad de B.6 que corresponde al OTA. Opcional a propósito:
+                // acá Android ya exige la misma firma para reemplazar el paquete, y el OTA
+                // es la vía de rescate de un equipo — un `version.json` viejo sin hash que
+                // impidiera actualizar dejaría equipos sin poder recibir el arreglo de lo
+                // que sea que esté roto. Mismo criterio que el techo de 120 s del arranque
+                // protegido en B.16: "es preferible unos minutos sin filtrar a un ladrillo".
+                // En la Tienda, en cambio, es OBLIGATORIO. Ver util/ApkChecksum.kt.
+                val expectedSha256 = json.optString("sha256", "")
 
                 val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
                 val currentVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -91,6 +99,20 @@ object SelfUpdater {
                             }
                         }
                     }
+                }
+
+                // Igual que en la Tienda: contra el archivo ya en disco y ANTES de levantar
+                // las restricciones de instalación. Acá la ausencia de hash NO bloquea
+                // (ver arriba); lo que bloquea es un hash publicado que no coincide, que
+                // es la única señal inequívoca de que el archivo no es el que se subió.
+                com.ejemplo.locksuite.util.ApkChecksum.blockSelfUpdate(tempFile, expectedSha256)?.let { error ->
+                    tempFile.delete()
+                    if (showToasts) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    return@withContext error
                 }
 
                 if (showToasts) {
@@ -162,7 +184,17 @@ object SelfUpdater {
         }
     }
 
-    suspend fun downloadAndInstallApk(context: Context, apkUrl: String, packageName: String, label: String, onProgress: ((Int) -> Unit)? = null): String? {
+    /**
+     * Descarga e instala un APK de la **Tienda administrada**, en silencio, como Device Owner.
+     *
+     * @param sha256 huella publicada en la entrada de `storeApps`. **Obligatoria**: sin
+     *   ella no se instala. Ver `util/ApkChecksum.kt` para el porqué completo — en dos
+     *   líneas: esta ruta instala paquetes que NO están instalados, así que
+     *   `ApkSignatureVerifier` (B.37) no tiene contra qué comparar, y sin el hash
+     *   cualquiera que pueda cambiar el contenido servido en `apkUrl` consigue ejecución
+     *   silenciosa con privilegios en toda la flota.
+     */
+    suspend fun downloadAndInstallApk(context: Context, apkUrl: String, packageName: String, label: String, sha256: String? = null, onProgress: ((Int) -> Unit)? = null): String? {
         return withContext(Dispatchers.IO) {
             var temporaryInstallAccessPrepared = false
             var installCommitSubmitted = false
@@ -201,6 +233,26 @@ object SelfUpdater {
                             }
                         }
                     }
+                }
+
+                // ── B.6, POR FIN CERRADO PARA LA TIENDA (10/9/2026) ──
+                //
+                // Va ACÁ y no más abajo, y el orden importa: se verifica contra el archivo
+                // YA EN DISCO y ANTES de levantar las restricciones de instalación y de
+                // abrir la sesión de PackageInstaller. Si se verificara después, un APK que
+                // no es el publicado habría llegado igual a tener el equipo con
+                // DISALLOW_INSTALL_APPS levantado durante la comprobación.
+                //
+                // Falla CERRADO: sin sha256 publicado, no se instala. No hay interruptor
+                // para saltearlo, a propósito — ver el comentario de ApkChecksum y B.31
+                // (A Bloq tiene este mismo código con un `return true // TEMPORARILY
+                // BYPASS` adentro: una verificación que parece existir y no existe).
+                com.ejemplo.locksuite.util.ApkChecksum.blockStoreInstall(tempFile, sha256, label)?.let { error ->
+                    tempFile.delete()
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                    }
+                    return@withContext error
                 }
 
                 withContext(Dispatchers.Main) {

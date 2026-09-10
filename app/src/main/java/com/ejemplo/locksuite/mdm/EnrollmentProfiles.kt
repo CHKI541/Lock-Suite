@@ -60,6 +60,13 @@ object EnrollmentProfiles {
     const val LEVEL_BASE = "base_minima"
 
     /**
+     * Período de gracia con cierre automático (10/9/2026). Pedido del dueño: bloquear lo
+     * claramente no kosher, dejar lo dudoso a criterio del usuario por un tiempo, con la
+     * tienda abierta, y que después se cierre solo. Ver `mdm/GracePeriodManager.kt`.
+     */
+    const val LEVEL_GRACE = "gracia"
+
+    /**
      * @param id            Clave estable. Viaja por FCM y se guarda en preferencias.
      * @param label         Nombre visible en la app y en el panel.
      * @param summary       Una línea: qué deja hacer y qué no.
@@ -233,6 +240,83 @@ object EnrollmentProfiles {
         "keyguardDisabled" to false
     )
 
+    // ── NIVEL 4 — PERÍODO DE GRACIA (auto-personalización) ────────────────────
+    //
+    // La idea, en una línea: **lo claramente no kosher se cierra ya; lo dudoso se deja
+    // abierto un tiempo y se observa.**
+    //
+    // Lo que hace distinto a este perfil de los otros tres no es lo que bloquea, sino lo
+    // que DELIBERADAMENTE deja abierto:
+    //
+    //  · `DISALLOW_INSTALL_APPS` en false → la tienda queda abierta, que es lo que pidió
+    //    el dueño. Es la única de las cuatro entradas de alta donde eso pasa.
+    //  · `kosherLauncherEnabled` en false → el usuario usa su lanzador normal y organiza
+    //    el equipo como quiere. Es "lo que no es tan claro queda a decisión del usuario".
+    //  · `DISALLOW_APPS_CONTROL` en false → puede desinstalar y reordenar sus apps.
+    //
+    // Y lo que NO se negocia ni siquiera durante la gracia:
+    //
+    //  · El piso anti-manipulación entero (no se puede formatear, ni modo seguro, ni
+    //    desinstalar LockSuite). Un período de gracia no es un equipo sin MDM.
+    //  · `DISALLOW_CONFIG_DATE_TIME` → **es la defensa del propio vencimiento.** Sin esto,
+    //    atrasar el reloj alcanza para que el cierre no llegue nunca. Es la única
+    //    restricción de este perfil que está por un motivo mecánico y no de contenido, y
+    //    por eso está anotada acá: si alguien la saca "porque molesta", rompe la función
+    //    entera y no va a ser evidente.
+    //  · Todos los filtros de contenido claros: apps populares no kosher, estados y
+    //    canales de WhatsApp, ofertas de Mercado Pago, historial de la cuenta de Google,
+    //    GIFs, anuncios, portal cautivo, selector de fotos de contacto.
+    private val GRACE_RESTRICTIONS: Map<String, Boolean> = ANTI_TAMPER + mapOf(
+        UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES to true,
+        UserManager.DISALLOW_CONFIG_PRIVATE_DNS to true,
+        UserManager.DISALLOW_CONFIG_LOCALE to true,
+        // La que sostiene el vencimiento. Ver el comentario de arriba.
+        UserManager.DISALLOW_CONFIG_DATE_TIME to true,
+        UserManager.DISALLOW_CONFIG_TETHERING to true,
+        // Explícitamente abiertas durante la gracia:
+        UserManager.DISALLOW_INSTALL_APPS to false,
+        UserManager.DISALLOW_APPS_CONTROL to false,
+        UserManager.DISALLOW_MODIFY_ACCOUNTS to false,
+        UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA to false
+    )
+
+    private val GRACE_SWITCHES: Map<String, Boolean> = mapOf(
+        // Lo claramente no kosher: cerrado desde el minuto cero.
+        "adBlockingEnabled" to true,
+        "gifsBlocked" to true,
+        "whatsappBlockStatus" to true,
+        "whatsappBlockChannels" to true,
+        "mercadoPagoBlockOffersAccessibility" to true,
+        "mercadoPagoBlockOffersVpn" to true,
+        "blockMlInMp" to true,
+        "blockPopularNonKosher" to true,
+        "googleAccountWebBlocked" to true,
+        "googleAccountBlockStrict" to false,
+        "captivePortalGuard" to true,
+        "captivePortalCoverImages" to true,
+        "contactPhotoPickerBlocked" to true,
+        "flashingBlocked" to true,
+        "accessibilityProtection" to true,
+        "accBounceSettings" to true,
+        "accNag" to true,
+        "bootGateEnabled" to true,
+        // Lo dudoso: abierto, a criterio del usuario, hasta que venza.
+        "kosherLauncherEnabled" to false,
+        "hideSuspendedApps" to false,
+        "bootGateWaitAccessibility" to false,
+        // Nunca, en ningún perfil de alta:
+        "accSuspendAll" to false,
+        "kioskLockTask" to false,
+        "nokiaKeypadMode" to false,
+        "nokiaTouchEnabled" to true,
+        "imageBlockStrictScroll" to false,
+        "internetBlocked" to false,
+        "cameraDisabled" to false,
+        "screenCaptureBlocked" to false,
+        "statusBarDisabled" to false,
+        "keyguardDisabled" to false
+    )
+
     private val BASE_RESTRICTIONS: Map<String, Boolean> = ANTI_TAMPER
 
     private val BASE_SWITCHES: Map<String, Boolean> = mapOf(
@@ -281,6 +365,23 @@ object EnrollmentProfiles {
                 "idioma definitivo antes de aplicarlo.",
             restrictions = WORK_RESTRICTIONS,
             switches = WORK_SWITCHES
+        ),
+        MasterProfile(
+            id = LEVEL_GRACE,
+            label = "Nivel 4 — Período de gracia",
+            summary = "Bloquea todo lo claramente no kosher y deja lo dudoso a criterio " +
+                "del usuario, con la tienda abierta. Al vencer el plazo se cierra solo " +
+                "aplicando el Nivel 1.",
+            // Los dos avisos que importan: que el equipo queda MÁS abierto de lo normal
+            // mientras dure, y qué se gana a cambio — porque si el administrador no sabe
+            // que la auditoría se está llenando, no la va a mirar y se pierde la mitad del
+            // valor de esperar dos días.
+            warning = "Mientras dure, el equipo queda más abierto: puede instalar apps y " +
+                "usar su lanzador normal. A cambio, LockSuite va anotando qué dominios usa " +
+                "de verdad — miralos en la pestaña Lista blanca antes de cerrar. " +
+                "El plazo se elige al aplicarlo.",
+            restrictions = GRACE_RESTRICTIONS,
+            switches = GRACE_SWITCHES
         ),
         MasterProfile(
             id = LEVEL_BASE,

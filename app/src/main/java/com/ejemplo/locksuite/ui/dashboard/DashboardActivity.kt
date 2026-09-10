@@ -1764,6 +1764,20 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
     val context = LocalContext.current
     var pendingProfile by remember { mutableStateOf<EnrollmentProfiles.MasterProfile?>(null) }
     var appliedId by remember { mutableStateOf(policyManager.getAppliedMasterProfileId()) }
+    // Solo lo usa el Nivel 4. Índice dentro de GracePeriodManager.DURACIONES; arranca en
+    // "2 días", que es el ejemplo que dio el dueño al pedirlo.
+    var graceIdx by remember {
+        mutableIntStateOf(
+            com.ejemplo.locksuite.mdm.GracePeriodManager.DURACIONES
+                .indexOfFirst { it.first == "2 días" }.coerceAtLeast(0)
+        )
+    }
+    var graceActive by remember {
+        mutableStateOf(com.ejemplo.locksuite.mdm.GracePeriodManager.isActive(context))
+    }
+    val graceRestante = remember(graceActive, appliedId) {
+        com.ejemplo.locksuite.mdm.GracePeriodManager.remainingMs(context)
+    }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
@@ -1778,11 +1792,35 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
                 fontSize = 16.sp
             )
             Text(
-                "Tres configuraciones listas. Un toque deja el celular configurado entero, " +
+                "Cuatro configuraciones listas. Un toque deja el celular configurado entero, " +
                     "en vez de ir interruptor por interruptor. Después se puede ajustar lo que haga falta.",
                 color = Color.White.copy(alpha = 0.7f),
                 fontSize = 12.sp
             )
+
+            // Si hay un período de gracia corriendo, se dice arriba de todo y con el
+            // tiempo que falta. Es el dato que decide si hay algo que hacer o hay que
+            // esperar, y sin él el equipo "se cierra solo" sin que nadie sepa cuándo.
+            if (graceActive) {
+                val restante = com.ejemplo.locksuite.mdm.GracePeriodManager.DURACIONES.let {
+                    val min = (graceRestante / 60000L).toInt()
+                    when {
+                        min >= 1440 -> "${min / 1440} d ${(min % 1440) / 60} h"
+                        min >= 60 -> "${min / 60} h ${min % 60} min"
+                        else -> "$min min"
+                    }
+                }
+                Text(
+                    "⏳ Período de gracia activo: faltan $restante y el equipo se cierra solo.",
+                    color = Color(0xFF8FC4E8),
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF3498DB).copy(alpha = 0.12f))
+                        .padding(10.dp)
+                )
+            }
 
             EnrollmentProfiles.ALL.forEach { profile ->
                 val isApplied = profile.id == appliedId
@@ -1814,6 +1852,30 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
                         color = Color.White.copy(alpha = 0.75f),
                         fontSize = 12.sp
                     )
+                    // El Nivel 4 es el único que pide un dato más: cuánto dura. Se elige
+                    // de una lista cerrada y no con un campo libre, porque un número mal
+                    // puesto no da error en ningún lado — el equipo se cerraría al
+                    // instante o no se cerraría nunca.
+                    if (profile.id == EnrollmentProfiles.LEVEL_GRACE) {
+                        val duraciones = com.ejemplo.locksuite.mdm.GracePeriodManager.DURACIONES
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("Se cierra en:", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
+                            TextButton(onClick = {
+                                graceIdx = (graceIdx + 1) % duraciones.size
+                            }) {
+                                Text(
+                                    "${duraciones[graceIdx].first}  ▸",
+                                    color = Color(0xFFF1C40F),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
                     Button(
                         onClick = { pendingProfile = profile },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60)),
@@ -1836,6 +1898,14 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(profile.summary, color = Color.White, fontSize = 13.sp)
+                    if (profile.id == EnrollmentProfiles.LEVEL_GRACE) {
+                        val d = com.ejemplo.locksuite.mdm.GracePeriodManager.DURACIONES[graceIdx]
+                        Text(
+                            "Dura ${d.first}, y al vencer se aplica solo el Nivel 1 — Kosher estricto.",
+                            color = Color(0xFF8FC4E8),
+                            fontSize = 12.sp
+                        )
+                    }
                     profile.warning?.let { warning ->
                         Text(
                             "⚠️ $warning",
@@ -1847,10 +1917,14 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val ok = policyManager.applyMasterProfile(profile.id)
+                    val duracionMs = if (profile.id == EnrollmentProfiles.LEVEL_GRACE) {
+                        com.ejemplo.locksuite.mdm.GracePeriodManager.DURACIONES[graceIdx].second
+                    } else 0L
+                    val ok = policyManager.applyMasterProfile(profile.id, duracionMs)
                     pendingProfile = null
                     if (ok) {
                         appliedId = policyManager.getAppliedMasterProfileId()
+                        graceActive = com.ejemplo.locksuite.mdm.GracePeriodManager.isActive(context)
                         onApplied()
                         Toast.makeText(context, "✅ ${profile.label} aplicado.", Toast.LENGTH_LONG).show()
                     } else {

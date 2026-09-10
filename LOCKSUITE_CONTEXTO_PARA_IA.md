@@ -202,7 +202,7 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 
 **B.5 — Clave HMAC de presets, en texto plano y pública.** `LockSuiteMDM_Preset_HMAC_SecretKey_2026` está hardcodeada en `admin-backend/public/app.js` (que Firebase Hosting sirve públicamente) y en el repo de GitHub (público, ver B.2). Cualquiera puede firmar un preset `.locksuite` válido. Reemplazar por firma asimétrica (ECDSA P-256 o RSA-2048): clave privada solo en una Cloud Function, clave pública embebida en la app únicamente para verificar.
 
-**B.6 — Sin verificación de integridad en APKs de autoactualización/tienda administrada.** `SelfUpdater.kt` descarga e instala sin comparar checksum. La autoactualización de LockSuite tiene protección gratis por exigir la misma firma de Android; la Tienda administrada (`downloadAndInstallApk`) no, porque es la primera instalación de ese paquete. Agregar `sha256` a `version.json` y a cada entrada de `storeApps`, comparar contra el archivo ya descargado en disco antes de abrir la sesión de `PackageInstaller`.
+**B.6 — ~~Sin verificación de integridad en APKs de autoactualización/tienda administrada~~ → [CERRADO EN CÓDIGO 10/9, ver B.58; FALTA PROBAR EN EQUIPO].** `SelfUpdater.kt` descarga e instala sin comparar checksum. La autoactualización de LockSuite tiene protección gratis por exigir la misma firma de Android; la Tienda administrada (`downloadAndInstallApk`) no, porque es la primera instalación de ese paquete. Agregar `sha256` a `version.json` y a cada entrada de `storeApps`, comparar contra el archivo ya descargado en disco antes de abrir la sesión de `PackageInstaller`.
 
 **B.7 — `UPDATE_APP` y `UPDATE_LOCKSUITE` no piden PIN del dispositivo.** Es una excepción deliberada en `sendCommandV8` (`admin-backend/functions/index.js`) para poder actualizar equipos sin PIN a mano. Mientras seas el único admin no importa; si sumás más gente a `authorizedAdmins`, cualquiera de ellos puede empujar una actualización a cualquier equipo sin probar que conoce su PIN. Decidir si se mantiene (documentarlo explícito + destacarlo en `commandLog`) o se revierte.
 
@@ -1216,9 +1216,59 @@ Pedido del dueño: le pidió a Antigravity que le explicara cómo funcionan los 
 
 ---
 
+**B.58 — B.6 CERRADO (checksum obligatorio de APK), PERFIL CON VENCIMIENTO Y SELECTOR DE CELULAR. [ESCRITO, TYPE-CHECKEADO Y PROBADO EN BANCO EL 10/9; SIN COMPILAR NI PROBAR EN EQUIPO]**
+
+Detalle completo, orden de prueba y mensaje de commit: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-10_TIENDA_Y_GRACIA.md`**.
+
+**1. ~~B.6 — sin verificación de integridad en APKs de la Tienda administrada~~ → CERRADO EN CÓDIGO EL 10/9.** Era el agujero más grande que quedaba abierto y estaba desde el principio: `SelfUpdater.downloadAndInstallApk()` bajaba el APK de la `apkUrl` de una entrada de `storeApps` y lo instalaba **en silencio, sin confirmación, como Device Owner, sin verificar absolutamente nada**. `ApkSignatureVerifier` (B.37) no puede cubrirlo porque compara contra la firma del paquete **ya instalado**, y la Tienda instala primeras instalaciones — su propio comentario y el de `ApkInstaller.kt` lo dicen. O sea que **cualquiera que pudiera cambiar el contenido servido en esa URL conseguía ejecución silenciosa con privilegios en toda la flota**, y varias entradas apuntan a GitHub Releases, así que el tercero es real.
+
+Archivo nuevo **`util/ApkChecksum.kt`**. El `sha256` se publica en la entrada y se compara **contra el archivo ya en disco, ANTES de levantar las restricciones de instalación y de abrir la sesión de `PackageInstaller`** (verificar después habría dejado el equipo con `DISALLOW_INSTALL_APPS` levantado durante la comprobación).
+
+⚠️ **La Tienda FALLA CERRADO y no hay interruptor para saltearlo, a propósito.** Hay que defenderlo cuando alguien proponga "un switch mientras tanto": A Bloq tiene este mismo código escrito y **comentado**, con un `return true // TEMPORARILY BYPASS` adentro (B.31). Alguien lo escribió bien, lo apagó "por un rato" y quedó así — una verificación que parece existir y no existe, que es peor que no tenerla.
+
+**El OTA de LockSuite es la excepción, y es deliberada:** ahí el hash se verifica **si está publicado** y se sigue si no. Android ya exige la misma firma para reemplazar un paquete instalado, y el OTA es **la vía de rescate de un equipo** — un `version.json` sin hash que impidiera actualizar dejaría equipos sin poder recibir el arreglo de lo que sea que esté roto. Mismo criterio que el techo de 120 s de B.16.
+
+**El panel calcula el hash solo** al cargar la app (`fetch` + `crypto.subtle`), porque un paso manual en un control de seguridad es un paso que se saltea. Si falla por CORS —GitHub Releases no manda `Access-Control-Allow-Origin`— **no guarda la entrada sin hash**: explica el porqué y ofrece subir el APK a Firebase Hosting o pegar el hash calculado con `Get-FileHash`/`certutil`.
+
+⚠️ **AL DESPLEGAR: las entradas de `storeApps` que ya existen NO tienen `sha256`, así que los celulares dejan de instalarlas.** Es lo correcto, pero hay que arreglarlo el mismo día o parece que se rompió la tienda: panel → Ajustes → Tienda → botón **"Calcular huella"** en cada tarjeta roja. Un clic por app. Y **hay que recalcular cada vez que se reemplace un APK en su URL**; por eso la tarjeta muestra la fecha del último cálculo.
+
+**2. NIVEL 4 — PERÍODO DE GRACIA (auto-personalización).** Pedido del dueño, textual: *"un perfil de auto personalización, donde se bloqueará todo lo no kosher, y lo que no es tan claro quedará a decisión del usuario por un tiempo que yo especifique, y lo mismo la tienda de apps quedará abierta, y yo pondré que por ejemplo después de 2 días se cierre todo"*. Archivo nuevo **`mdm/GracePeriodManager.kt`**.
+
+**Lo valioso no es el temporizador, es qué pasa durante el plazo.** Con la lista blanca en simulación (B.53), el equipo anota cada dominio que quedaría afuera y lo publica al panel. **O sea que el período de gracia es el mecanismo que llena el catálogo**: sin esto, pasar un equipo a estricto es adivinar qué necesita esa persona, y B.53 ya dejó anotado que ninguna lista escrita de antemano puede estar completa. Con esto, se entrega el equipo, se usa dos días, y al cerrar se cierra con la lista de lo que esa persona **usó**.
+
+Durante la gracia queda abierto —a propósito— lo dudoso: la tienda (`DISALLOW_INSTALL_APPS` en false), el lanzador normal del usuario y el control de sus apps. Sigue cerrado todo lo claramente no kosher y el piso anti-manipulación entero.
+
+**Los tres problemas reales, y cómo se resolvieron:**
+
+- **Atrasar el reloj para que no venza nunca.** No es hipotético: B.26 causa 3 fue un equipo con el reloj corrido que rechazaba todos los comandos para siempre, y B.29 el latido que no avanzaba en sueño profundo por usar `uptimeMillis()`. Hay **dos relojes y cierra el que primero venza**: el de pared (cuenta con el equipo apagado, lo puede mover el usuario) y un **acumulador de tiempo real** (`elapsedRealtime()`, avanza en sueño profundo y nadie lo puede mover, pero se reinicia al bootear, así que se acumula a mano en cada vuelta del Watchdog). Ninguno alcanza solo; juntos, atrasar el reloj solo consigue que dispare el otro. Y el perfil enciende **`DISALLOW_CONFIG_DATE_TIME`** — ⚠️ **esa restricción está por un motivo mecánico y no de contenido: sacarla rompe la función entera y no es evidente.**
+- **Que el cierre no dispare y el equipo quede abierto para siempre** (literal el riesgo que B.11 dejó anotado para la suspensión). Lo fuerza el **`WatchdogWorker`**, que es lo único que sobrevive a que muera el proceso; el ciclo de 20 s y `BootReceiver` lo chequean además, para puntualidad y para el caso de vencer con el equipo apagado.
+- **Al cerrar NO se pasa la lista blanca a "bloquear de verdad".** Sería tentador y es justo lo que B.53 pidió evitar. **Que el catálogo quede completo es el regalo del período de gracia; usarlo sigue siendo una decisión.**
+
+**3. SELECTOR DE CELULAR EN LOS PERFILES.** Reporte del dueño mirando el panel: *"no entendí qué hacen estos perfiles, si pongo aplicar ¿a qué usuario se lo pondrá?"*. Tenía razón: sin un celular seleccionado el botón abría un `prompt()` pidiendo que se **pegara el `ANDROID_ID`** — exactamente la fricción que estos perfiles venían a eliminar, colada por copiar el botón viejo de presets sin cuestionarlo. Ahora hay un desplegable con la flota (nombre + perfil puesto), el botón dice *"⚡ Aplicar a Celular de Eli"*, y sin celular elegido queda **deshabilitado diciendo qué falta** en vez de abrir un prompt. Si el equipo elegido está en gracia, arriba se muestra cuánto falta, con qué va a cerrar y un botón para cancelar el vencimiento.
+
+**Verificación (no solo type-check):** `kotlinc` 2.0.21 contra stubs con los archivos reales, **0 errores / 0 warnings**, con **4 controles negativos detectados** *(de paso el type-check encontró que a un stub le faltaba `SharedPreferences.Editor.remove()`; se confirmó contra la API real de Android antes de agregarlo en vez de asumirlo)*. Y **tres pruebas de comportamiento, 183 aserciones verdes, 13 controles negativos detectados**: `EnrollmentProfiles` (124 — que la tienda queda abierta en la gracia, que la gracia bloquea la hora, que sigue filtrando lo no kosher, que no rompe el piso anti-manipulación), `ApkChecksum` (28 — que la tienda **no instala** sin hash, con hash vacío, mal formado ni con el archivo cambiado, y que el OTA sí instala sin hash pero **no** con uno que no coincide) y `GracePeriodManager` (31 — **con el reloj de pared movido diez años adelante el acumulador cierra igual**, un reinicio a mitad del período **no regala tiempo**, cerrar tres veces aplica el perfil una sola vez, y cancelar **no** aplica el perfil de cierre). Los dos chequeos de simetría en verde, `node --check` en los dos `.js`, balance en los 12 `.kt`. **Sin Gradle y sin probar en equipo real.**
+
+**Falta probar en equipo real** (orden completo en el documento): 1) **calcular la huella de las apps que ya están en la tienda y confirmar que siguen instalándose** — va primero; 2) que una entrada sin huella NO se instale; 3) que una huella que no coincide NO se instale; 4) Nivel 4 con plazo de 2 horas (no 2 días) en un equipo de descarte; 5) que cierre solo; 6) **★ atrasar la hora del equipo un año y confirmar que cierra igual, con el motivo "vencido (tiempo de uso…)"**; 7) reiniciar a mitad y confirmar que no se reinició la cuenta; 8) el selector; 9) cancelar el vencimiento.
+
+**Lo que queda abierto:** el flujo de *"pedir una app"* de la tienda (era la segunda mitad del PROMPT A; **su tarea 1, el checksum, ya está hecha**); que el período de gracia **avise antes de vencer** (hoy hay que entrar al panel a mirarlo); no hay gracia por grupo (misma razón que B.12 y B.53); y la firma HMAC de los perfiles sigue siendo la clave pública de B.5.
+
+---
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
+
+**10/9 — Claude: se cierra B.6 (checksum obligatorio de APK), perfil con vencimiento y selector de celular. Ver B.58.**
+
+1. **Se cerró B.6, que era el agujero más grande que quedaba y estaba desde el principio.** La Tienda administrada bajaba un APK de una URL y lo instalaba **en silencio, como Device Owner, sin verificar nada**. `ApkSignatureVerifier` (B.37) no podía cubrirlo —compara contra el paquete ya instalado y la Tienda hace primeras instalaciones—, así que cualquiera que pudiera cambiar el contenido de esa URL conseguía ejecución silenciosa con privilegios en toda la flota. Ahora el `sha256` se publica en `storeApps` y se verifica contra el archivo en disco antes de abrir la sesión de instalación. **Falla cerrado y no hay interruptor para saltearlo**, por la lección de B.31 (A Bloq tiene este código comentado con un `TEMPORARILY BYPASS` adentro).
+2. **El panel calcula la huella solo.** Un paso manual en un control de seguridad es un paso que se saltea. ⚠️ **Al desplegar hay que darle "Calcular huella" a las apps que ya estaban cargadas**, o los celulares dejan de instalarlas.
+3. **Perfil Nivel 4 — período de gracia**, pedido del dueño. Lo valioso no es el temporizador: durante el plazo, la auditoría de la lista blanca (B.53) anota qué dominios usa esa persona, así que **el período de gracia es lo que llena el catálogo** y permite cerrar con datos en vez de a ciegas.
+4. **El vencimiento lo sostienen dos relojes**, y esa fue la parte que más pensamiento pidió: el de pared (que el usuario puede atrasar) y un acumulador de tiempo real que nadie puede mover, más `DISALLOW_CONFIG_DATE_TIME` como defensa de adelante. Lo garantiza el `WatchdogWorker`, que sobrevive a que muera el proceso — el riesgo que B.11 dejó anotado para la suspensión.
+5. **Se arregló un defecto de diseño de B.57 que reportó el dueño:** *"si pongo aplicar, ¿a qué usuario se lo pondrá?"*. Sin celular seleccionado, el botón abría un `prompt()` pidiendo pegar el `ANDROID_ID` — exactamente la fricción que los perfiles venían a eliminar. Ahora hay un desplegable con la flota.
+6. **Verificación: 183 aserciones de comportamiento en tres bancos, todas verdes, con 13 controles negativos detectados**, además del type-check con 4 más. La central: **con el reloj movido diez años adelante, el acumulador cierra el período igual**.
+7. **Falta:** compilar, desplegar, **calcular las huellas de la tienda** y correr el orden de prueba. Todo en `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_TIENDA_Y_GRACIA.md`, con el commit listo.
 
 **9/9 — Claude: PERFILES MAESTROS DE ALTA, y el perfil deja de topar en FCM. Ver B.57.**
 

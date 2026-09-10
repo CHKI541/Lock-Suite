@@ -361,11 +361,34 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                 //     por FCM viaja solo el id. Mismo patrón que `SYNC_WHITELIST` (B.53).
                 "APPLY_MASTER_PROFILE" -> {
                     val level = data["level"]
-                    val ok = policyManager.applyMasterProfile(level)
-                    if (!ok) {
-                        android.util.Log.w("LockSuiteFCM", "APPLY_MASTER_PROFILE: nivel desconocido o fallo: $level")
+                    // Solo lo usa el perfil de gracia. Viaja en ms como cadena porque el
+                    // `data` de FCM es Map<String,String>: un valor no numérico da 0, o sea
+                    // "sin vencimiento", y eso NO es un valor por omisión aceptable — un
+                    // perfil de gracia sin cierre es un equipo abierto para siempre. Por eso
+                    // la rama de abajo se niega a aplicarlo en vez de asumir una duración.
+                    val graceMs = data["graceMs"]?.toLongOrNull() ?: 0L
+                    val graceTarget = data["graceTarget"]
+                        ?: com.ejemplo.locksuite.mdm.EnrollmentProfiles.LEVEL_STRICT
+                    if (level == com.ejemplo.locksuite.mdm.EnrollmentProfiles.LEVEL_GRACE && graceMs <= 0L) {
+                        android.util.Log.w("LockSuiteFCM", "APPLY_MASTER_PROFILE de gracia SIN duración: se rechaza.")
+                        commandErrorReason = "El perfil de gracia necesita una duración: sin vencimiento, el equipo quedaría abierto para siempre."
+                        false
+                    } else {
+                        val ok = policyManager.applyMasterProfile(level, graceMs, graceTarget)
+                        if (!ok) {
+                            android.util.Log.w("LockSuiteFCM", "APPLY_MASTER_PROFILE: nivel desconocido o fallo: $level")
+                        }
+                        ok
                     }
-                    ok
+                }
+                // Cortar la gracia antes de tiempo, SIN aplicar el perfil de cierre. Es
+                // distinto de "cerrar ahora": esto solo apaga el temporizador y deja el
+                // equipo como está. Para cerrar ya, se manda APPLY_MASTER_PROFILE con el
+                // nivel que corresponda, que cancela la gracia de paso.
+                "CANCEL_GRACE_PERIOD" -> {
+                    com.ejemplo.locksuite.mdm.GracePeriodManager.cancel(this, "cancelado desde el panel")
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(this)
+                    true
                 }
                 "APPLY_PROFILE" -> {
                     val profileId = data["profileId"]

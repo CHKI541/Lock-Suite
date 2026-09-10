@@ -112,7 +112,13 @@ class LoginActivity : ComponentActivity() {
 data class StoreApp(
     val label: String = "",
     val packageName: String = "",
-    val apkUrl: String = ""
+    val apkUrl: String = "",
+    /**
+     * Huella sha256 del APK publicado. **Sin ella no se instala** (B.6, cerrado el
+     * 10/9/2026 — ver `util/ApkChecksum.kt`). El panel la calcula solo al cargar la app;
+     * las entradas viejas se arreglan con el botón "Calcular sha256" de la tienda.
+     */
+    val sha256: String = ""
 )
 
 @Composable
@@ -754,8 +760,13 @@ fun LoginScreen(
                         val label = it.child("label").getValue(String::class.java) ?: ""
                         val pkg = it.child("packageName").getValue(String::class.java) ?: ""
                         val apk = it.child("apkUrl").getValue(String::class.java) ?: ""
+                        val sha = it.child("sha256").getValue(String::class.java) ?: ""
                         if (label.isNotEmpty() && pkg.isNotEmpty() && apk.isNotEmpty()) {
-                            StoreApp(label, pkg, apk)
+                            // Una entrada sin sha256 SE MUESTRA igual, a propósito: si se
+                            // ocultara, el administrador no tendría forma de enterarse de
+                            // que le falta el hash — vería una tienda incompleta sin causa.
+                            // Se muestra deshabilitada y con el motivo escrito.
+                            StoreApp(label, pkg, apk, sha)
                         } else null
                     }
                     storeAppsList = apps
@@ -813,16 +824,33 @@ fun LoginScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    // 10/9/2026 — B.6. Una entrada sin sha256 no se puede
+                                    // verificar, así que no se instala. Se muestra igual y
+                                    // con el motivo escrito: si se ocultara, el
+                                    // administrador vería una tienda incompleta sin saber
+                                    // por qué, que es el modo de falla mudo que este
+                                    // proyecto viene pagando (B.28, B.42, B.57).
+                                    val hasChecksum = app.sha256.isNotBlank()
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(app.packageName, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+                                        if (!hasChecksum) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                if (LocaleManager.getLang() == "he") "⚠ חסר אימות — פנה למנהל"
+                                                else if (LocaleManager.getLang() == "en") "⚠ Not verifiable — ask your administrator"
+                                                else "⚠ Sin verificación — avisale al administrador",
+                                                color = Color(0xFFF1C40F),
+                                                fontSize = 11.sp
+                                            )
+                                        }
                                     }
-                                    
+
                                     val isDownloadingThis = storeDownloadingPackage == app.packageName
                                     Button(
                                         onClick = {
-                                            if (isAllowed && storeDownloadingPackage == null) {
+                                            if (isAllowed && hasChecksum && storeDownloadingPackage == null) {
                                                 coroutineScope.launch {
                                                     storeDownloadingPackage = app.packageName
                                                     val db = FirebaseDatabase.getInstance()
@@ -831,7 +859,8 @@ fun LoginScreen(
                                                         context,
                                                         app.apkUrl,
                                                         app.packageName,
-                                                        app.label
+                                                        app.label,
+                                                        app.sha256
                                                     ) { progress ->
                                                         coroutineScope.launch(kotlinx.coroutines.Dispatchers.Main) {
                                                             storeProgress = progress
@@ -848,7 +877,7 @@ fun LoginScreen(
                                                 }
                                             }
                                         },
-                                        enabled = isAllowed && (storeDownloadingPackage == null || isDownloadingThis),
+                                        enabled = isAllowed && hasChecksum && (storeDownloadingPackage == null || isDownloadingThis),
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = accentOrange,
                                             contentColor = navyDark,

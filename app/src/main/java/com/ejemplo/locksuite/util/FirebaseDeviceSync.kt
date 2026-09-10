@@ -526,6 +526,18 @@ object FirebaseDeviceSync {
                     // cómo se lo dio de alta: dice con qué nivel se configuró y cuándo.
                     "masterProfileId" to policyManager.getAppliedMasterProfileId(),
                     "masterProfileAt" to policyManager.getAppliedMasterProfileAt(),
+                    // Período de gracia (10/9/2026). `graceRemainingMs` es el MÍNIMO entre
+                    // el reloj de pared y el acumulador de tiempo real: es el que va a
+                    // disparar de verdad, y mostrar el otro sería mentirle al administrador.
+                    // `graceLastCloseReason` dice "vencido (tiempo de uso…)" cuando cerró
+                    // por el acumulador y no por el reloj — o sea, cuando alguien movió la
+                    // hora del equipo. Ese dato es la razón de que el campo exista.
+                    "graceActive" to com.ejemplo.locksuite.mdm.GracePeriodManager.isActive(context),
+                    "graceRemainingMs" to com.ejemplo.locksuite.mdm.GracePeriodManager.remainingMs(context),
+                    "graceDeadline" to com.ejemplo.locksuite.mdm.GracePeriodManager.deadline(context),
+                    "graceStartedAt" to com.ejemplo.locksuite.mdm.GracePeriodManager.startedAt(context),
+                    "graceTargetProfile" to com.ejemplo.locksuite.mdm.GracePeriodManager.targetProfile(context),
+                    "graceLastCloseReason" to com.ejemplo.locksuite.mdm.GracePeriodManager.lastCloseReason(context),
                     "captivePortalGuard" to policyManager.isCaptivePortalGuardEnabled(),
                     "captivePortalCoverImages" to policyManager.isCaptivePortalCoverImagesEnabled(),
                     "captivePortalOpens" to policyManager.getCaptivePortalOpens(),

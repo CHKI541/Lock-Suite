@@ -253,6 +253,43 @@
           </div>
 
           <!-- ════════════════════════════════════════════════════════════════
+               ALTA POR QR (10/9/2026, B.61) — ver app/receiver/DeviceAdminReceiver.kt
+               ════════════════════════════════════════════════════════════════ -->
+          <div class="sidebar-card" style="margin-bottom: 24px;">
+            <h2>📲 Alta de un equipo nuevo por QR</h2>
+            <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
+              En un equipo <strong>recién reseteado y sin cuenta de Google</strong>, tocá seis veces la
+              pantalla de bienvenida y escaneá este código. LockSuite se instala sola como
+              administrador del equipo y se aplica el nivel que elijas — sin ADB, sin PC, sin cables.
+            </p>
+            <p class="hint-text" style="font-size: 12px; color: var(--accent); margin-bottom: 16px;">
+              ⚠️ No es magia: pide el mismo equipo recién reseteado y sin cuenta que el método por ADB.
+              Lo que cambia es que no hace falta una PC con drivers.
+            </p>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+              <select id="qr-level" style="flex:1; min-width:200px; background: var(--navy-dark); border:1px solid var(--navy-light); color: var(--text-light); padding:9px 12px; border-radius:8px;"></select>
+              <button id="qr-build-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight:bold; border:none; padding:9px 16px; border-radius:8px; cursor:pointer;">Generar datos del QR</button>
+              <button id="qr-copy-btn" class="action-btn" style="background: var(--navy-medium); color: var(--text-light); border:1px solid var(--navy-light); padding:9px 16px; border-radius:8px; cursor:pointer;">Copiar</button>
+            </div>
+            <p id="qr-status-msg" style="font-size:12px; margin-bottom:8px; min-height:18px; color: var(--accent);"></p>
+            <textarea id="qr-json" readonly rows="9" style="width:100%; box-sizing:border-box; background: var(--navy-dark); border:1px solid var(--navy-light); color: var(--text-light); padding:10px; border-radius:8px; font-family:monospace; font-size:11px;"></textarea>
+            <p class="hint-text" style="font-size:12px; color: var(--text-gray); margin-top:8px;">
+              ⚠️ <strong>Falta el dibujo del QR en el panel.</strong> Por ahora, copiá este texto y
+              pasalo por cualquier generador de códigos QR. No lleva ningún dato secreto: la URL del
+              APK y la huella de la firma son públicas.
+            </p>
+            <h3 style="font-size:14px; margin-top:20px; margin-bottom:8px;">Terminar un alta</h3>
+            <p class="hint-text" style="font-size:12px; color: var(--text-gray); margin-bottom:12px;">
+              El alta por QR aplica el perfil <strong>salvo</strong> lo que impediría terminarla:
+              agregar la cuenta de Google y fijar el idioma. Cuando ya hiciste las dos cosas en el
+              equipo, tocá acá y se aplica el resto.
+            </p>
+            <div id="qr-pending-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap:12px;">
+              <p class="loading-text" style="grid-column:1/-1;">Ningún equipo tiene un alta a medio terminar.</p>
+            </div>
+          </div>
+
+          <!-- ════════════════════════════════════════════════════════════════
                DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60)
                Ver app/mdm/EmbeddedBrowserDetector.kt. Va en esta pestaña y no en
                Ajustes porque es lo mismo que la lista blanca —qué se bloquea y qué
@@ -938,6 +975,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=36"></script>
+  <script src="app.js?v=37"></script>
 </body>
 </html>

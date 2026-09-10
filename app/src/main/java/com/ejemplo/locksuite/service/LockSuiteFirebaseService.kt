@@ -597,6 +597,20 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     com.ejemplo.locksuite.mdm.WhitelistManager.clearAudit()
                     true
                 }
+                // ── TERMINAR EL ALTA POR QR (10/9/2026, B.61) ──
+                // Aplica lo que el aprovisionamiento dejó afuera para que el equipo se
+                // pudiera terminar de dar de alta: agregar la cuenta de Google y fijar
+                // el idioma. Ver EnrollmentProfiles.POST_ALTA.
+                "FINISH_ENROLLMENT" -> {
+                    val ok = policyManager.finishEnrollment()
+                    if (!ok) {
+                        commandErrorReason =
+                            "No había nada pendiente del alta, o alguna restricción no se pudo aplicar"
+                    }
+                    // Que el panel vea en el acto que el alta ya no está pendiente.
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)
+                    ok
+                }
                 // ── DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60) ──
                 // Dos interruptores separados a propósito: encender el detector NO
                 // alcanza para que bloquee. Ver mdm/EmbeddedBrowserDetector.kt.

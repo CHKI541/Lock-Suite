@@ -1746,12 +1746,19 @@ class PolicyManager(private val context: Context) {
      *   el período antes de que el equipo se cierre solo. Se ignora en los demás.
      * @param graceTarget qué perfil se aplica cuando vence la gracia.
      */
+    /**
+     * @param incluirPostAlta `false` durante el aprovisionamiento por QR (B.61): omite
+     *   las restricciones que impiden terminar el alta (agregar la cuenta de Google y
+     *   fijar el idioma). Las aplica después `finishEnrollment()`.
+     */
+    @JvmOverloads
     fun applyMasterProfile(
         profileId: String?,
         graceDurationMs: Long = 0L,
-        graceTarget: String = EnrollmentProfiles.LEVEL_STRICT
+        graceTarget: String = EnrollmentProfiles.LEVEL_STRICT,
+        incluirPostAlta: Boolean = true
     ): Boolean {
-        val data = EnrollmentProfiles.buildData(profileId) ?: run {
+        val data = EnrollmentProfiles.buildData(profileId, incluirPostAlta) ?: run {
             android.util.Log.w("PolicyManager", "Perfil maestro desconocido: $profileId")
             return false
         }
@@ -1781,6 +1788,15 @@ class PolicyManager(private val context: Context) {
                 PrefsHelper.getMdmPrefs(context).edit()
                     .putString("master_profile_id", profileId)
                     .putLong("master_profile_at", System.currentTimeMillis())
+                    // B.61 — si el perfil se aplicó recortado por el alta, queda anotado
+                    // qué falta. El panel lo lee para mostrar "Terminar alta", y el
+                    // equipo lo necesita para saber qué aplicar después. Sin esta marca,
+                    // un equipo dado de alta por QR se quedaría a mitad de camino para
+                    // siempre y nadie lo notaría hasta que alguien agregara una cuenta.
+                    .putBoolean(
+                        "enrollment_pending",
+                        !incluirPostAlta && EnrollmentProfiles.pendientesDeAlta(profileId).isNotEmpty()
+                    )
                     .apply()
 
                 // El temporizador arranca DESPUÉS de aplicar, no antes: si aplicar
@@ -1797,6 +1813,49 @@ class PolicyManager(private val context: Context) {
             false
         }
     }
+
+    /**
+     * Aplica lo que el alta por QR dejó pendiente (B.61): las restricciones de
+     * `EnrollmentProfiles.POST_ALTA` del perfil que se puso al enrolar.
+     *
+     * Se llama desde el panel, con el botón "Terminar alta", una vez que la cuenta de
+     * Google está puesta y el idioma es el definitivo.
+     *
+     * @return `false` si no había nada pendiente o si no se sabe qué perfil se aplicó.
+     */
+    fun finishEnrollment(): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (!prefs.getBoolean("enrollment_pending", false)) return false
+        val profileId = getAppliedMasterProfileId()
+        val pendientes = EnrollmentProfiles.pendientesDeAlta(profileId)
+        if (pendientes.isEmpty()) {
+            // Nada que aplicar, pero la marca estaba puesta: se limpia igual para que
+            // el panel deje de ofrecer un botón que no hace nada (B.42).
+            prefs.edit().putBoolean("enrollment_pending", false).apply()
+            return false
+        }
+        var ok = true
+        for (clave in pendientes) {
+            try {
+                // Misma ruta que usa importPolicyPresetJson: setRestriction() ya
+                // guarda el estado, respeta la suspensión de LockSuite y aplica al
+                // sistema. No se estrena un segundo camino para lo mismo.
+                if (!setRestriction(clave, true)) ok = false
+            } catch (e: Exception) {
+                android.util.Log.e("PolicyManager", "finishEnrollment: falló $clave: ${e.message}", e)
+                ok = false
+            }
+        }
+        // La marca se levanta solo si TODAS se aplicaron. Si alguna falló, el botón
+        // sigue estando: es preferible que el administrador lo toque dos veces a que
+        // el panel diga que el alta terminó sobre un equipo que quedó a medias.
+        if (ok) prefs.edit().putBoolean("enrollment_pending", false).apply()
+        return ok
+    }
+
+    /** ¿El alta por QR dejó restricciones sin aplicar? Lo publica el panel. */
+    fun isEnrollmentPending(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean("enrollment_pending", false)
 
     /** Id del último perfil maestro aplicado, o cadena vacía si nunca se aplicó ninguno. */
     fun getAppliedMasterProfileId(): String =

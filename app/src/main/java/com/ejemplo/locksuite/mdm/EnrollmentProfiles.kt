@@ -83,6 +83,43 @@ object EnrollmentProfiles {
         val warning: String?,
         val restrictions: Map<String, Boolean>,
         val switches: Map<String, Boolean>
+    ) {
+        /**
+         * Las restricciones de este perfil que NO se pueden aplicar durante el
+         * aprovisionamiento por QR (B.61). Se calcula, no se declara: así una
+         * restricción nueva que caiga en [POST_ALTA] queda cubierta sola.
+         */
+        val postAlta: Set<String> get() = restrictions.keys.intersect(POST_ALTA)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // LO QUE NO SE PUEDE APLICAR DURANTE EL ALTA (10/9/2026, B.61)
+    // ─────────────────────────────────────────────────────────────────────────
+    //
+    // El QR de aprovisionamiento aplica el perfil apenas termina de instalarse
+    // LockSuite, o sea ANTES de que el instalador haya agregado la cuenta de Google
+    // y ANTES de haber dejado el equipo en su idioma definitivo. Estas dos, aplicadas
+    // en ese momento, **dejan un equipo que no se puede terminar de dar de alta**:
+    //
+    //  · `DISALLOW_MODIFY_ACCOUNTS` — no se puede agregar la cuenta de Google. Es el
+    //    mismo error de razonamiento que ya costó B.41 punto 3 y B.43: LockSuite se
+    //    instala con el equipo SIN cuenta, así que "todavía no hay cuenta" es el
+    //    ESTADO DE FÁBRICA del procedimiento, no un caso raro.
+    //  · `DISALLOW_CONFIG_LOCALE` — no se puede dejar el equipo en el idioma
+    //    definitivo, y el aviso de los perfiles pide justamente hacerlo antes.
+    //
+    // Las dos se aplican después, con el botón "Terminar alta" del panel (comando
+    // `FINISH_ENROLLMENT`). Mientras tanto el equipo YA está protegido por todo el
+    // resto del perfil, incluido el piso anti-manipulación entero: el hueco es
+    // exactamente "puede agregar cuentas y cambiar el idioma", que es lo que hay que
+    // poder hacer para terminar el alta.
+    //
+    // ⚠️ Si mañana se agrega una restricción que también bloquee un paso del alta,
+    // va acá. `check_profile_sync.py` verifica que todo lo que está en esta lista
+    // exista de verdad en algún perfil, para que no quede una entrada muerta.
+    val POST_ALTA: Set<String> = setOf(
+        UserManager.DISALLOW_MODIFY_ACCOUNTS,
+        UserManager.DISALLOW_CONFIG_LOCALE
     )
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -410,12 +447,18 @@ object EnrollmentProfiles {
      *
      * @return el objeto `data`, o `null` si el id no existe.
      */
-    fun buildData(profileId: String?): JSONObject? {
+    @JvmOverloads
+    fun buildData(profileId: String?, incluirPostAlta: Boolean = true): JSONObject? {
         val profile = byId(profileId) ?: return null
         val data = JSONObject()
 
         val restrictionsObj = JSONObject()
         for ((key, value) in profile.restrictions) {
+            // B.61 — durante el aprovisionamiento por QR se omiten las de [POST_ALTA].
+            // Se OMITEN (la clave no aparece), no se ponen en `false`: el importador
+            // trata "clave ausente" como "no se toca", y ponerlas en false las
+            // levantaría explícitamente en un equipo que ya las tuviera puestas.
+            if (!incluirPostAlta && key in POST_ALTA) continue
             restrictionsObj.put(key, value)
         }
         data.put("restrictions", restrictionsObj)
@@ -436,6 +479,14 @@ object EnrollmentProfiles {
      * Nombre de perfil que queda guardado en el equipo. Lleva la fecha para que en el
      * panel se pueda distinguir un equipo dado de alta hoy de uno de hace tres meses.
      */
+    /**
+     * Lo que quedó pendiente de aplicar tras un alta por QR. Vacío si el perfil no
+     * toca ninguna de las de [POST_ALTA] — en ese caso el alta ya quedó completa y el
+     * panel no tiene por qué mostrar el botón "Terminar alta".
+     */
+    fun pendientesDeAlta(profileId: String?): Set<String> =
+        byId(profileId)?.postAlta ?: emptySet()
+
     fun presetNameFor(profileId: String?): String {
         val profile = byId(profileId) ?: return "Perfil LockSuite"
         return profile.label

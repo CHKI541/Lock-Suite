@@ -76,6 +76,10 @@ const ALLOWED_COMMANDS = new Set([
   "ENABLE_IAB_FINDER", "DISABLE_IAB_FINDER",
   "ENABLE_IAB_SIMULATION", "DISABLE_IAB_SIMULATION",
   "CLEAR_IAB_AUDIT",
+  // ── ALTA POR QR (10/9/2026, B.61) — ver app/receiver/DeviceAdminReceiver.kt ──
+  // Aplica lo que el aprovisionamiento dejo afuera a proposito para que el equipo se
+  // pudiera terminar de dar de alta (agregar la cuenta de Google y fijar el idioma).
+  "FINISH_ENROLLMENT",
   "BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY",
   "BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN",
   "BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS",

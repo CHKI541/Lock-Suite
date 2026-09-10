@@ -525,6 +525,20 @@ object FirebaseDeviceSync {
                     // cuando un equipo se comporta distinto a los demás y nadie recuerda
                     // cómo se lo dio de alta: dice con qué nivel se configuró y cuándo.
                     "masterProfileId" to policyManager.getAppliedMasterProfileId(),
+                    // ── ALTA POR QR (10/9/2026, B.61) ──
+                    // `enrollmentPending` es lo que hace que el panel muestre el botón
+                    // "Terminar alta": el aprovisionamiento aplica el perfil SALVO las
+                    // restricciones que impiden agregar la cuenta de Google y fijar el
+                    // idioma, y sin esta marca ese equipo se quedaría a mitad de camino
+                    // para siempre sin que nadie lo notara.
+                    "enrollmentPending" to policyManager.isEnrollmentPending(),
+                    // El checksum del certificado con el que está firmada ESTA app, en
+                    // el formato exacto del QR. Se publica desde el equipo para que el
+                    // panel no tenga que pedírselo a nadie ni calcularlo a mano: el
+                    // primer equipo se da de alta por ADB como siempre, y a partir de
+                    // ahí el panel ya tiene el dato para generar QR para el resto.
+                    "signatureChecksum" to (com.ejemplo.locksuite.util.ApkSignatureVerifier
+                        .checksumDeFirmaParaQr(context) ?: ""),
                     "masterProfileAt" to policyManager.getAppliedMasterProfileAt(),
                     // Período de gracia (10/9/2026). `graceRemainingMs` es el MÍNIMO entre
                     // el reloj de pared y el acumulador de tiempo real: es el que va a

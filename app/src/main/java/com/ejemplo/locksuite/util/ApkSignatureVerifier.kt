@@ -126,6 +126,56 @@ object ApkSignatureVerifier {
      * `Signature` crudo porque así el valor se puede loguear y mostrar en un mensaje sin
      * volcar el certificado entero.
      */
+    /**
+     * La MISMA huella del certificado, pero en **base64 URL-safe sin relleno**, que es
+     * el formato exacto que pide el QR de aprovisionamiento de Android en
+     * `android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM` (B.61).
+     *
+     * ⚠️ Es el hash del **certificado de firma**, no del archivo APK. La diferencia
+     * decide si el QR sobrevive a una actualización:
+     *
+     *  · `..._SIGNATURE_CHECKSUM` (esto) identifica a QUIÉN firmó. LockSuite publica
+     *    una versión nueva casi todas las semanas, y este QR las acepta todas.
+     *  · `..._PACKAGE_CHECKSUM` identifica a un APK exacto. Con ese, **cada versión
+     *    nueva invalida los QR impresos** — que es justo lo que no queremos en un
+     *    proyecto que va por la 0.6.48.
+     *
+     * Requiere Android 6.0+ para SHA-256; desde Android 10 es obligatorio SHA-256.
+     * El minSdk del proyecto es 24 (Android 7), así que siempre alcanza.
+     */
+    fun checksumDeFirmaParaQr(context: android.content.Context): String? = try {
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            @Suppress("DEPRECATION")
+            android.content.pm.PackageManager.GET_SIGNATURES
+        }
+        val info = context.packageManager.getPackageInfo(context.packageName, flags)
+        val firmas: Array<out Signature>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo?.apkContentsSigners
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures
+        }
+        val primera = firmas?.firstOrNull()
+        if (primera == null) {
+            null
+        } else {
+            val digest = MessageDigest.getInstance("SHA-256").digest(primera.toByteArray())
+            // URL_SAFE | NO_PADDING | NO_WRAP: los tres hacen falta. El `tr '+/' '-_'`
+            // y el `tr -d '='` de la receta oficial son exactamente URL_SAFE y
+            // NO_PADDING; NO_WRAP evita el salto de línea que Base64 mete cada 76
+            // caracteres y que rompería el JSON del QR.
+            android.util.Base64.encodeToString(
+                digest,
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+            )
+        }
+    } catch (e: Exception) {
+        android.util.Log.w("ApkSignatureVerifier", "No se pudo calcular el checksum de firma: ${e.message}")
+        null
+    }
+
     private fun huellaDe(info: PackageInfo): String? {
         val firmas: Array<out Signature>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             info.signingInfo?.apkContentsSigners

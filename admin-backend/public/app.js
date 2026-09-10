@@ -84,7 +84,7 @@ function startRealtimeSync() {
         // B.60 — la auditoría del detector vive en el mismo árbol; se refresca sola
         // mientras la pestaña esté abierta, que es justo cuando se está mirando.
         whitelistContainer && !whitelistContainer.classList.contains("hidden") &&
-            typeof renderIabAudit === "function" && renderIabAudit();
+            typeof renderIabAudit === "function" && (renderIabAudit(), renderQrPendientes());
         // Si hay un grupo abierto, refrescar la lista de dispositivos seleccionables por si cambiaron de nombre o estado
         if (selectedGroupId && currentGroupsData[selectedGroupId]) {
             renderGroupDevicesSelector(currentGroupsData[selectedGroupId]);
@@ -1782,7 +1782,7 @@ const mainNavTabs = [
     { btn: mainTabArchived, container: archivedContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
     { btn: mainTabPresets, container: presetsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); loadPresetsList && loadPresetsList(); } },
     { btn: mainTabGlobalSettings, container: globalSettingsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
-    { btn: mainTabWhitelist, container: whitelistContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderWhitelistCatalog(); renderIabAudit(); } },
+    { btn: mainTabWhitelist, container: whitelistContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderWhitelistCatalog(); renderIabAudit(); renderQrPendientes(); } },
     { btn: mainTabRequests, container: requestsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderAppRequests(); } }
 ];
 
@@ -3530,6 +3530,134 @@ async function syncStoreAllowedPackage(pkg, permitir) {
     // El cuadro de texto de Ajustes lee el mismo nodo y tiene su propio listener, así
     // que se actualiza solo. No se toca acá para no pisar lo que el usuario esté
     // escribiendo en ese momento.
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ALTA POR QR (10/9/2026, B.61) — ver app/receiver/DeviceAdminReceiver.kt
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Las claves del JSON están VERIFICADAS contra la documentación de Android y contra
+// la guía de aprovisionamiento de Samsung Knox el 10/9/2026, no escritas de memoria:
+// el nombre y el formato del checksum cambiaron entre versiones y un QR mal armado
+// falla en el equipo con un mensaje inútil.
+//
+// ⚠️ SE USA SIGNATURE_CHECKSUM Y NO PACKAGE_CHECKSUM, Y LA DIFERENCIA IMPORTA:
+//   · SIGNATURE_CHECKSUM identifica a QUIÉN firmó la app (hash del certificado).
+//     Un QR impreso sigue sirviendo después de cada actualización.
+//   · PACKAGE_CHECKSUM identifica a un APK exacto (hash del archivo). Con ese,
+//     **cada versión nueva invalidaría todos los QR ya impresos** — inaceptable en
+//     un proyecto que va por la 0.6.48 y publica casi todas las semanas.
+// Requiere Android 6.0+ para SHA-256; el minSdk del proyecto es 24 (Android 7).
+//
+// La huella NO se pide a mano ni se calcula acá: la publica cada equipo en
+// `signatureChecksum` (ver ApkSignatureVerifier.checksumDeFirmaParaQr). El primer
+// equipo se da de alta por ADB como siempre, y desde ahí el panel ya tiene el dato.
+
+const QR_APK_URL = "https://locksuite-nueva.web.app/locksuite-latest.apk";
+const QR_COMPONENTE = "com.ejemplo.locksuite/com.ejemplo.locksuite.receiver.DeviceAdminReceiver";
+// ⚠️ Tiene que coincidir EXACTA con DeviceAdminReceiver.EXTRA_NIVEL_PERFIL. Una clave
+// desalineada no da error: el equipo se enrola y queda sin configurar (bug de B.28).
+const QR_EXTRA_NIVEL = "com.ejemplo.locksuite.PROFILE_LEVEL";
+
+const qrLevelSelect = document.getElementById("qr-level");
+const qrBuildBtn = document.getElementById("qr-build-btn");
+const qrCopyBtn = document.getElementById("qr-copy-btn");
+const qrJsonBox = document.getElementById("qr-json");
+const qrStatusMsg = document.getElementById("qr-status-msg");
+const qrPendingList = document.getElementById("qr-pending-list");
+
+function setQrStatus(msg, isError) {
+    if (!qrStatusMsg) return;
+    qrStatusMsg.textContent = msg || "";
+    qrStatusMsg.style.color = isError ? "var(--alert-red)" : "var(--accent)";
+    if (msg) setTimeout(() => { if (qrStatusMsg.textContent === msg) qrStatusMsg.textContent = ""; }, 8000);
+}
+
+/** La huella de firma la publica cualquier equipo ya enrolado. */
+function huellaDeFirmaConocida() {
+    const vals = Object.values(currentDevicesData || {});
+    for (const d of vals) {
+        const h = field(d, "signatureChecksum", "");
+        if (h) return h;
+    }
+    return "";
+}
+
+function renderQrLevels() {
+    if (!qrLevelSelect || qrLevelSelect.options.length > 0) return;
+    // Los mismos ids que EnrollmentProfiles.kt. check_profile_sync.py compara las listas.
+    [["kosher_estricto", "Nivel 1 — Kosher estricto"],
+     ["trabajo", "Nivel 2 — Trabajo"],
+     ["base_minima", "Nivel 3 — Base mínima"]].forEach(([id, etiqueta]) => {
+        const o = document.createElement("option");
+        o.value = id; o.textContent = etiqueta;
+        qrLevelSelect.appendChild(o);
+    });
+}
+
+qrBuildBtn && qrBuildBtn.addEventListener("click", () => {
+    renderQrLevels();
+    const huella = huellaDeFirmaConocida();
+    if (!huella) {
+        setQrStatus("Todavía no hay ningún equipo que haya publicado la huella de firma. " +
+            "Da de alta el primero por ADB como siempre; desde ahí el panel ya tiene el dato.", true);
+        return;
+    }
+    const payload = {
+        "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": QR_COMPONENTE,
+        "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": huella,
+        "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": QR_APK_URL,
+        "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": true,
+        "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
+        "android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE": {}
+    };
+    payload["android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE"][QR_EXTRA_NIVEL] =
+        qrLevelSelect.value;
+    if (qrJsonBox) qrJsonBox.value = JSON.stringify(payload, null, 2);
+    setQrStatus("Listo. Copialo y pasalo por un generador de QR.");
+});
+
+qrCopyBtn && qrCopyBtn.addEventListener("click", () => {
+    if (!qrJsonBox || !qrJsonBox.value) { setQrStatus("Generá los datos primero.", true); return; }
+    qrJsonBox.select();
+    try { document.execCommand("copy"); setQrStatus("Copiado."); }
+    catch (e) { setQrStatus("No se pudo copiar; seleccionalo a mano.", true); }
+});
+
+/** Los equipos con un alta a medio terminar, con su botón "Terminar alta". */
+function renderQrPendientes() {
+    renderQrLevels();
+    if (!qrPendingList) return;
+    const pend = Object.entries(currentDevicesData || {})
+        .filter(([, d]) => field(d, "enrollmentPending", false));
+    qrPendingList.innerHTML = "";
+    if (pend.length === 0) {
+        qrPendingList.innerHTML = '<p class="loading-text" style="grid-column:1/-1;">Ningún equipo tiene un alta a medio terminar.</p>';
+        return;
+    }
+    pend.forEach(([id, d]) => {
+        const card = document.createElement("div");
+        card.className = "group-card";
+        card.innerHTML =
+            '<strong class="js-n" style="font-size:14px;"></strong>' +
+            '<div style="font-size:12px; color:var(--text-gray); margin-top:6px;">' +
+              'Falta bloquear el cambio de cuentas y de idioma.</div>' +
+            '<div class="js-acc" style="margin-top:12px;"></div>';
+        card.querySelector(".js-n").textContent =
+            d.name || (d.info && d.info.name) || d.model || (d.info && d.info.model) || id;
+        const b = document.createElement("button");
+        b.className = "action-btn";
+        b.style.cssText = "background:var(--accent); color:var(--navy-dark); font-weight:bold; border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:12px;";
+        b.textContent = "✔ Terminar alta";
+        b.addEventListener("click", async () => {
+            try {
+                await runCommandOnDevice(id, "FINISH_ENROLLMENT", null, b);
+                setQrStatus("Alta terminada.");
+            } catch (e) { setQrStatus("Error: " + e.message, true); }
+        });
+        card.querySelector(".js-acc").appendChild(b);
+        qrPendingList.appendChild(card);
+    });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

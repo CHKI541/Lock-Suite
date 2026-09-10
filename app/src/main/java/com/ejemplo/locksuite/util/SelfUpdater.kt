@@ -71,10 +71,7 @@ object SelfUpdater {
 
                 val tempFile = File(context.cacheDir, "locksuite_update.apk")
                 val urlWithCacheBuster = if (apkUrl.contains("?")) "$apkUrl&t=${System.currentTimeMillis()}" else "$apkUrl?t=${System.currentTimeMillis()}"
-                val apkConnection = URL(urlWithCacheBuster).openConnection() as HttpURLConnection
-                apkConnection.connectTimeout = 15000
-                apkConnection.readTimeout = 15000
-                apkConnection.connect()
+                val apkConnection = openDownloadConnection(urlWithCacheBuster)
 
                 if (apkConnection.responseCode != HttpURLConnection.HTTP_OK) {
                     return@withContext "Error al descargar APK: HTTP ${apkConnection.responseCode}"
@@ -205,10 +202,7 @@ object SelfUpdater {
 
                 val tempFile = File(context.cacheDir, "store_${packageName}_update.apk")
                 val urlWithCacheBuster = if (apkUrl.contains("?")) "$apkUrl&t=${System.currentTimeMillis()}" else "$apkUrl?t=${System.currentTimeMillis()}"
-                val apkConnection = URL(urlWithCacheBuster).openConnection() as HttpURLConnection
-                apkConnection.connectTimeout = 15000
-                apkConnection.readTimeout = 15000
-                apkConnection.connect()
+                val apkConnection = openDownloadConnection(urlWithCacheBuster)
 
                 if (apkConnection.responseCode != HttpURLConnection.HTTP_OK) {
                     return@withContext "Error al descargar APK: HTTP ${apkConnection.responseCode}"
@@ -377,6 +371,44 @@ object SelfUpdater {
             Log.w("SelfUpdater", "Error al programar timeout de instalación: ${e.message}")
             return false
         }
+    }
+
+    /**
+     * Abre una conexión HTTP para descarga siguiendo redirecciones cross-domain (301, 302, 307, 308).
+     * En Android, HttpURLConnection no sigue redirecciones entre distintos dominios
+     * (por ejemplo de github.com a release-assets.githubusercontent.com / S3 / Azure Blob),
+     * cortando con HTTP 302 a menos que se siga manualmente la cabecera 'Location'.
+     */
+    private fun openDownloadConnection(initialUrl: String): HttpURLConnection {
+        var currentUrl = initialUrl
+        var redirects = 0
+        while (redirects < 7) {
+            val conn = URL(currentUrl).openConnection() as HttpURLConnection
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 20_000
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty("User-Agent", "LockSuite-Updater/1.0")
+            conn.connect()
+            val code = conn.responseCode
+            if (code == HttpURLConnection.HTTP_MOVED_PERM ||
+                code == HttpURLConnection.HTTP_MOVED_TEMP ||
+                code == HttpURLConnection.HTTP_SEE_OTHER ||
+                code == 307 || code == 308) {
+                val newLocation = conn.getHeaderField("Location")
+                if (!newLocation.isNullOrBlank()) {
+                    conn.disconnect()
+                    currentUrl = if (newLocation.startsWith("http://") || newLocation.startsWith("https://")) {
+                        newLocation
+                    } else {
+                        URL(URL(currentUrl), newLocation).toString()
+                    }
+                    redirects++
+                    continue
+                }
+            }
+            return conn
+        }
+        return URL(currentUrl).openConnection() as HttpURLConnection
     }
 
     private fun fetchVersionManifest(): String {

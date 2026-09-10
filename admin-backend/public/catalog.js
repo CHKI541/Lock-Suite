@@ -58,27 +58,16 @@ window.LOCKSUITE_CATALOG = {
         "mlstatic.com"
       ],
       "block": [
-        "www.mercadolibre.com",
-        "www.mercadolibre.com.ar",
-        "listado.mercadolibre.com",
-        "listado.mercadolibre.com.ar",
         "click1.mercadolibre.com",
         "click1.mercadolibre.com.ar",
+        "listado.mercadolibre.com",
+        "listado.mercadolibre.com.ar",
         "mobile.mercadolibre.com",
         "mobile.mercadolibre.com.ar",
         "snoopy.mercadolibre.com",
         "snoopy.mercadolibre.com.ar",
-        "ofertas.mercadopago.com",
-        "promociones.mercadopago.com",
-        "deals.mercadopago.com",
-        "beneficios.mercadopago.com",
-        "descuentos.mercadopago.com",
-        "loyalty.mercadopago.com",
-        "matt.mercadopago.com",
-        "ofertas.mercadopago.com.ar",
-        "promociones.mercadopago.com.ar",
-        "beneficios.mercadopago.com.ar",
-        "descuentos.mercadopago.com.ar"
+        "www.mercadolibre.com",
+        "www.mercadolibre.com.ar"
       ],
       "note": "PAGOS: probar una transferencia real en simulación antes de pasar a estricto."
     },

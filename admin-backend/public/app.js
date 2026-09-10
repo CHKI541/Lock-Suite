@@ -1753,7 +1753,7 @@ const whitelistPushAllBtn = document.getElementById("whitelist-push-all-btn");
 const WHITELIST_BUILTIN = [
     { pkg: "com.waze", label: "Waze", allow: 3, block: 5 },
     { pkg: "com.didiglobal.passenger", label: "DiDi", allow: 4, block: 6 },
-    { pkg: "com.mercadopago.wallet", label: "Mercado Pago", allow: 5, block: 21 },
+    { pkg: "com.mercadopago.wallet", label: "Mercado Pago", allow: 5, block: 10 },
     { pkg: "com.google.android.apps.walletnfcrel", label: "Google Wallet / Pay", allow: 4, block: 0 },
     { pkg: "ar.com.personalpay", label: "Personal Pay", allow: 4, block: 0 },
     { pkg: "com.google.android.gm", label: "Gmail", allow: 3, block: 0 },

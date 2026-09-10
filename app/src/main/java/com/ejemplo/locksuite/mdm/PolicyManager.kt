@@ -36,7 +36,12 @@ class PolicyManager(private val context: Context) {
             "listado.mercadolibre.com.ar",
             "mobile.mercadolibre.com.ar",
             "snoopy.mercadolibre.com.ar",
-            "www.mercadolibre.com.ar"
+            "www.mercadolibre.com.ar",
+            "click1.mercadolibre.com",
+            "listado.mercadolibre.com",
+            "mobile.mercadolibre.com",
+            "snoopy.mercadolibre.com",
+            "www.mercadolibre.com"
         )
     }
 

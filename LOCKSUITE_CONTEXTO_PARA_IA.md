@@ -1408,6 +1408,13 @@ La salida: **`EnrollmentProfiles.POST_ALTA`** marca esas dos, el QR aplica el pe
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
+**10/9 (noche 2) — Antigravity: Integración completa de parches Claude (B.62 a B.66), corrección de constructor en DomainRuleManager, UTF-8 en tools, y ajuste de dominios en Mercado Pago.**
+
+1. **Integración de parches y compilación real con Gradle:** Se aplicaron limpiamente los 3 parches de Claude (`0001`, `0002`, `0003`). Al compilar con `./gradlew.bat compileReleaseKotlin`, se detectó que `DomainRuleManager` requería dos parámetros en su constructor primario; se agregó el constructor secundario `constructor(context: Context)` resolviendo las llamadas desde `LockSuiteFirebaseService` y `FirebaseDeviceSync`.
+2. **Terminal Windows UTF-8:** Se corrigió `tools/check_panel_commands.py` para reconfigurar `sys.stdout` en UTF-8 y evitar excepciones por caracteres Unicode (emojis).
+3. **Ajuste de Mercado Pago pedido por el dueño:** En `WhitelistCatalog.kt`, se retiraron los 11 subdominios propios de Mercado Pago (`ofertas`, `promociones`, `beneficios`, `descuentos`, `deals`, `loyalty`, `matt`) de la lista de bloqueo incondicional (`block`), dejándolos permitidos. En su lugar, la lista de bloqueo de Mercado Pago quedó restringida estrictamente a los dominios del marketplace de Mercado Libre que se bloquean con el switch «Bloqueo de Mercado Libre en Mercado Pago» (`click1`, `listado`, `mobile`, `snoopy`, `www` tanto en `.com.ar` como en `.com`). Se sincronizó `MERCADO_LIBRE_MP_DOMAINS` en `PolicyManager.kt`, `WHITELIST_BUILTIN` en `app.js` (`block: 10`) y se regeneró `catalog.js`.
+4. **Verificación:** Los 6 chequeos de Python (`check_whitelist_sync.py`, `check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`) pasaron con código de salida 0.
+
 **10/9 (noche) — Claude: revisión de la Tienda con evidencia, y rediseño del panel y de la app en una sola pantalla por celular. Ver B.62 a B.66.**
 
 Pedido del dueño, en tres partes: revisar que lo que hizo Antigravity con la Tienda esté *"perfecto, cómodo y sin bugs"*; *"locksuite y el panel web quedaron muy mareadores y cosas en distintas pestañas — hacelo más cómodo y unificado, rediseñá todo desde cero sin arruinar el código"* con una ficha por celular que se abra en pestaña nueva; y a mitad de camino, dos agregados: *"aunque hagamos modo lista negra, las apps mismas que permita tienen que quedar bloqueados sus dominios no kosher"* y *"una sección para decidir de forma global qué dominios son kosher y cuáles no en cada app, poné lo que ya hiciste así puedo corregir si te equivocaste"*.

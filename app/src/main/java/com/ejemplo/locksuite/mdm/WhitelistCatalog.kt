@@ -248,19 +248,12 @@ object WhitelistCatalog {
                 "mercadolibre.com.ar", "mlstatic.com"
             ),
             block = listOf(
-                // El marketplace: catálogo, búsqueda y ofertas. Es la parte "navegable".
-                "www.mercadolibre.com", "www.mercadolibre.com.ar",
-                "listado.mercadolibre.com", "listado.mercadolibre.com.ar",
+                // Solo los dominios de Mercado Libre que se bloquean con el switch "bloquear mercado libre en mercado pago"
                 "click1.mercadolibre.com", "click1.mercadolibre.com.ar",
+                "listado.mercadolibre.com", "listado.mercadolibre.com.ar",
                 "mobile.mercadolibre.com", "mobile.mercadolibre.com.ar",
                 "snoopy.mercadolibre.com", "snoopy.mercadolibre.com.ar",
-                // Ofertas y beneficios dentro de la propia Mercado Pago.
-                "ofertas.mercadopago.com", "promociones.mercadopago.com",
-                "deals.mercadopago.com", "beneficios.mercadopago.com",
-                "descuentos.mercadopago.com", "loyalty.mercadopago.com",
-                "matt.mercadopago.com",
-                "ofertas.mercadopago.com.ar", "promociones.mercadopago.com.ar",
-                "beneficios.mercadopago.com.ar", "descuentos.mercadopago.com.ar"
+                "www.mercadolibre.com", "www.mercadolibre.com.ar"
             ),
             note = "PAGOS: probar una transferencia real en simulación antes de pasar a estricto."
         ),

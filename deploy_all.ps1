@@ -87,6 +87,7 @@ if (-not (Test-Path $serviceAccountKey)) {
 }
 
 $env:GOOGLE_APPLICATION_CREDENTIALS = $serviceAccountKey
+$env:FUNCTIONS_DISCOVERY_TIMEOUT = "60"
 Push-Location (Join-Path $projectRoot "admin-backend")
 try {
     # IMPORTANTE: Desplegar Hosting y Database primero. Si las Funciones fallan

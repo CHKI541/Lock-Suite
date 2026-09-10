@@ -22,6 +22,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
 import com.ejemplo.locksuite.mdm.CaptivePortalPolicy
+import com.ejemplo.locksuite.mdm.EmbeddedBrowserDetector
 import com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy
 import com.ejemplo.locksuite.mdm.PhotoPickerPolicy
 import com.ejemplo.locksuite.mdm.PolicyManager

@@ -1,6 +1,7 @@
 package com.ejemplo.locksuite.receiver
 
 import android.app.admin.DeviceAdminReceiver
+import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
 import android.os.PersistableBundle
@@ -56,7 +57,7 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
         super.onProfileProvisioningComplete(context, intent)
         try {
             val extras: PersistableBundle? =
-                intent.getParcelableExtra(EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE)
+                intent.getParcelableExtra(DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE)
             val nivel = extras?.getString(EXTRA_NIVEL_PERFIL)
 
             if (nivel.isNullOrBlank()) {

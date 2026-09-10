@@ -1234,6 +1234,38 @@ class PolicyManager(private val context: Context) {
         return true
     }
 
+    // ── DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60) ──
+    //
+    // Dos interruptores separados, y la separación es la protección: encender el
+    // detector NO alcanza para que empiece a bloquear. Ver EmbeddedBrowserDetector.
+
+    fun setEmbeddedBrowserFinder(enabled: Boolean): Boolean {
+        if (deferIfSuspended(EmbeddedBrowserDetector.KEY_ENABLED, enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean(EmbeddedBrowserDetector.KEY_ENABLED, enabled).apply()
+        return true
+    }
+
+    /**
+     * ⚠️ Apagar la simulación es lo que hace que el detector BLOQUEE de verdad.
+     *
+     * No hay que apagarla hasta haber mirado la auditoría en el panel unos días: es
+     * un detector estructural sobre un universo de apps abierto, y un falso positivo
+     * rompe una app sin que nadie sepa por qué (B.43, B.50, B.15).
+     */
+    fun setEmbeddedBrowserSimulation(enabled: Boolean): Boolean {
+        if (deferIfSuspended(EmbeddedBrowserDetector.KEY_SIMULATION, enabled)) return true
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean(EmbeddedBrowserDetector.KEY_SIMULATION, enabled).apply()
+        return true
+    }
+
+    fun isEmbeddedBrowserFinderEnabled(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean(EmbeddedBrowserDetector.KEY_ENABLED, false)
+
+    fun isEmbeddedBrowserSimulation(): Boolean =
+        PrefsHelper.getMdmPrefs(context).getBoolean(EmbeddedBrowserDetector.KEY_SIMULATION, true)
+
     /** Cuántas veces se abrió la ventana del portal. Visibilidad, no bloqueo. */
     fun getCaptivePortalOpens(): Int =
         PrefsHelper.getMdmPrefs(context).getInt("captive_portal_opens", 0)

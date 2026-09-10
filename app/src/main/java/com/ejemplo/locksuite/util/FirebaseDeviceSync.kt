@@ -868,6 +868,72 @@ object FirebaseDeviceSync {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Firma de la última auditoría publicada, para no reescribir el mismo nodo. */
+    @Volatile private var lastIabSignature: String = ""
+
+    /**
+     * Publica al panel el estado del detector y lo que anotó.
+     *
+     * **La auditoría es la parte que hace usable el modo entero**, igual que en la
+     * lista blanca (B.53): sin ella, encender el detector es apostar a ciegas sobre
+     * un universo de apps abierto. Con ella, se enciende en simulación, se usa el
+     * equipo unos días, y el panel muestra la lista exacta de lo que se habría
+     * bloqueado, con el motivo de cada una.
+     *
+     * Mismo criterio de ahorro que `syncWhitelistState`: si no cambió nada, se
+     * publican solo los escalares y se saltea el nodo grande. No gastar datos
+     * móviles del usuario final por costumbre (B.30).
+     */
+    fun syncEmbeddedBrowserState(context: Context) {
+        val ctx = context.applicationContext
+        try {
+            val pm = PolicyManager(ctx)
+            val anotado = com.ejemplo.locksuite.mdm.EmbeddedBrowserDetector.instantanea()
+            val firma = "${anotado.size}:${anotado.sumOf { it.veces }}"
+            val escalares = mapOf(
+                "iabFinderEnabled" to pm.isEmbeddedBrowserFinderEnabled(),
+                "iabFinderSimulation" to pm.isEmbeddedBrowserSimulation(),
+                "iabFinderCount" to anotado.size,
+                "iabFinderDropped" to com.ejemplo.locksuite.mdm.EmbeddedBrowserDetector.descartadas()
+            )
+            if (firma == lastIabSignature) {
+                withAuth { writeFields(ctx, escalares) }
+                return
+            }
+            lastIabSignature = firma
+            val mapa = mutableMapOf<String, Any>()
+            for (a in anotado) {
+                // Las claves de Firebase no admiten `.` — mismo patrón que la
+                // auditoría de la lista blanca y que las solicitudes de apps.
+                mapa[a.packageName.replace(".", "_")] = mapOf(
+                    "packageName" to a.packageName,
+                    "reason" to a.motivo,
+                    "blocked" to a.bloqueado,
+                    "hits" to a.veces
+                )
+            }
+            withAuth {
+                writeFields(ctx, escalares)
+                try {
+                    FirebaseDatabase.getInstance()
+                        .getReference("devices/${deviceId(ctx)}/embeddedBrowserAudit")
+                        .setValue(mapa)
+                        .addOnFailureListener { e ->
+                            android.util.Log.e("FirebaseDeviceSync", "IAB: no se pudo publicar la auditoría: ${e.message}", e)
+                        }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FirebaseDeviceSync", "IAB: syncEmbeddedBrowserState falló: ${e.message}", e)
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // SOLICITUDES DE APPS (10/9/2026, B.59) — ver mdm/AppRequestManager.kt
     // ─────────────────────────────────────────────────────────────────────────
     //

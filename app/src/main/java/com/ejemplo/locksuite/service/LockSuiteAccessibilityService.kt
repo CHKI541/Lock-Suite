@@ -107,6 +107,25 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         /** Cada cuánto se puede re-armar la escalera de reintentos de WebView. */
         private const val WEBVIEW_REARM_MS = 2_000L
 
+        /**
+         * Antirrebote del detector estructural de navegadores embebidos (B.60).
+         *
+         * Es alto a propósito. El detector recorre el árbol de vistas, y `B.13` pasó
+         * una sesión entera sacando del camino caliente cosas razonables en sí mismas
+         * que mataban la fluidez del equipo. Además solo corre en cambio de ventana:
+         * un usuario no abre un navegador embebido nuevo cada segundo y medio.
+         */
+        private const val IAB_REARM_MS = 1_500L
+
+        /**
+         * Cuántas cadenas como mucho junta el retrato de cada tipo (ids, editables,
+         * descripciones). Sin este tope, una pantalla con doscientos campos armaría
+         * doscientas cadenas en el hilo principal en cada cambio de ventana. Con
+         * treinta alcanza: la barra de direcciones y los controles de un navegador
+         * están arriba de todo, y el recorrido es en profundidad desde la raíz.
+         */
+        private const val MAX_IAB_STRINGS = 30
+
         /** Pausa tras un rebote fallido en Mercado Pago, para no encadenar "atrás". */
         private const val MP_BACKOFF_MS = 4_000L
 
@@ -354,6 +373,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val captivePortalGuard: Boolean,
         /** Tapar las imágenes DE esa ventana. Se puede apagar sin apagar el guard. */
         val captivePortalCoverImages: Boolean,
+        /** Detector estructural de navegadores embebidos (B.60). APAGADO de fábrica. */
+        val iabFinder: Boolean,
+        /** El detector solo anota y no bloquea. ENCENDIDO de fábrica: ver B.60. */
+        val iabSimulation: Boolean,
         val takenAt: Long
     )
 
@@ -399,6 +422,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             // 8/9: si un portal real queda inusable con las imágenes tapadas, el
             // administrador apaga SOLO esto desde el panel y el resto del guard sigue.
             captivePortalCoverImages = p.getBoolean(CaptivePortalPolicy.KEY_COVER_IMAGES, true),
+            // B.60 — APAGADO de fábrica, y en SIMULACIÓN de fábrica. Los dos valores
+            // por omisión son deliberados y van en direcciones distintas a propósito:
+            // encender el detector no puede alcanzar para que empiece a bloquear. El
+            // falso positivo de un detector estructural rompe una app y nadie sabe por
+            // qué — este proyecto ya lo pagó en B.43, B.50 y B.15.
+            iabFinder = p.getBoolean(EmbeddedBrowserDetector.KEY_ENABLED, false),
+            iabSimulation = p.getBoolean(EmbeddedBrowserDetector.KEY_SIMULATION, true),
             takenAt = SystemClock.elapsedRealtime()
         )
         cachedFlags = fresh
@@ -1202,9 +1232,172 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (!WebViewBlockManager.isBlocked(this, packageName)) return
+        if (!WebViewBlockManager.isBlocked(this, packageName)) {
+            // ── B.60 — DETECTOR ESTRUCTURAL DE NAVEGADORES EMBEBIDOS ──
+            //
+            // Acá abajo está el agujero que B.44 dejó anotado: si la app no está
+            // marcada en WebViewBlockManager, hasta hoy se volvía sin mirar nada. O
+            // sea que la postura por omisión era PERMITIR, y cada app nueva con un
+            // navegador adentro era "una en la que no pensamos".
+            //
+            // El detector va JUSTO ACÁ y no antes, y eso importa: las dos ramas de
+            // arriba (proveedor de WebView y navegador declarado) siguen mandando
+            // igual que siempre, así que esto no puede cambiar el comportamiento de
+            // nada que ya funcionaba — solo cubre el camino que antes no hacía nada.
+            maybeDetectEmbeddedBrowser(packageName, eventType)
+            return
+        }
         checkAndBlockWebViewInTree(packageName, eventType)
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DETECTOR ESTRUCTURAL DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60)
+    // Ver mdm/EmbeddedBrowserDetector.kt: toda la decisión vive allá, en una
+    // función pura con banco de pruebas. Acá está solo el retrato y el freno.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private var lastIabScanPkg: String? = null
+    private var lastIabScanAt = 0L
+
+    private fun maybeDetectEmbeddedBrowser(packageName: String, eventType: Int) {
+        val f = flags()
+        if (!f.iabFinder) return
+
+        // ⚠️ SOLO en cambio de ventana. `onAccessibilityEvent` corre en el HILO
+        // PRINCIPAL y el sistema lo llama hasta diez veces por segundo; un detector
+        // que recorra el árbol en cada evento es exactamente lo que B.13 tuvo que
+        // sacar de acá. Un navegador embebido aparece al abrirse una ventana.
+        if (eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+
+        val now = SystemClock.elapsedRealtime()
+        if (lastIabScanPkg == packageName && now - lastIabScanAt < IAB_REARM_MS) return
+        lastIabScanPkg = packageName
+        lastIabScanAt = now
+
+        val root = rootInActiveWindow ?: return
+        val retrato = try {
+            buildIabRetrato(root, packageName)
+        } catch (e: Exception) {
+            Log.w(TAG, "IAB: no se pudo armar el retrato de $packageName: ${e.message}")
+            null
+        } finally {
+            root.recycle()
+        } ?: return
+
+        val veredicto = EmbeddedBrowserDetector.evaluar(retrato)
+        if (veredicto != EmbeddedBrowserDetector.Veredicto.NAVEGADOR_EMBEBIDO) return
+
+        val motivo = EmbeddedBrowserDetector.motivo(retrato)
+
+        // Se publica SIEMPRE, bloquee o no. Es la mitad que hizo usable el modo lista
+        // blanca en B.53: sin la lista de lo que habría bloqueado, encender esto es
+        // apostar a ciegas sobre un universo de apps abierto.
+        EmbeddedBrowserDetector.anotar(packageName, motivo, bloqueado = !f.iabSimulation)
+
+        if (f.iabSimulation) {
+            Log.i(TAG, "IAB (simulación): $packageName sería bloqueado — $motivo")
+            return
+        }
+        Log.w(TAG, "🚫 IAB: navegador embebido en $packageName — $motivo")
+        triggerBlock(packageName)
+    }
+
+    /**
+     * Recorre el árbol UNA vez y arma el retrato. Con los mismos topes que el resto
+     * de los recorridos del archivo (`MAX_TREE_DEPTH`, `MAX_NODES_PER_SCAN`), más
+     * topes propios sobre cuántas cadenas se juntan: sin ellos, una pantalla con
+     * doscientos campos armaría doscientas cadenas en el hilo principal.
+     */
+    private fun buildIabRetrato(
+        root: AccessibilityNodeInfo,
+        packageName: String
+    ): EmbeddedBrowserDetector.Retrato {
+        nodeBudget = MAX_NODES_PER_SCAN
+        val ids = ArrayList<String>(MAX_IAB_STRINGS)
+        val editables = ArrayList<String>(MAX_IAB_STRINGS)
+        val descripciones = ArrayList<String>(MAX_IAB_STRINGS)
+        val pantalla = Rect()
+        root.getBoundsInScreen(pantalla)
+        val areaPantalla = (pantalla.width().toLong() * pantalla.height().toLong()).coerceAtLeast(1L)
+        val mayorWebView = longArrayOf(0L)
+        var hayWebView = false
+
+        hayWebView = walkIab(root, 0, ids, editables, descripciones, mayorWebView)
+
+        return EmbeddedBrowserDetector.Retrato(
+            packageName = packageName,
+            activityClass = currentActivityClass(root),
+            // El guard de portal cautivo ya sabe reconocer esa ventana; se reusa su
+            // señal en vez de estrenar una segunda forma de detectarla, que es como
+            // se termina con dos detecciones que no coinciden.
+            esPortalCautivo = captivePortalScan ||
+                CaptivePortalPolicy.isCaptivePortalWindow(packageName, root.className?.toString()),
+            tieneWebView = hayWebView,
+            fraccionWebView = (mayorWebView[0].toDouble() / areaPantalla.toDouble()).toFloat(),
+            idsDeVista = ids,
+            textosEditables = editables,
+            descripciones = descripciones
+        )
+    }
+
+    private fun walkIab(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        ids: ArrayList<String>,
+        editables: ArrayList<String>,
+        descripciones: ArrayList<String>,
+        mayorWebView: LongArray
+    ): Boolean {
+        if (depth > MAX_TREE_DEPTH) return false
+        if (nodeBudget-- <= 0) return false
+
+        var hayWebView = false
+        val clase = node.className?.toString()?.lowercase() ?: ""
+        if (clase.contains("webview") || clase.contains("webkit") ||
+            clase.contains("chromium") || clase.contains("renderframe") || clase.contains("xwalk")
+        ) {
+            hayWebView = true
+            val r = Rect()
+            node.getBoundsInScreen(r)
+            val area = r.width().toLong() * r.height().toLong()
+            if (area > mayorWebView[0]) mayorWebView[0] = area
+        }
+
+        if (ids.size < MAX_IAB_STRINGS) {
+            node.viewIdResourceName?.let { ids.add(it.lowercase()) }
+        }
+        if (descripciones.size < MAX_IAB_STRINGS) {
+            node.contentDescription?.toString()?.let { if (it.isNotBlank()) descripciones.add(it.lowercase()) }
+        }
+        // Solo los EDITABLES. Un texto de solo lectura con una dirección adentro es el
+        // subtítulo "fuente: diario.com" que muestra medio catálogo de apps; tomarlo
+        // como barra de direcciones sería el cuarto falso positivo caro del proyecto.
+        if (node.isEditable && editables.size < MAX_IAB_STRINGS) {
+            node.text?.toString()?.let { if (it.isNotBlank()) editables.add(it) }
+        }
+
+        for (i in 0 until node.childCount) {
+            val hijo = node.getChild(i) ?: continue
+            try {
+                if (walkIab(hijo, depth + 1, ids, editables, descripciones, mayorWebView)) hayWebView = true
+            } finally {
+                hijo.recycle()
+            }
+        }
+        return hayWebView
+    }
+
+    /** Clase de la actividad en pantalla, si se puede saber. Cadena vacía si no. */
+    private fun currentActivityClass(root: AccessibilityNodeInfo): String =
+        try {
+            // `root.className` de la ventana suele ser la clase de la actividad o del
+            // layout raíz. No siempre está, y por eso el detector nunca depende SOLO
+            // de esto: las exclusiones tienen además su propia señal (el flag de
+            // portal cautivo, y el nombre de paquete).
+            root.className?.toString() ?: ""
+        } catch (e: Exception) {
+            ""
+        }
 
     private val webViewRetryRunnables = mutableListOf<Runnable>()
     private var lastRetryArmPkg: String? = null

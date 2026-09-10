@@ -67,6 +67,15 @@ const ALLOWED_COMMANDS = new Set([
   // panel lo manda dentro del mismo flujo de aprobacion que si cambia politicas y
   // pedir el PIN una sola vez para todo el flujo es lo correcto.
   "SYNC_APP_REQUESTS",
+  // ── DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60) ──
+  // Ver app/mdm/EmbeddedBrowserDetector.kt. Son DOS interruptores separados a
+  // proposito: encender el detector no alcanza para que bloquee. DISABLE_IAB_SIMULATION
+  // es el unico que lo hace bloquear de verdad, y no hay que tocarlo sin haber mirado
+  // la auditoria del panel unos dias — un falso positivo rompe una app y nadie sabe
+  // por que (B.43, B.50, B.15).
+  "ENABLE_IAB_FINDER", "DISABLE_IAB_FINDER",
+  "ENABLE_IAB_SIMULATION", "DISABLE_IAB_SIMULATION",
+  "CLEAR_IAB_AUDIT",
   "BLOCK_MP_OFFERS_ACCESSIBILITY", "UNBLOCK_MP_OFFERS_ACCESSIBILITY",
   "BLOCK_MP_OFFERS_VPN", "UNBLOCK_MP_OFFERS_VPN",
   "BLOCK_MERCADOPAGO_OFFERS", "UNBLOCK_MERCADOPAGO_OFFERS",

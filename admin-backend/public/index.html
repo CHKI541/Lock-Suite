@@ -252,6 +252,40 @@
             </div>
           </div>
 
+          <!-- ════════════════════════════════════════════════════════════════
+               DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60)
+               Ver app/mdm/EmbeddedBrowserDetector.kt. Va en esta pestaña y no en
+               Ajustes porque es lo mismo que la lista blanca —qué se bloquea y qué
+               no— y porque el flujo es idéntico: encender, mirar la simulación
+               unos días, y recién ahí apagar la simulación.
+               ════════════════════════════════════════════════════════════════ -->
+          <div class="sidebar-card" style="margin-bottom: 24px;">
+            <h2>🕵️ Detector de navegadores embebidos</h2>
+            <p class="hint-text" style="font-size: 13px; color: var(--text-gray); margin-top: 4px; margin-bottom: 8px;">
+              El bloqueo de WebView de hoy es <strong>app por app</strong>: hay que acertar de antemano
+              cuáles traen un navegador adentro, y siempre aparece una nueva. Esto lo detecta
+              <strong>por la forma de la pantalla</strong> —si hay una barra de direcciones o los
+              controles de un navegador— así que funciona con apps en las que nadie pensó.
+              No usa ninguna lista blanca.
+            </p>
+            <p class="hint-text" style="font-size: 12px; color: var(--accent); margin-bottom: 16px;">
+              ⚠️ <strong>Dejalo en simulación unos días antes de que bloquee.</strong> En simulación no
+              rompe nada: solo anota abajo qué habría bloqueado, y con qué motivo. Un falso positivo
+              deja una app sin funcionar y nadie sabe por qué.
+            </p>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+              <select id="iab-device" style="flex:1; min-width:200px; background: var(--navy-dark); border:1px solid var(--navy-light); color: var(--text-light); padding:9px 12px; border-radius:8px;"></select>
+              <button id="iab-toggle-btn" class="action-btn" style="background: var(--accent); color: var(--navy-dark); font-weight:bold; border:none; padding:9px 16px; border-radius:8px; cursor:pointer;">Encender detector</button>
+              <button id="iab-sim-btn" class="action-btn" style="background: var(--navy-medium); color: var(--text-light); font-weight:bold; border:1px solid var(--navy-light); padding:9px 16px; border-radius:8px; cursor:pointer;">Pasar a bloquear de verdad</button>
+              <button id="iab-clear-btn" class="action-btn" style="background: var(--navy-medium); color: var(--text-gray); border:1px solid var(--navy-light); padding:9px 16px; border-radius:8px; cursor:pointer;">Vaciar la lista</button>
+            </div>
+            <p id="iab-status-msg" style="font-size: 12px; margin-bottom: 12px; min-height: 18px; color: var(--accent);"></p>
+            <h3 style="font-size: 14px; margin-bottom: 8px;">Lo que se detectó en ese celular</h3>
+            <div id="iab-audit-list" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px;">
+              <p class="loading-text" style="grid-column:1/-1;">Elegí un celular.</p>
+            </div>
+          </div>
+
           <!-- Agregar una app que no está en el catálogo de fábrica -->
           <div class="sidebar-card">
             <h2>Agregar una app que no está en la lista</h2>
@@ -904,6 +938,6 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
-  <script src="app.js?v=35"></script>
+  <script src="app.js?v=36"></script>
 </body>
 </html>

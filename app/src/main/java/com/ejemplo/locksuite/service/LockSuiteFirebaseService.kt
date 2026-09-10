@@ -597,6 +597,21 @@ class LockSuiteFirebaseService : FirebaseMessagingService() {
                     com.ejemplo.locksuite.mdm.WhitelistManager.clearAudit()
                     true
                 }
+                // ── DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60) ──
+                // Dos interruptores separados a propósito: encender el detector NO
+                // alcanza para que bloquee. Ver mdm/EmbeddedBrowserDetector.kt.
+                "ENABLE_IAB_FINDER" -> policyManager.setEmbeddedBrowserFinder(true)
+                "DISABLE_IAB_FINDER" -> policyManager.setEmbeddedBrowserFinder(false)
+                "ENABLE_IAB_SIMULATION" -> policyManager.setEmbeddedBrowserSimulation(true)
+                // ⚠️ Este es el que hace que empiece a bloquear de verdad. No tocarlo
+                // sin haber mirado la auditoría del panel unos días primero.
+                "DISABLE_IAB_SIMULATION" -> policyManager.setEmbeddedBrowserSimulation(false)
+                "CLEAR_IAB_AUDIT" -> {
+                    com.ejemplo.locksuite.mdm.EmbeddedBrowserDetector.limpiarAuditoria()
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync
+                        .syncEmbeddedBrowserState(applicationContext)
+                    true
+                }
                 "BLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(true)
                 "UNBLOCK_CONTACT_PHOTO_PICKER" -> policyManager.setContactPhotoPickerBlocked(false)
                 "ENABLE_ACC_BOUNCE_SETTINGS" -> policyManager.setAccBounceSettings(true)

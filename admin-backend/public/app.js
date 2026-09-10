@@ -81,6 +81,10 @@ function startRealtimeSync() {
         // El número de la pestaña se actualiza siempre; la lista, solo si está abierta.
         typeof updateAppRequestsBadge === "function" && updateAppRequestsBadge();
         requestsContainer && !requestsContainer.classList.contains("hidden") && renderAppRequests();
+        // B.60 — la auditoría del detector vive en el mismo árbol; se refresca sola
+        // mientras la pestaña esté abierta, que es justo cuando se está mirando.
+        whitelistContainer && !whitelistContainer.classList.contains("hidden") &&
+            typeof renderIabAudit === "function" && renderIabAudit();
         // Si hay un grupo abierto, refrescar la lista de dispositivos seleccionables por si cambiaron de nombre o estado
         if (selectedGroupId && currentGroupsData[selectedGroupId]) {
             renderGroupDevicesSelector(currentGroupsData[selectedGroupId]);
@@ -1778,7 +1782,7 @@ const mainNavTabs = [
     { btn: mainTabArchived, container: archivedContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
     { btn: mainTabPresets, container: presetsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); loadPresetsList && loadPresetsList(); } },
     { btn: mainTabGlobalSettings, container: globalSettingsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); } },
-    { btn: mainTabWhitelist, container: whitelistContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderWhitelistCatalog(); } },
+    { btn: mainTabWhitelist, container: whitelistContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderWhitelistCatalog(); renderIabAudit(); } },
     { btn: mainTabRequests, container: requestsContainer, onOpen: () => { closeDeviceSidebar(); closeGroupSidebar(); renderAppRequests(); } }
 ];
 
@@ -3527,6 +3531,155 @@ async function syncStoreAllowedPackage(pkg, permitir) {
     // que se actualiza solo. No se toca acá para no pisar lo que el usuario esté
     // escribiendo en ese momento.
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DETECTOR DE NAVEGADORES EMBEBIDOS (10/9/2026, B.60)
+// Ver app/mdm/EmbeddedBrowserDetector.kt
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Dos botones separados, y la separación ES la protección: "Encender detector"
+// no hace que bloquee. Mientras la simulación esté puesta, el detector solo
+// anota — y esa lista es lo único con lo que se puede decidir si apagarla sin
+// romper el equipo. Es el mismo flujo que hizo usable el modo lista blanca en
+// B.53, y acá pesa más porque el universo de apps es abierto.
+
+const iabDeviceSelect = document.getElementById("iab-device");
+const iabToggleBtn = document.getElementById("iab-toggle-btn");
+const iabSimBtn = document.getElementById("iab-sim-btn");
+const iabClearBtn = document.getElementById("iab-clear-btn");
+const iabAuditList = document.getElementById("iab-audit-list");
+const iabStatusMsg = document.getElementById("iab-status-msg");
+
+function setIabStatus(msg, isError) {
+    if (!iabStatusMsg) return;
+    iabStatusMsg.textContent = msg || "";
+    iabStatusMsg.style.color = isError ? "var(--alert-red)" : "var(--accent)";
+    if (msg) setTimeout(() => { if (iabStatusMsg.textContent === msg) iabStatusMsg.textContent = ""; }, 8000);
+}
+
+/** Mismo desplegable que el de perfiles (B.58): elegir el celular, no pegar un ID. */
+function renderIabDeviceSelect() {
+    if (!iabDeviceSelect) return;
+    const previo = iabDeviceSelect.value || selectedDeviceId || "";
+    const entradas = Object.entries(currentDevicesData || {});
+    iabDeviceSelect.innerHTML = "";
+    if (entradas.length === 0) {
+        const o = document.createElement("option");
+        o.value = ""; o.textContent = "— no hay celulares dados de alta —";
+        iabDeviceSelect.appendChild(o);
+        return;
+    }
+    const vacio = document.createElement("option");
+    vacio.value = ""; vacio.textContent = "— elegí un celular —";
+    iabDeviceSelect.appendChild(vacio);
+    entradas.forEach(([id, d]) => {
+        const o = document.createElement("option");
+        o.value = id;
+        const nombre = d.name || (d.info && d.info.name) || d.model || (d.info && d.info.model) || id;
+        const on = field(d, "iabFinderEnabled", false);
+        const sim = field(d, "iabFinderSimulation", true);
+        o.textContent = nombre + (on ? (sim ? " · simulando" : " · BLOQUEANDO") : " · apagado");
+        if (id === previo) o.selected = true;
+        iabDeviceSelect.appendChild(o);
+    });
+}
+
+function renderIabAudit() {
+    renderIabDeviceSelect();
+    if (!iabAuditList) return;
+    const id = iabDeviceSelect && iabDeviceSelect.value;
+    const dev = id && currentDevicesData ? currentDevicesData[id] : null;
+
+    const on = dev ? field(dev, "iabFinderEnabled", false) : false;
+    const sim = dev ? field(dev, "iabFinderSimulation", true) : true;
+    if (iabToggleBtn) iabToggleBtn.textContent = on ? "Apagar detector" : "Encender detector";
+    if (iabSimBtn) {
+        iabSimBtn.textContent = sim ? "Pasar a bloquear de verdad" : "Volver a simulación";
+        // No se puede pasar a bloquear un detector que está apagado: el botón lo dice
+        // en vez de dejar mandar un comando que no hace nada visible (B.42).
+        iabSimBtn.disabled = !on;
+        iabSimBtn.style.opacity = on ? "1" : "0.45";
+    }
+
+    if (!dev) {
+        iabAuditList.innerHTML = '<p class="loading-text" style="grid-column:1/-1;">Elegí un celular.</p>';
+        return;
+    }
+    const audit = dev.embeddedBrowserAudit || {};
+    const filas = Object.values(audit).filter(Boolean)
+        .sort((a, b) => (b.hits || 0) - (a.hits || 0));
+    iabAuditList.innerHTML = "";
+    if (filas.length === 0) {
+        iabAuditList.innerHTML = '<p class="loading-text" style="grid-column:1/-1;">' +
+            (on ? "Todavía no se detectó ningún navegador embebido en este celular."
+                : "El detector está apagado en este celular.") + "</p>";
+        return;
+    }
+    const descartadas = field(dev, "iabFinderDropped", 0);
+    filas.forEach(f => {
+        const card = document.createElement("div");
+        card.className = "group-card";
+        const color = f.blocked ? "var(--alert-red)" : "var(--accent)";
+        const etiqueta = f.blocked ? "bloqueada" : "solo anotada";
+        card.innerHTML =
+            '<div style="display:flex; justify-content:space-between; gap:8px;">' +
+              '<strong class="js-pkg" style="font-size:13px; word-break:break-all;"></strong>' +
+              '<span style="font-size:11px; font-weight:bold; white-space:nowrap; color:' + color + ';">' + etiqueta + '</span>' +
+            '</div>' +
+            '<div class="js-motivo" style="font-size:12px; color:var(--text-gray); margin-top:6px;"></div>' +
+            '<div style="font-size:11px; color:var(--text-gray); margin-top:4px;">' + (f.hits || 0) + ' vez/veces</div>';
+        // textContent: el nombre del paquete y el motivo vienen del equipo.
+        card.querySelector(".js-pkg").textContent = f.packageName || "?";
+        card.querySelector(".js-motivo").textContent = f.reason || "";
+        iabAuditList.appendChild(card);
+    });
+    if (descartadas > 0) {
+        const aviso = document.createElement("p");
+        aviso.className = "loading-text";
+        aviso.style.gridColumn = "1/-1";
+        aviso.textContent = "Y " + descartadas + " app(s) más que no entraron por el tope de la lista.";
+        iabAuditList.appendChild(aviso);
+    }
+}
+
+iabDeviceSelect && iabDeviceSelect.addEventListener("change", renderIabAudit);
+
+iabToggleBtn && iabToggleBtn.addEventListener("click", async () => {
+    const id = iabDeviceSelect && iabDeviceSelect.value;
+    if (!id) { setIabStatus("Elegí un celular primero.", true); return; }
+    const on = field(currentDevicesData[id], "iabFinderEnabled", false);
+    try {
+        await runCommandOnDevice(id, on ? "DISABLE_IAB_FINDER" : "ENABLE_IAB_FINDER", null, iabToggleBtn);
+        setIabStatus(on ? "Detector apagado." : "Detector encendido, en simulación: no bloquea nada todavía.");
+    } catch (e) { setIabStatus("Error: " + e.message, true); }
+});
+
+iabSimBtn && iabSimBtn.addEventListener("click", async () => {
+    const id = iabDeviceSelect && iabDeviceSelect.value;
+    if (!id) { setIabStatus("Elegí un celular primero.", true); return; }
+    const sim = field(currentDevicesData[id], "iabFinderSimulation", true);
+    // La confirmación va solo en el sentido peligroso. Volver a simulación es
+    // siempre seguro y no tiene por qué pedir permiso.
+    if (sim && !confirm(
+        "A partir de ahora el detector va a BLOQUEAR de verdad en este celular.\n\n" +
+        "Antes de seguir, mirá la lista de abajo: eso es lo que se va a empezar a bloquear. " +
+        "Si hay alguna app que el usuario necesita, va a dejar de funcionar y no va a haber " +
+        "ningún mensaje que lo explique.\n\n¿Seguimos?"
+    )) return;
+    try {
+        await runCommandOnDevice(id, sim ? "DISABLE_IAB_SIMULATION" : "ENABLE_IAB_SIMULATION", null, iabSimBtn);
+        setIabStatus(sim ? "El detector ahora bloquea en este celular." : "Vuelto a simulación: no bloquea.");
+    } catch (e) { setIabStatus("Error: " + e.message, true); }
+});
+
+iabClearBtn && iabClearBtn.addEventListener("click", async () => {
+    const id = iabDeviceSelect && iabDeviceSelect.value;
+    if (!id) { setIabStatus("Elegí un celular primero.", true); return; }
+    try {
+        await runCommandOnDevice(id, "CLEAR_IAB_AUDIT", null, iabClearBtn);
+        setIabStatus("Lista vaciada.");
+    } catch (e) { setIabStatus("Error: " + e.message, true); }
+});
 
 // ═════════════════════════════════════════════════════════════════════════════
 // PEDIDOS DE APPS (10/9/2026, B.59) — ver app/mdm/AppRequestManager.kt

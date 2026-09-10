@@ -159,6 +159,23 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             e.printStackTrace()
         }
 
+        // Auditoría del detector de navegadores embebidos (10/9/2026, B.60). Mismo
+        // criterio exacto que la de arriba, y por el mismo motivo: mientras el
+        // detector corre en SIMULACIÓN, esta lista es lo único que el administrador
+        // tiene para decidir si se puede apagar la simulación sin romper el equipo.
+        // Si no cambió nada, syncEmbeddedBrowserState() lo ve por la firma y escribe
+        // cuatro campos en vez del nodo grande.
+        try {
+            if (com.ejemplo.locksuite.mdm.PolicyManager(applicationContext)
+                    .isEmbeddedBrowserFinderEnabled()
+            ) {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync
+                    .syncEmbeddedBrowserState(applicationContext)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         return Result.success()
     }
 }

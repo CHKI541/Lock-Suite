@@ -396,51 +396,234 @@ fun DashboardScreen(onLogout: () -> Unit) {
                     )
                 }
             ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text(LocaleManager.t("Políticas"), color = if (selectedTab == 0) accentOrange else Color.Gray) }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text(LocaleManager.t("Aplicaciones"), color = if (selectedTab == 1) accentOrange else Color.Gray) }
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = { Text(LocaleManager.t("Servicios"), color = if (selectedTab == 2) accentOrange else Color.Gray) }
-                )
-                Tab(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
-                    text = { Text(LocaleManager.t("Presets"), color = if (selectedTab == 3) accentOrange else Color.Gray) }
-                )
-                Tab(
-                    selected = selectedTab == 4,
-                    onClick = { selectedTab = 4 },
-                    text = { Text(LocaleManager.t("DNS"), color = if (selectedTab == 4) accentOrange else Color.Gray) }
-                )
-                Tab(
-                    selected = selectedTab == 5,
-                    onClick = { selectedTab = 5 },
-                    text = { Text(LocaleManager.t("Lista blanca"), color = if (selectedTab == 5) accentOrange else Color.Gray) }
-                )
+                // ── ORDEN Y NOMBRES: LOS MISMOS QUE LA FICHA DEL PANEL WEB (10/9/2026) ──
+                //
+                // Antes eran seis pestañas en otro orden y con otros nombres que el panel
+                // ("Presets" acá / "Perfiles" allá; "Lista blanca" acá / "Apps y dominios"
+                // allá), así que quien administraba desde los dos lados tenía que aprender
+                // dos mapas distintos de la misma cosa. Ahora las dos pantallas se leen
+                // igual, y eso es la mitad de lo que el dueño pidió al decir que quedaba
+                // "muy mareador y cosas en distintas pestañas".
+                //
+                // «Inicio» es nueva y es el hub: contesta "¿cómo está este equipo?" y lleva
+                // a donde haya que ir, en vez de obligar a recorrer las pestañas buscando.
+                LOCKSUITE_TABS.forEachIndexed { indice, titulo ->
+                    Tab(
+                        selected = selectedTab == indice,
+                        onClick = { selectedTab = indice },
+                        text = {
+                            Text(
+                                LocaleManager.t(titulo),
+                                color = if (selectedTab == indice) accentOrange else Color.Gray
+                            )
+                        }
+                    )
+                }
             }
 
             when (selectedTab) {
-                0 -> PoliciesTabContent(context)
-                1 -> AppManagerTabContent(context)
-                2 -> ServicesTabContent(
+                0 -> HomeTabContent(context) { destino -> selectedTab = destino }
+                1 -> WhitelistTabContent(context)
+                2 -> AppManagerTabContent(context)
+                3 -> PoliciesTabContent(context)
+                4 -> DnsActivityTabContent(context)
+                5 -> ServicesTabContent(
                     context = context,
                     onTriggerPermissionsReauth = { showReauthDialogForPermissions = true },
                     onTriggerUninstallReauth = { showReauthDialogForUninstall = true }
                 )
-                3 -> PresetsTabContent(context)
-                4 -> DnsActivityTabContent(context)
-                5 -> WhitelistTabContent(context)
+                6 -> PresetsTabContent(context)
             }
         }
+    }
+}
+
+/**
+ * Los nombres de las pestañas, en un solo lugar y en el mismo orden que la ficha del
+ * panel web (`admin-backend/public/celular.html`). Están acá arriba a propósito: el
+ * `when` de abajo y esta lista tienen que moverse juntos, y con las pestañas escritas
+ * una por una era fácil renumerar solo la mitad.
+ */
+private val LOCKSUITE_TABS = listOf(
+    "Inicio",            // 0
+    "Apps y dominios",   // 1  (antes "Lista blanca")
+    "Aplicaciones",      // 2
+    "Políticas",         // 3
+    "DNS",               // 4
+    "Servicios",         // 5
+    "Perfiles"           // 6  (antes "Presets")
+)
+
+/**
+ * ── PESTAÑA «INICIO» (10/9/2026) ──
+ *
+ * Es la respuesta del lado del celular al mismo pedido que motivó la ficha nueva del
+ * panel: *"locksuite y el panel web quedaron muy mareadores y cosas en distintas
+ * pestañas. Hacelo más cómodo y unificado"*.
+ *
+ * Contesta dos preguntas y nada más, que son las dos que uno tiene al abrir la app:
+ *
+ *   1. **¿Cómo está este equipo AHORA?** — no una lista de todo lo configurable, sino
+ *      lo que está mal en este momento. Un panel que grita siempre no se mira; por eso
+ *      cuando está todo bien muestra una sola línea verde y se calla.
+ *   2. **¿Y ahora a dónde voy?** — accesos directos a las otras pestañas, con lo que
+ *      cada una hace dicho en una línea. Reemplaza a "acordarse en qué pestaña estaba
+ *      tal cosa", que es literal la queja.
+ *
+ * Y arriba de todo, la Configuración rápida — la misma tarjeta que ya vivía en la
+ * pestaña Perfiles. **Se REUSA `MasterProfilesCard`, no se copia**: si mañana un perfil
+ * hace una cosa más, la hace en los dos lugares. Duplicarla habría sido la quinta
+ * repetición del bug de familia de B.28.
+ */
+@Composable
+fun HomeTabContent(context: Context, onIrA: (Int) -> Unit) {
+    val policyManager = remember { PolicyManager(context) }
+    val prefs = remember { PrefsHelper.getMdmPrefs(context) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+
+    val accentOrange = Color(0xFFF1C40F)
+    val navyMedium = Color(0xFF1E3E62)
+    val rojo = Color(0xFFEF4444)
+    val verde = Color(0xFF10B981)
+    val amarillo = Color(0xFFF59E0B)
+
+    // Se releen en cada refresco y no en un ciclo propio: esta pantalla se mira unos
+    // segundos, no se deja abierta. Un `LaunchedEffect` con `delay` acá sería un
+    // despertar más por nada — el criterio de batería que dejó B.30.
+    val suspendido = remember(refreshKey) { policyManager.isLockSuiteSuspended() }
+    val accesibilidadOk = remember(refreshKey) {
+        try { com.ejemplo.locksuite.util.AccessibilityEnforcer.isServiceRunning(context) }
+        catch (e: Exception) { true }
+    }
+    val saludTunel = remember(refreshKey) {
+        try { com.ejemplo.locksuite.service.KosherVpnService.tunnelHealth(context) }
+        catch (e: Exception) { com.ejemplo.locksuite.service.KosherVpnService.HEALTH_UNKNOWN }
+    }
+    val listaBlancaOn = remember(refreshKey) { policyManager.isWhitelistModeEnabled() }
+    val simulando = remember(refreshKey) { policyManager.isWhitelistSimulation() }
+    val graciaActiva = remember(refreshKey) {
+        try { com.ejemplo.locksuite.mdm.GracePeriodManager.isActive(context) }
+        catch (e: Exception) { false }
+    }
+    val graciaRestanteMs = remember(refreshKey) {
+        try { com.ejemplo.locksuite.mdm.GracePeriodManager.remainingMs(context) }
+        catch (e: Exception) { 0L }
+    }
+    val nombreEquipo = remember(refreshKey) { prefs.getString("device_name", "") ?: "" }
+
+    // Los avisos: SOLO lo que está mal ahora, ordenado por gravedad.
+    val avisos = buildList {
+        if (suspendido) add(Triple(rojo, "LockSuite está suspendido",
+            "No hay ninguna protección activa. Se puede desinstalar y restaurar de fábrica."))
+        if (!accesibilidadOk) add(Triple(rojo, "El filtro visual está caído",
+            "El servicio de Accesibilidad no está corriendo: no se tapan imágenes ni se rebota nada."))
+        if (saludTunel == com.ejemplo.locksuite.service.KosherVpnService.HEALTH_NO_CAPTURE ||
+            saludTunel == com.ejemplo.locksuite.service.KosherVpnService.HEALTH_NO_UPSTREAM) {
+            add(Triple(amarillo, "El túnel DNS reporta «$saludTunel»",
+                "El filtro de dominios puede no estar filtrando. Probá apagar y prender la VPN."))
+        }
+        if (saludTunel == com.ejemplo.locksuite.service.KosherVpnService.HEALTH_OFF) {
+            add(Triple(rojo, "El túnel DNS está apagado", "Ningún dominio se está filtrando."))
+        }
+        if (listaBlancaOn && simulando) add(Triple(amarillo, "La lista blanca está en simulación",
+            "Registra qué bloquearía, pero todavía no bloquea nada."))
+        if (graciaActiva) {
+            val horas = graciaRestanteMs / 3_600_000L
+            add(Triple(accentOrange, "Período de gracia activo",
+                "Faltan aproximadamente $horas h para que se cierre solo."))
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text(
+                if (nombreEquipo.isNotBlank()) nombreEquipo else LocaleManager.t("Este celular"),
+                color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold
+            )
+        }
+
+        // ── Estado ──
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = navyMedium),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(LocaleManager.t("Estado"), color = accentOrange,
+                        fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    if (avisos.isEmpty()) {
+                        Text(
+                            "✓ " + LocaleManager.t("Todo en orden: filtro visual activo, túnel DNS filtrando y ninguna protección levantada."),
+                            color = verde, fontSize = 13.sp
+                        )
+                    } else {
+                        avisos.forEach { (color, titulo, detalle) ->
+                            Column {
+                                Text("• " + LocaleManager.t(titulo), color = color,
+                                    fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text(LocaleManager.t(detalle),
+                                    color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                    TextButton(onClick = { refreshKey++ }) {
+                        Text(LocaleManager.t("Volver a chequear"), color = accentOrange, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+
+        // ── Configuración rápida (la MISMA tarjeta de la pestaña Perfiles) ──
+        item {
+            MasterProfilesCard(policyManager = policyManager, onApplied = { refreshKey++ })
+        }
+
+        // ── A dónde ir ──
+        item {
+            Text(LocaleManager.t("Configurar"), color = Color.White,
+                fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        }
+
+        val destinos = listOf(
+            Triple(1, "📱 " + LocaleManager.t("Apps y dominios"),
+                LocaleManager.t("Permitir o prohibir cada app. Decide a la vez si se ve, si se puede bajar de la tienda y qué dominios suyos resuelven.")),
+            Triple(2, "🧩 " + LocaleManager.t("Aplicaciones"),
+                LocaleManager.t("Ocultar, suspender o desinstalar apps una por una, y ver el inventario del equipo.")),
+            Triple(3, "🔒 " + LocaleManager.t("Políticas"),
+                LocaleManager.t("Los interruptores del sistema: cámara, wifi, instalación, restauración de fábrica.")),
+            Triple(4, "🌐 " + LocaleManager.t("DNS"),
+                LocaleManager.t("Forzar permitir o prohibir un dominio puntual. Le gana a todo lo demás.")),
+            Triple(5, "⚙️ " + LocaleManager.t("Servicios"),
+                LocaleManager.t("Accesibilidad, VPN, permisos y el estado de los servicios de fondo.")),
+            Triple(6, "📋 " + LocaleManager.t("Perfiles"),
+                LocaleManager.t("Exportar e importar la configuración completa de este equipo."))
+        )
+
+        items(destinos) { (indice, titulo, detalle) ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = navyMedium),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onIrA(indice) },
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(titulo, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(Modifier.height(3.dp))
+                    Text(detalle, color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp)
+                }
+            }
+        }
+
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
@@ -3527,16 +3710,38 @@ private fun WhitelistTabContent(context: Context) {
         item {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    LocaleManager.t("Modo lista blanca"),
+                    LocaleManager.t("Apps y dominios"),
                     color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(6.dp))
+                // 10/9/2026 — el texto decía solo lo que hace el modo estricto, y esta
+                // pantalla ya no es "la del modo lista blanca": es la de decidir apps.
+                // Lo que pasa con una app PROHIBIDA y con los dominios no kosher de una
+                // app permitida rige con el modo apagado también, y no decirlo hacía
+                // pensar que había que encender el filtro estricto para que sirviera.
+                Text(
+                    LocaleManager.t(
+                        "Permitir o prohibir una app decide tres cosas a la vez: si se ve en el " +
+                        "celular, si se puede bajar de la tienda, y qué dominios suyos resuelven."
+                    ),
+                    color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     LocaleManager.t(
-                        "Solo resuelven los dominios de las apps que permitas. Todo lo demás " +
-                        "queda sin internet, incluidas las apps que no marcaste."
+                        "Los dominios no kosher que viven adentro de una app (las ofertas de " +
+                        "Mercado Pago, el foro de Waze, los GIF) quedan bloqueados siempre, " +
+                        "aunque la app esté permitida y aunque el filtro estricto esté apagado."
                     ),
-                    color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp
+                    color = Color(0xFFF59E0B), fontSize = 12.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    LocaleManager.t(
+                        "El filtro estricto de abajo es aparte: cierra además todo lo que NO " +
+                        "esté en la lista, incluidas las apps sin marcar."
+                    ),
+                    color = Color.White.copy(alpha = 0.55f), fontSize = 12.sp
                 )
             }
         }
@@ -3736,6 +3941,16 @@ private fun WhitelistTabContent(context: Context) {
         }
 
         // ── Catálogo de apps ──
+        //
+        // ⚠️ 10/9/2026 — LO QUE SE TOCA ACÁ ES UNA DECISIÓN DE **ESTE** EQUIPO.
+        //
+        // Antes estos botones escribían el mapa global (`allowApp`/`blockApp`), que es
+        // el catálogo de la FLOTA. Como el celular no puede escribir el nodo global de
+        // Firebase, el efecto real era peor que "le cambia la configuración a todos":
+        // el cambio valía hasta el próximo `SYNC_WHITELIST`, que lo pisaba con lo que
+        // dijera el panel — o sea que se deshacía solo, en silencio, horas después.
+        // Ahora van a `whitelist_device_decisions`, que le gana al global y sobrevive
+        // a la sincronización. Ver WhitelistManager.KEY_DEVICE_DECISIONS.
         val visibles = com.ejemplo.locksuite.mdm.WhitelistCatalog.APPS.filter {
             filtro.isBlank() ||
                 it.label.contains(filtro, ignoreCase = true) ||
@@ -3757,21 +3972,21 @@ private fun WhitelistTabContent(context: Context) {
                 onAllow = {
                     busy = true
                     scope.launch {
-                        withContext(Dispatchers.IO) { wl.allowApp(entry.packageName) }
+                        withContext(Dispatchers.IO) { wl.setDeviceState(entry.packageName, com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW) }
                         refresh(); busy = false
                     }
                 },
                 onBlock = {
                     busy = true
                     scope.launch {
-                        withContext(Dispatchers.IO) { wl.blockApp(entry.packageName) }
+                        withContext(Dispatchers.IO) { wl.setDeviceState(entry.packageName, com.ejemplo.locksuite.mdm.WhitelistManager.STATE_BLOCK) }
                         refresh(); busy = false
                     }
                 },
                 onUnset = {
                     busy = true
                     scope.launch {
-                        withContext(Dispatchers.IO) { wl.unsetApp(entry.packageName) }
+                        withContext(Dispatchers.IO) { wl.clearDeviceState(entry.packageName) }
                         refresh(); busy = false
                     }
                 }

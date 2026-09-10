@@ -7,6 +7,15 @@ class DomainRuleManager(
     private val context: Context,
     private val engine: DomainRuleEngine
 ) {
+    constructor(context: Context) : this(
+        context,
+        try {
+            com.ejemplo.locksuite.LockSuiteApplication.domainRuleEngine
+        } catch (_: Throwable) {
+            DomainRuleEngine()
+        }
+    )
+
     companion object {
         private const val KEY_BLOCKED = "dns_custom_blocked_domains"
         private const val KEY_ALLOWED = "dns_custom_allowed_domains"

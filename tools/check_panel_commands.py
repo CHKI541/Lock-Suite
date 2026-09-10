@@ -37,6 +37,13 @@ import os
 import re
 import sys
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FUNCTIONS = os.path.join(RAIZ, "admin-backend", "functions", "index.js")
 SERVICE = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",

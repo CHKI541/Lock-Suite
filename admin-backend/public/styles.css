@@ -916,8 +916,9 @@ button.google-btn:hover {
     display: none;
   }
 
-  #devices-container, #groups-list, #archived-list, #presets-list, #store-apps-list {
-    grid-template-columns: 1fr;
+  #devices-container, #groups-list, #archived-list, #presets-list, #store-apps-list,
+  #master-profiles-list, #app-requests-list, #whitelist-apps-list, #qr-pending-list, #iab-audit-list {
+    grid-template-columns: 1fr !important;
     gap: 10px;
   }
 }
@@ -1027,8 +1028,9 @@ button.google-btn:hover {
     margin: 0;
   }
 
-  #devices-container, #groups-list, #archived-list, #presets-list, #store-apps-list {
-    grid-template-columns: 1fr;
+  #devices-container, #groups-list, #archived-list, #presets-list, #store-apps-list,
+  #master-profiles-list, #app-requests-list, #whitelist-apps-list, #qr-pending-list, #iab-audit-list {
+    grid-template-columns: 1fr !important;
     gap: 6px;
   }
 

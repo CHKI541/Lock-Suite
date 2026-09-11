@@ -268,15 +268,43 @@
 
 .ls-empty { color: var(--text-muted); font-size: 13px; padding: 14px 0; }
 
-/* ── Teléfono ──────────────────────────────────────────────────────────── */
+/* ── Teléfono (pantallas medianas y chicas) ────────────────────────────── */
 @media (max-width: 820px) {
   .ls-layout { flex-direction: column; }
   .ls-rail {
     position: static; width: auto; flex: 1 1 auto; max-height: none;
     display: flex; gap: 6px; overflow-x: auto; border-right: none;
-    border-bottom: 1px solid var(--navy-border); padding: 10px;
+    border-bottom: 1px solid var(--navy-border); padding: 8px 10px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
-  .ls-rail button { width: auto; white-space: nowrap; }
+  .ls-rail::-webkit-scrollbar { display: none; }
+  .ls-rail button { width: auto; white-space: nowrap; flex: 0 0 auto; }
   .ls-rail .ls-rail-count { display: none; }
   .ls-main { padding: 16px 14px 130px; }
+  .ls-top { padding: 10px 14px; gap: 10px; }
+  .ls-cart { padding: 10px 14px; gap: 10px; }
+}
+
+@media (max-width: 480px) {
+  .ls-top { padding: 8px 10px; gap: 8px; }
+  .ls-top h1 { font-size: 16px; }
+  .ls-top #c-buscar, .ls-top #d-buscar { width: 100% !important; order: 10; margin-top: 4px; }
+  .ls-main { padding: 12px 8px 140px; }
+  .ls-card { padding: 12px 10px; margin-bottom: 12px; border-radius: 10px; }
+  .ls-apphead { padding: 8px 10px; gap: 8px; }
+  .ls-modes { flex-direction: column; }
+  .ls-mode { flex: 1 1 auto; width: 100%; box-sizing: border-box; }
+  .ls-cart { padding: 10px 12px; gap: 8px; }
+  .ls-cart .ls-cart-detail { flex: 1 1 100%; font-size: 11px; }
+}
+
+@media (max-width: 320px) {
+  body.ls-body { font-size: 11px; }
+  .ls-top h1 { font-size: 14px; }
+  .ls-chip { font-size: 10px; padding: 2px 6px; }
+  .ls-btn { padding: 6px 10px; font-size: 11px; }
+  .ls-btn-sm { padding: 4px 8px; font-size: 10.5px; }
+  .ls-seg button { padding: 5px 8px; font-size: 11px; }
+  .ls-main { padding: 8px 4px 150px; }
 }

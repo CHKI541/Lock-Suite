@@ -184,7 +184,12 @@ function renderDevicesList(e) {
         if (fullBtn) {
             fullBtn.addEventListener("click", ev => {
                 ev.stopPropagation();
-                window.open("celular.html?id=" + encodeURIComponent(e), "_blank", "noopener");
+                const targetUrl = "celular.html?id=" + encodeURIComponent(e);
+                if (/LockSuiteAdminApp/.test(navigator.userAgent)) {
+                    window.location.href = targetUrl;
+                } else {
+                    window.open(targetUrl, "_blank", "noopener");
+                }
             });
         }
         devicesContainer.appendChild(n);
@@ -266,7 +271,10 @@ async function openDeviceSidebar(e, t) {
     // por lo mismo de arriba: si index.html y app.js se despliegan desfasados, el
     // panel viejo tiene que seguir entero.
     const openFull = document.getElementById("sidebar-open-full");
-    if (openFull) openFull.href = "celular.html?id=" + encodeURIComponent(e);
+    if (openFull) {
+        openFull.href = "celular.html?id=" + encodeURIComponent(e);
+        if (/LockSuiteAdminApp/.test(navigator.userAgent)) openFull.target = "_self";
+    }
 
     // Antes que nada: si el equipo avisó que perdió la credencial de comandos, ofrecer
     // arreglarlo. Si no, el administrador entra al panel, toca interruptores, y ninguno

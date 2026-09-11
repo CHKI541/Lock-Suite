@@ -252,4 +252,22 @@
       unblocked: (base.block || []).filter((d) => desbloq.has(norm(d)))
     };
   };
+
+  // Confinamiento kosher en :admin-app: los enlaces internos navegan en la misma vista
+  if (/LockSuiteAdminApp/.test(navigator.userAgent)) {
+    const retarget = () => {
+      document.querySelectorAll('a[target="_blank"]').forEach((a) => {
+        if (!a.href || a.href.startsWith("javascript:")) return;
+        try {
+          const u = new URL(a.href, location.href);
+          if (u.origin === location.origin) a.target = "_self";
+        } catch (_) {}
+      });
+    };
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", retarget);
+    } else {
+      retarget();
+    }
+  }
 })();

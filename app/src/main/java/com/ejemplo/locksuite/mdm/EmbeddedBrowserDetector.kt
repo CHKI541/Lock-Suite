@@ -150,7 +150,10 @@ object EmbeddedBrowserDetector {
         // El flujo de actualización de Play Store lo maneja la Capa 3 con su propia
         // automatización (UpdateFlowManager, B.14/B.41/B.54). Meter otro detector en
         // esa pantalla es pelearse con el flujo propio.
-        "com.android.vending" to "su flujo lo maneja UpdateFlowManager"
+        "com.android.vending" to "su flujo lo maneja UpdateFlowManager",
+        // Ventana de inicio de sesión de portal cautivo (AOSP y Google / Samsung)
+        "com.android.captiveportallogin" to "portal cautivo AOSP",
+        "com.google.android.captiveportallogin" to "portal cautivo Google / Samsung"
     )
 
     /**
@@ -264,7 +267,7 @@ object EmbeddedBrowserDetector {
      */
     fun evaluar(r: Retrato): Veredicto {
         // ── 1. Exclusiones duras. Siempre primero. ──
-        if (r.esPortalCautivo) return Veredicto.NO_ES_NAVEGADOR
+        if (r.esPortalCautivo || r.packageName.contains("captiveportal")) return Veredicto.NO_ES_NAVEGADOR
         if (PAQUETES_EXENTOS.containsKey(r.packageName)) return Veredicto.NO_ES_NAVEGADOR
         val actividad = r.activityClass.lowercase()
         if (ACTIVIDADES_EXENTAS.any { actividad.contains(it) }) return Veredicto.NO_ES_NAVEGADOR

@@ -143,27 +143,33 @@ object CaptivePortalPolicy {
     /**
      * Gracia antes de cerrar por "red validada".
      *
-     * Sin esto, abrir la ventana sobre una red que YA está validada la cerraría en el
-     * mismo frame y el usuario no llegaría a ver el aviso de por qué. Con 1,5 s ve el
-     * cartel y entiende. No debilita nada: 1,5 segundos no alcanzan para navegar.
+     * Portales como los de aviones (ej. KLM / Viasat / Panasonic) o aeropuertos
+     * redirigen a una segunda página de confirmación o activación del voucher/plan
+     * ("se abre otra página"). Si se cierra inmediatamente apenas la red valida,
+     * el usuario no llega a confirmar el paquete o ver el código.
+     * Damos 20 segundos desde que la red valida para que termine la redirección
+     * antes de evaluar el cierre.
      */
-    const val VALIDATED_GRACE_MS = 1_500L
+    const val VALIDATED_GRACE_MS = 20_000L
 
     /** Cada cuánto se consulta el estado de la red mientras la ventana está abierta. */
     const val TICK_MS = 1_000L
 
     /**
-     * Paquete de la ventana en AOSP. Se comprueba TAMBIÉN por nombre de clase, porque
-     * desde Android 10 el login de portal cautivo viaja dentro del módulo actualizable
+     * Paquetes de la ventana en AOSP y Google/Samsung. Se comprueba TAMBIÉN por nombre de clase,
+     * porque desde Android 10 el login de portal cautivo viaja dentro del módulo actualizable
      * NetworkStack y el paquete que la aloja puede ser `com.google.android.networkstack`
      * — pero la clase sigue siendo `com.android.captiveportallogin.CaptivePortalLoginActivity`
-     * en las dos formas. Mirar las dos cosas es lo que hace que ande en toda la flota.
+     * en las dos formas. Mirar tanto el paquete (incluyendo com.google.android.captiveportallogin)
+     * como la clase es lo que hace que ande en toda la flota.
      */
     private const val PKG_AOSP = "com.android.captiveportallogin"
+    private const val PKG_GOOGLE = "com.google.android.captiveportallogin"
     private const val CLASS_MARKER = "captiveportallogin"
 
     fun isCaptivePortalWindow(packageName: String?, className: String?): Boolean {
-        if (packageName == PKG_AOSP) return true
+        val pkg = packageName?.lowercase() ?: ""
+        if (pkg == PKG_AOSP || pkg == PKG_GOOGLE || pkg.contains("captiveportal")) return true
         val cls = className?.lowercase() ?: return false
         return cls.contains(CLASS_MARKER)
     }

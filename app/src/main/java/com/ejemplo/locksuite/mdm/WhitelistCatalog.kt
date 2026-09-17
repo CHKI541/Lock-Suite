@@ -126,13 +126,27 @@ object WhitelistCatalog {
         "googleapis.com",
         "gstatic.com",
 
-        // ── Detección de portal cautivo. Sin esto el Wi-Fi de hoteles/aeropuertos ──
-        // queda "conectado sin internet" para siempre. Ver B.46 y B.50: ya dejó a un
-        // usuario tirado en un aeropuerto una vez.
+        // ── Detección de portal cautivo y portales en vuelo (aviones KLM, Viasat, etc.). ──
+        // Sin esto el Wi-Fi de hoteles/aeropuertos/aviones queda "conectado sin internet"
+        // para siempre o no puede cargar la página secundaria de conexión. Ver B.46 y B.50.
         "connectivitycheck.gstatic.com",
         "connectivitycheck.android.com",
         "clients3.google.com",
         "clients4.google.com",
+        "connect.klm.com",
+        "wifi.klm.com",
+        "klm.com",
+        "flyingblue.com",
+        "airfranceklm.com",
+        "viasat.com",
+        "airfrance.viasat.com",
+        "klm.viasat.com",
+        "panasonic.aero",
+        "pacx.aero",
+        "gogoair.com",
+        "inflightinternet.com",
+        "onair.aero",
+        "boardconnect.aero",
 
         // ── Hora. Sin hora correcta TODO handshake TLS falla y el equipo queda ──
         // sin internet de una forma que no se parece en nada a un problema de DNS.

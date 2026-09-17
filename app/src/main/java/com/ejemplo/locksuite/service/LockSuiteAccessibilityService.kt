@@ -750,11 +750,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 updateCaptivePortalState(packageName, ev.className?.toString())
             } else if (captiveOpenedAt != 0L &&
-                eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
-                CaptivePortalPolicy.isCaptivePortalWindow(packageName, null)
+                (eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+                 eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+                 eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) &&
+                CaptivePortalPolicy.isCaptivePortalWindow(packageName, ev.className?.toString())
             ) {
-                // Señal de vida de la ventana: la página cambió, o sea que alguien la
-                // está usando. Reinicia el reloj de inactividad (ver IDLE_CLOSE_MS).
+                // Señal de vida de la ventana: la página cambió, o el usuario interactuó
+                // (click, scroll), o sea que alguien la está usando. Reinicia el reloj de
+                // inactividad (ver IDLE_CLOSE_MS).
                 // Va ANTES del antirrebote de CONTENT_CHANGED de abajo a propósito:
                 // no queremos que un trámite lento se cierre porque el antirrebote se
                 // comió justo los eventos que probaban que el usuario estaba ahí.
@@ -1185,6 +1188,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val lower = pkg.lowercase()
         val result = pkg == LOCKSUITE_PKG ||
                pkg == "com.android.systemui" ||
+               lower.contains("captiveportal") ||
                lower.contains("inputmethod") ||
                lower.contains("latin") ||
                lower.contains("gboard") ||
@@ -2091,6 +2095,11 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      * esto y no contra `captiveOpenedAt`: ver la nota del 8/9 en `CaptivePortalPolicy`.
      */
     private var captiveLastActivityAt = 0L
+
+    /**
+     * elapsedRealtime en que la red se detectó validada por primera vez durante la sesión, o 0.
+     */
+    private var captiveValidatedAt = 0L
     private var captiveBounceInProgress = false
 
     private val captiveTickRunnable = object : Runnable {
@@ -2107,9 +2116,26 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             //    `onCapabilitiesChanged`, si la red tiene NET_CAPABILITY_VALIDATED,
             //    llama a `done(Result.DISMISSED)` y se cierra. Esta palanca es un
             //    respaldo, no el mecanismo principal — no le agregues agresividad.
-            if (abierta >= CaptivePortalPolicy.VALIDATED_GRACE_MS && isNetworkValidated()) {
-                closeCaptivePortal("la red ya está conectada")
-                return
+            //
+            //    En portales de aviones (KLM, Viasat, etc.) la red puede validar antes de
+            //    que el usuario termine de aceptar términos o completar el formulario
+            //    de la segunda página ("se abre otra página"). Por eso:
+            //    - Medimos la gracia DESDE que validó (captiveValidatedAt), no desde que abrió.
+            //    - Exigimos además que el usuario no esté interactuando activamente
+            //      (al menos 10 segundos sin tocar la pantalla).
+            val validada = isNetworkValidated()
+            if (validada) {
+                if (captiveValidatedAt == 0L) {
+                    captiveValidatedAt = ahora
+                }
+                val validadaTiempo = ahora - captiveValidatedAt
+                val tiempoSinInteraccion = ahora - captiveLastActivityAt
+                if (validadaTiempo >= CaptivePortalPolicy.VALIDATED_GRACE_MS && tiempoSinInteraccion >= 10_000L) {
+                    closeCaptivePortal("la red ya está conectada")
+                    return
+                }
+            } else {
+                captiveValidatedAt = 0L
             }
             // 2. Ventana abandonada: nadie la tocó en todo ese rato.
             if (inactiva >= CaptivePortalPolicy.IDLE_CLOSE_MS) {
@@ -2131,6 +2157,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (captiveOpenedAt == 0L) {
                 captiveOpenedAt = SystemClock.elapsedRealtime()
                 captiveLastActivityAt = captiveOpenedAt
+                captiveValidatedAt = 0L
                 captiveBounceInProgress = false
                 try {
                     val p = mdmPrefs
@@ -2160,6 +2187,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val abierta = if (captiveOpenedAt == 0L) 0L else SystemClock.elapsedRealtime() - captiveOpenedAt
         captiveOpenedAt = 0L
         captiveLastActivityAt = 0L
+        captiveValidatedAt = 0L
+        captiveBounceInProgress = false
         mainHandler.removeCallbacks(captiveTickRunnable)
         if (abierta <= 0L) return
         try {

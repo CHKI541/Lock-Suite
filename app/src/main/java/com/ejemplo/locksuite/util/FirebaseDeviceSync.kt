@@ -568,6 +568,10 @@ object FirebaseDeviceSync {
                     "googleAccountBlockStrict" to policyManager.isGoogleAccountBlockStrict(),
                     "googleAccountBlockMode" to policyManager.getGoogleAccountBlockMode(),
                     "googleAccountWebSeenClasses" to policyManager.getGoogleAccountWebSeenClasses(),
+                    // 16/9: el registro unificado de rebotes de la Capa 3. Es lo que
+                    // contesta "se me cierra esta app, ¿por qué?" sin ADB y sin sesión
+                    // de diagnóstico. Ver mdm/Layer3Audit.kt.
+                    "layer3Audit" to policyManager.getLayer3Audit(),
                     "contactPhotoPickerBlocked" to policyManager.isContactPhotoPickerBlocked(),
                     "kosherLauncherEnabled" to policyManager.isKosherLauncherEnabled(),
                     "stealthModeEnabled" to isStealth,

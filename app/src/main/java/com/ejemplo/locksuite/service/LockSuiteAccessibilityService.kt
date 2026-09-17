@@ -24,6 +24,8 @@ import android.widget.Toast
 import com.ejemplo.locksuite.mdm.CaptivePortalPolicy
 import com.ejemplo.locksuite.mdm.EmbeddedBrowserDetector
 import com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy
+import com.ejemplo.locksuite.mdm.Layer3Audit
+import com.ejemplo.locksuite.mdm.MercadoPagoOffersPolicy
 import com.ejemplo.locksuite.mdm.PhotoPickerPolicy
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.mdm.WebViewBlockManager
@@ -234,53 +236,29 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // ──────────────────────────────────────────────────────────────
         // Detección de la sección "Ofertas" de Mercado Pago
         //
-        // Antes acá había una sola lista de 14 palabras sueltas y bastaba con que
-        // CUALQUIERA apareciera en CUALQUIER nodo de la pantalla para rebotar al
-        // usuario. Palabras como "beneficio", "descuento" o "supermercado" están
-        // en la pantalla de inicio de Mercado Pago y en varios flujos de pago, así
-        // que el servicio también expulsaba al usuario de pantallas legítimas.
+        // 16/9/2026: las listas y la decisión se mudaron a `mdm/MercadoPagoOffersPolicy`,
+        // que es una función pura con banco de pruebas. Acá quedó solo el recorrido del
+        // árbol, que es lo único que necesita el servicio.
         //
-        // Ahora hay tres niveles:
-        //   FUERTE  → una sola coincidencia alcanza (son títulos de sección propios).
-        //   DÉBIL   → hacen falta DOS palabras distintas para considerarlo promociones.
-        //   VIEW ID → identificadores de vista de la propia app, sin ambigüedad.
+        // El porqué de la mudanza, resumido (el detalle largo está en ese archivo): la
+        // regla *"pantalla WebView de Mercado Pago + UNA palabra débil → bloquear"*
+        // sacaba al usuario del asistente (Mago) y de cobros de ANSES, porque casi toda
+        // Mercado Pago es una pantalla WebView y palabras como "beneficio" o "descuento"
+        // aparecen sueltas en pantallas perfectamente legítimas. Se estaba tratando la
+        // MENCIÓN de una palabra como si fuera la SECCIÓN.
         //
-        // Además, dentro de una pantalla WebView de Mercado Pago (donde casi no hay
-        // texto accesible) alcanza con UNA palabra débil: es la red de seguridad para
-        // que la sección de ofertas real, que se renderiza como web, no se escape.
-        //
-        // Todas las cadenas van en minúscula y SIN tildes: el texto de pantalla se
-        // normaliza con foldAccents() antes de comparar, así "promoción" y "promocion"
-        // matchean igual. No agregar acá cadenas con tilde: nunca coincidirían.
+        // Si se escapa una pantalla de ofertas: agregar su título o su id de vista a las
+        // listas de ese archivo — que ahora el panel te dice cuáles son (`layer3Audit`).
+        // **No volver a la regla de una sola palabra débil.**
         // ──────────────────────────────────────────────────────────────
-        private val MP_OFFERS_STRONG = listOf(
-            "novedades y ofertas",
-            "ofertas y descuentos",
-            "descuentos y promociones",
-            "beneficios y descuentos",
-            "cupones de descuento",
-            "mercado puntos",
-            "tus beneficios",
-            "mis beneficios",
-            "tus descuentos",
-            "canjea tus puntos"
-        )
 
-        private val MP_OFFERS_WEAK = listOf(
-            "oferta", "ofertas",
-            "promocion", "promociones",
-            "descuento", "descuentos",
-            "cupon", "cupones",
-            "beneficio", "beneficios",
-            "recompensa", "recompensas",
-            "reintegro", "reintegros",
-            "supermercado", "puntos"
-        )
-
-        private val MP_OFFERS_VIEW_ID_HINTS = listOf(
-            "offers", "offer_", "discounts", "promos", "promotions",
-            "loyalty", "benefits", "coupon", "mercadopuntos", "deals"
-        )
+        /**
+         * Tope de cadenas que junta el retrato de Mercado Pago. Sin esto, una pantalla
+         * con doscientos nodos de texto armaría doscientas cadenas en el hilo principal
+         * — el multiplicador del camino caliente que B.13 pasó una sesión entera sacando
+         * de este archivo.
+         */
+        private const val MAX_MP_CADENAS = 60
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -704,6 +682,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 f.vendingHidden || f.vendingSuspended
             if (shouldBlock) {
                 Log.w(TAG, "🚫 Intento no autorizado de abrir Google Play Store. Bloqueando y regresando a Home...")
+                Layer3Audit.anotar(
+                    applicationContext, "play-store", packageName, null,
+                    "Play Store está bloqueada o suspendida fuera del flujo de actualización", true
+                )
                 overlayManager.hideBlockingMessageOverlay()
                 performGlobalAction(GLOBAL_ACTION_HOME)
                 policyManager.restoreInstallRestrictions()
@@ -796,6 +778,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             ) {
                 legalBounceBackoffUntil = SystemClock.elapsedRealtime() + LEGAL_BOUNCE_BACKOFF_MS
                 Log.w(TAG, "🚫 Pantalla legal/licencias detectada: rebotando al usuario ($cls).")
+                Layer3Audit.anotar(
+                    applicationContext, "legales", packageName, cls,
+                    "pantalla de licencias o términos legales", true
+                )
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 return
             }
@@ -1304,7 +1290,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
         Log.w(TAG, "🚫 IAB: navegador embebido en $packageName — $motivo")
-        triggerBlock(packageName)
+        triggerBlock(packageName, "navegador embebido: $motivo")
     }
 
     /**
@@ -1477,11 +1463,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         return windowPkg == packageName || WEBVIEW_PROVIDER_PACKAGES.contains(windowPkg)
     }
 
-    private fun triggerBlock(packageName: String) {
+    private fun triggerBlock(packageName: String, motivo: String = "se detectó un WebView en la app") {
         if (webViewBlockInProgress) return
         webViewBlockInProgress = true
 
-        Log.w(TAG, "🛑 triggerBlock para $packageName")
+        Log.w(TAG, "🛑 triggerBlock para $packageName — $motivo")
+        Layer3Audit.anotar(applicationContext, "webview", packageName, null, motivo, true)
         Toast.makeText(this, "Navegador interno bloqueado por políticas del MDM", Toast.LENGTH_SHORT).show()
         performGlobalAction(GLOBAL_ACTION_BACK)
 
@@ -1743,6 +1730,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         accBounceInProgress = true
         Log.w(TAG, "🚫 Menú de Accesibilidad de Ajustes: rebotando al usuario.")
+        Layer3Audit.anotar(
+            applicationContext, "menu-accesibilidad", SETTINGS_PKG,
+            ev.className?.toString(), "pantalla del menú de Accesibilidad de Ajustes", true
+        )
         performGlobalAction(GLOBAL_ACTION_BACK)
 
         mainHandler.postDelayed({
@@ -1925,6 +1916,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         gAccBounceInProgress = true
         Log.w(TAG, "🚫 Ajustes/actividad de la cuenta de Google ($cls): rebotando al usuario.")
+        Layer3Audit.anotar(
+            applicationContext, "cuenta-google", packageName, cls,
+            if (strict) "pantalla de la cuenta de Google (modo estricto)"
+            else "historial / actividad de la cuenta de Google",
+            true
+        )
         mainHandler.post {
             Toast.makeText(
                 applicationContext,
@@ -2038,6 +2035,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         contactPhotoBounceInProgress = true
         contactPhotoBounceBackoffUntil = now + contactPhotoBounceBackoffMs
         Log.w(TAG, "🚫 Selector de foto detectado ($className en $packageName): rebotando.")
+        // ⚠️ Acá es donde se cerraba Tefilon sin que nadie pudiera saberlo desde el
+        // panel: `recordUnmatchedPickerClass` solo anota paquetes "relevantes", y una
+        // app cualquiera que caiga por un marcador mal puesto no lo es. Esto anota lo
+        // que efectivamente se rebotó, sin filtro previo. Ver `Layer3Audit`.
+        Layer3Audit.anotar(
+            applicationContext, "selector-de-foto", packageName, className,
+            "coincidió un marcador de selector de foto de perfil", true
+        )
         mainHandler.post {
             Toast.makeText(
                 applicationContext,
@@ -2205,6 +2210,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (captiveBounceInProgress) return
         captiveBounceInProgress = true
         Log.w(TAG, "🚫 Cerrando la ventana del portal cautivo: $motivo.")
+        Layer3Audit.anotar(
+            applicationContext, "portal-cautivo", "(ventana de inicio de sesión de red)",
+            null, motivo, true
+        )
         // Visibilidad (8/9): un cierre forzado es la forma que tiene este guard de
         // dejar a alguien sin poder conectarse. Si el contador sube en un equipo, hay
         // que ir a mirar POR QUÉ antes de que el usuario lo reporte desde un aeropuerto.
@@ -2270,6 +2279,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         root.recycle()
 
         if (result.inLockSuite && result.dangerous) {
+            Layer3Audit.anotar(
+                applicationContext, "anti-evasion", SETTINGS_PKG, null,
+                "pantalla de Ajustes sobre LockSuite con una acción peligrosa a la vista", true
+            )
             performGlobalAction(GLOBAL_ACTION_BACK)
             Toast.makeText(this, "Acción denegada por políticas de seguridad de LockSuite MDM", Toast.LENGTH_LONG).show()
             val loginIntent = Intent(this, com.ejemplo.locksuite.ui.auth.LoginActivity::class.java).apply {
@@ -2587,6 +2600,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private fun triggerWhatsAppBlock(type: String) {
         if (waBlockInProgress) return
         waBlockInProgress = true
+        Layer3Audit.anotar(
+            applicationContext, "whatsapp", PKG_WHATSAPP, null,
+            "sección restringida de WhatsApp: $type", true
+        )
         mainHandler.post {
             Toast.makeText(applicationContext, "$type bloqueado por políticas del MDM", Toast.LENGTH_SHORT).show()
         }
@@ -2632,11 +2649,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val rootPkg = root.packageName?.toString() ?: ""
 
         if (rootPkg == PKG_MERCADOPAGO || WEBVIEW_PROVIDER_PACKAGES.contains(rootPkg)) {
-            val containsOffersNode = detectMercadoPagoOffers(root)
+            val retrato = buildMpRetrato(root)
             root.recycle()
 
-            if (containsOffersNode) {
-                triggerMercadoPagoBlock()
+            val veredicto = MercadoPagoOffersPolicy.evaluar(retrato)
+            anotarMpSiCambio(retrato, veredicto)
+
+            if (veredicto == MercadoPagoOffersPolicy.Veredicto.OFERTAS) {
+                triggerMercadoPagoBlock(MercadoPagoOffersPolicy.motivo(retrato))
             }
         } else {
             root.recycle()
@@ -2644,131 +2664,147 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Decide si la pantalla que se está mostrando es realmente la sección de ofertas
-     * / promociones de Mercado Pago.
+     * Arma el retrato de la pantalla en UN recorrido y deja la decisión en
+     * `MercadoPagoOffersPolicy` (función pura, con banco de pruebas).
      *
-     * Reglas (ver comentario de MP_OFFERS_STRONG arriba para el porqué):
-     *   • un identificador de vista propio de ofertas    → bloquea
-     *   • una frase fuerte (título de sección)           → bloquea
-     *   • dos palabras débiles DISTINTAS                 → bloquea
-     *   • pantalla WebView + una palabra débil           → bloquea (red de seguridad)
-     *   • en cualquier otro caso                         → NO bloquea
+     * Lo que este recorrido hace distinto de la versión anterior, y es el arreglo del
+     * sobre-bloqueo del 16/9:
+     *
+     *  • **Solo junta textos CORTOS.** Un título de sección entra en un renglón; la
+     *    respuesta del asistente, la descripción de un movimiento o la letra chica de
+     *    una promoción, no. Antes cualquier nodo de texto contaba igual, así que una
+     *    frase del asistente que nombrara un descuento valía lo mismo que el título
+     *    "Ofertas y descuentos". Los textos largos no se guardan: solo se levanta la
+     *    bandera `hayTextoLargo` para la auditoría. Eso además **achica** el trabajo
+     *    del camino caliente en vez de agrandarlo.
+     *  • **Anota si hay un campo editable.** Es el veto estructural que arregla el
+     *    asistente sin depender de qué conteste (regla de B.19 punto 3).
+     *
+     * Topes: los mismos `MAX_TREE_DEPTH` / `MAX_NODES_PER_SCAN` que el resto de los
+     * recorridos del archivo, más un tope propio de cadenas para que una pantalla con
+     * doscientos nodos de texto no arme doscientas cadenas en el hilo principal.
      */
-    private fun detectMercadoPagoOffers(root: AccessibilityNodeInfo): Boolean {
-        val state = MpScanState()
+    private fun buildMpRetrato(root: AccessibilityNodeInfo): MercadoPagoOffersPolicy.Retrato {
+        val estado = MpRetratoState()
         nodeBudget = MAX_NODES_PER_SCAN
-        scanMercadoPagoNode(root, 0, state)
-
-        if (state.strongHit) return true
-        if (state.weakHits.size >= 2) return true
-        if (state.inWebkitPage && state.weakHits.isNotEmpty()) return true
-        return false
+        scanMercadoPagoNode(root, 0, estado)
+        return MercadoPagoOffersPolicy.Retrato(
+            idsDeVista = estado.ids,
+            textosCortos = estado.textos,
+            hayTextoLargo = estado.hayTextoLargo,
+            hayCampoEditable = estado.hayCampoEditable,
+            esPantallaWeb = estado.esPantallaWeb
+        )
     }
 
-    private class MpScanState {
-        var strongHit = false
-        var inWebkitPage = false
-        val weakHits = HashSet<String>(4)
+    private class MpRetratoState {
+        val ids = ArrayList<String>(MAX_MP_CADENAS)
+        val textos = ArrayList<String>(MAX_MP_CADENAS)
+        var hayTextoLargo = false
+        var hayCampoEditable = false
+        var esPantallaWeb = false
     }
 
-    private fun scanMercadoPagoNode(node: AccessibilityNodeInfo, depth: Int, state: MpScanState) {
-        if (state.strongHit || depth > MAX_TREE_DEPTH) return
+    private fun scanMercadoPagoNode(node: AccessibilityNodeInfo, depth: Int, estado: MpRetratoState) {
+        if (depth > MAX_TREE_DEPTH) return
         if (nodeBudget-- <= 0) return
 
         val className = node.className?.toString()
         if (className != null &&
             (className.contains("WebkitPageActivity", ignoreCase = true) ||
              className.contains("mlwebkit", ignoreCase = true))) {
-            // Ya no bloquea por sí solo: solo baja el umbral a una palabra débil.
-            // Antes, CUALQUIER pantalla web de Mercado Pago (incluidos flujos de pago
-            // y de ayuda) se consideraba "ofertas" y expulsaba al usuario.
-            state.inWebkitPage = true
+            // ⚠️ Esto ya NO baja ningún umbral. Era la causa del sobre-bloqueo: casi
+            // toda Mercado Pago es una pantalla web, así que "pantalla web + una
+            // palabra débil" no era una red de seguridad, era la regla principal.
+            // Queda solo como dato para la auditoría del panel.
+            estado.esPantallaWeb = true
         }
 
+        if (!estado.hayCampoEditable && node.isEditable) estado.hayCampoEditable = true
+
         val viewId = node.viewIdResourceName
-        if (viewId != null) {
-            val v = viewId.lowercase()
-            if (MP_OFFERS_VIEW_ID_HINTS.any { v.contains(it) }) {
-                state.strongHit = true
-                return
-            }
+        if (viewId != null && estado.ids.size < MAX_MP_CADENAS) {
+            estado.ids.add(viewId.lowercase())
         }
 
         val rawText = node.text
+        if (rawText != null && rawText.isNotEmpty()) agregarTextoMp(rawText, estado)
         val rawDesc = node.contentDescription
-        if (rawText != null && rawText.isNotEmpty()) {
-            if (matchMpText(foldAccents(rawText), state)) return
-        }
-        if (rawDesc != null && rawDesc.isNotEmpty()) {
-            if (matchMpText(foldAccents(rawDesc), state)) return
-        }
+        if (rawDesc != null && rawDesc.isNotEmpty()) agregarTextoMp(rawDesc, estado)
 
         val childCount = node.childCount
         for (i in 0 until childCount) {
             val child = node.getChild(i) ?: continue
             try {
-                scanMercadoPagoNode(child, depth + 1, state)
+                scanMercadoPagoNode(child, depth + 1, estado)
             } finally {
                 child.recycle()
             }
-            if (state.strongHit) return
         }
     }
 
-    /** Devuelve true si encontró una señal fuerte (corta el recorrido). */
-    private fun matchMpText(folded: String, state: MpScanState): Boolean {
-        if (MP_OFFERS_STRONG.any { folded.contains(it) }) {
-            state.strongHit = true
-            return true
+    private fun agregarTextoMp(cs: CharSequence, estado: MpRetratoState) {
+        // El corte por longitud se hace ANTES de plegar acentos: plegar cuesta una
+        // asignación por cadena y no hace falta sobre algo que se va a descartar.
+        if (cs.length > MercadoPagoOffersPolicy.MAX_CARACTERES_TITULO) {
+            estado.hayTextoLargo = true
+            return
         }
-        for (w in MP_OFFERS_WEAK) {
-            if (state.weakHits.contains(w)) continue
-            if (containsWholeWord(folded, w)) state.weakHits.add(w)
-        }
-        return false
+        if (estado.textos.size >= MAX_MP_CADENAS) return
+        estado.textos.add(MercadoPagoOffersPolicy.plegarAcentos(cs))
     }
 
     /**
-     * Coincidencia por palabra completa. Sin esto, "puntos" matchea dentro de
-     * "puntos de venta" pero también dentro de cualquier palabra que la contenga,
-     * y una sola palabra suelta alcanzaba para expulsar al usuario de la pantalla.
+     * Publica al panel qué decidió la política y por qué — bloquee o no.
+     *
+     * **Es la pieza que faltaba y la razón por la que este reporte costó una sesión
+     * entera.** Hasta hoy, "Mercado Pago me saca de una pantalla" no se podía
+     * diagnosticar desde el panel: había que adivinar qué palabra la había disparado.
+     * Ahora el motivo exacto (la frase, el id de vista o las dos palabras) queda
+     * escrito, y agregar o sacar una entrada de las listas deja de ser una discusión.
+     *
+     * Solo se escribe cuando el motivo CAMBIA: `scanForMercadoPagoOffers()` puede
+     * correr cada 350 ms, y escribir preferencias a ese ritmo sería justo la clase de
+     * costo por evento que B.13 sacó de este archivo.
      */
-    private fun containsWholeWord(haystack: String, word: String): Boolean {
-        var i = haystack.indexOf(word)
-        while (i >= 0) {
-            val beforeOk = i == 0 || !haystack[i - 1].isLetterOrDigit()
-            val end = i + word.length
-            val afterOk = end >= haystack.length || !haystack[end].isLetterOrDigit()
-            if (beforeOk && afterOk) return true
-            i = haystack.indexOf(word, i + 1)
-        }
-        return false
+    private var mpUltimoMotivo: String? = null
+
+    private fun anotarMpSiCambio(
+        retrato: MercadoPagoOffersPolicy.Retrato,
+        veredicto: MercadoPagoOffersPolicy.Veredicto
+    ) {
+        val motivo = MercadoPagoOffersPolicy.motivo(retrato)
+        if (motivo == mpUltimoMotivo) return
+        mpUltimoMotivo = motivo
+        val bloquea = veredicto == MercadoPagoOffersPolicy.Veredicto.OFERTAS
+        Layer3Audit.anotar(
+            applicationContext,
+            origen = "mp-ofertas",
+            paquete = PKG_MERCADOPAGO,
+            detalle = if (retrato.esPantallaWeb) "pantalla web" else "pantalla nativa",
+            motivo = motivo,
+            bloqueado = bloquea
+        )
     }
 
-    /**
-     * Pasa a minúsculas y saca las tildes en un solo recorrido de caracteres.
-     * Sin esto, "promoción" nunca coincidía con la palabra "promocion" de la lista
-     * (la comparación es por substring literal), así que media lista estaba muerta.
-     * Se evita java.text.Normalizer a propósito: es bastante más caro y esto corre
-     * sobre cada texto de cada nodo.
-     */
-    private fun foldAccents(cs: CharSequence): String {
-        val sb = StringBuilder(cs.length)
-        for (c in cs) {
-            val lc = c.lowercaseChar()
-            sb.append(
-                when (lc) {
-                    'á', 'à', 'ä', 'â', 'ã' -> 'a'
-                    'é', 'è', 'ë', 'ê' -> 'e'
-                    'í', 'ì', 'ï', 'î' -> 'i'
-                    'ó', 'ò', 'ö', 'ô', 'õ' -> 'o'
-                    'ú', 'ù', 'ü', 'û' -> 'u'
-                    else -> lc
-                }
-            )
-        }
-        return sb.toString()
-    }
+    // ──────────────────────────────────────────────────────────────────────────
+    // Helpers de texto.
+    //
+    // 16/9/2026: la implementación canónica se mudó a `MercadoPagoOffersPolicy`, que
+    // es puro y tiene banco de pruebas. Acá quedan dos delegaciones de una línea
+    // porque el resto del archivo (pestañas de WhatsApp, rebote del menú de
+    // Accesibilidad) las usa. **Dos copias del mismo algoritmo es exactamente lo que
+    // causó la causa 1 de B.18** (faltaba `fd00::1` en una de las dos listas de
+    // exclusión del túnel) — por eso se delega en vez de duplicar.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /** Coincidencia por palabra completa. Ver `MercadoPagoOffersPolicy`. */
+    private fun containsWholeWord(haystack: String, word: String): Boolean =
+        MercadoPagoOffersPolicy.contienePalabraCompleta(haystack, word)
+
+    /** Minúsculas sin tildes, en un solo recorrido. Ver `MercadoPagoOffersPolicy`. */
+    private fun foldAccents(cs: CharSequence): String =
+        MercadoPagoOffersPolicy.plegarAcentos(cs)
 
     /**
      * Rebote de la sección de ofertas.
@@ -2779,11 +2815,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
      * un "atrás", se verifica, un segundo intento, y recién entonces HOME — más una
      * pausa de MP_BACKOFF_MS para que no quede girando.
      */
-    private fun triggerMercadoPagoBlock() {
+    private fun triggerMercadoPagoBlock(motivo: String) {
         val now = SystemClock.elapsedRealtime()
         if (mpBlockInProgress || now < mpBackoffUntil) return
         mpBlockInProgress = true
 
+        Log.w(TAG, "🚫 Ofertas de Mercado Pago: rebotando — $motivo")
         mainHandler.post {
             Toast.makeText(applicationContext, "🚫 Sección de Ofertas restringida por LockSuite", Toast.LENGTH_SHORT).show()
         }
@@ -2796,7 +2833,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             } else {
                 val pkg = current.packageName?.toString() ?: ""
                 val relevant = pkg == PKG_MERCADOPAGO || WEBVIEW_PROVIDER_PACKAGES.contains(pkg)
-                val offers = relevant && detectMercadoPagoOffers(current)
+                val offers = relevant &&
+                    MercadoPagoOffersPolicy.evaluar(buildMpRetrato(current)) ==
+                        MercadoPagoOffersPolicy.Veredicto.OFERTAS
                 current.recycle()
                 offers
             }

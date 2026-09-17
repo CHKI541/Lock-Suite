@@ -753,6 +753,8 @@
       (cls === "bad" ? "alert-red" : "warning-yellow") + '); padding:12px 16px; margin-bottom:10px">' +
       esc(txt) + "</div>").join("");
 
+    pintarLayer3();
+
     if (document.activeElement !== $("c-nombre-input")) {
       $("c-nombre-input").value = campo("deviceName", "") || "";
     }
@@ -766,6 +768,65 @@
     $("c-bateria").textContent = "🔋 " + (bat != null ? bat + " %" : "—");
     $("c-version").textContent = campo("appVersionName", "—");
     document.title = nombreDispositivo() + " — LockSuite";
+  }
+
+  /* Registro de rebotes de la Capa 3 (mdm/Layer3Audit.kt).
+   *
+   * El formato es texto plano a propósito, una línea por entrada y siete campos
+   * separados por "|": ts|origen|paquete|detalle|motivo|bloqueado|veces. Se eligió así
+   * para que también se pueda leer de un vistazo por ADB; acá solo se parsea.
+   *
+   * Una línea con menos de 7 campos se ignora en vez de romper la tarjeta: el celular
+   * puede estar corriendo una versión más vieja o más nueva que el panel. */
+  const ORIGEN_LEGIBLE = {
+    "selector-de-foto": "Selector de foto",
+    "mp-ofertas": "Ofertas de Mercado Pago",
+    "webview": "Navegador interno",
+    "whatsapp": "WhatsApp",
+    "cuenta-google": "Cuenta de Google",
+    "menu-accesibilidad": "Menú de Accesibilidad",
+    "legales": "Pantallas legales",
+    "portal-cautivo": "Portal cautivo",
+    "play-store": "Play Store",
+    "anti-evasion": "Anti-evasión en Ajustes"
+  };
+
+  function pintarLayer3() {
+    const cont = $("c-layer3");
+    if (!cont) return;
+    const crudo = campo("layer3Audit", "") || "";
+    const filas = [];
+    crudo.split("\n").forEach(function (linea) {
+      if (!linea) return;
+      const c = linea.split("|");
+      if (c.length < 7) return;
+      filas.push({
+        ts: parseInt(c[0], 10) || 0,
+        origen: c[1], paquete: c[2], detalle: c[3], motivo: c[4],
+        bloqueado: c[5] === "1", veces: parseInt(c[6], 10) || 1
+      });
+    });
+
+    if (!filas.length) {
+      cont.innerHTML = '<p class="ls-hint" style="margin:0">Todavía no cerró nada. ' +
+        'Si una app se cierra sola, abrila una vez y volvé acá.</p>';
+      return;
+    }
+
+    cont.innerHTML = filas.map(function (f) {
+      const chip = f.bloqueado
+        ? '<span class="ls-chip bad">rebotó</span>'
+        : '<span class="ls-chip">solo anotado</span>';
+      const veces = f.veces > 1 ? ' <small>×' + f.veces + "</small>" : "";
+      const nombre = ORIGEN_LEGIBLE[f.origen] || f.origen;
+      return '<div style="padding:8px 0; border-bottom:1px solid var(--border, #2a2a2a)">' +
+        "<div>" + chip + " <strong>" + esc(nombre) + "</strong>" + veces +
+        ' <small style="opacity:.7">' + LS.fecha(f.ts) + "</small></div>" +
+        '<div style="font-size:12px; opacity:.85">' + esc(f.paquete) +
+        (f.detalle ? " · " + esc(f.detalle) : "") + "</div>" +
+        '<div style="font-size:12px; opacity:.7">' + esc(f.motivo) + "</div>" +
+        "</div>";
+    }).join("");
   }
 
   $("c-nombre-btn").addEventListener("click", async function () {

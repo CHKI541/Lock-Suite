@@ -145,6 +145,7 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - `INFORME_FORENSE_ACCESIBILIDAD_ANDROID13.md` (15/8) — diagnóstico completo del bug de accesibilidad en Android 13, con evidencia ADB (ver B.8).
 - `INSTRUCCIONES_COMPILACION_ANTIGRAVITY_2026-08-16.md` (16/8) — **empezar por acá si vas a compilar.** Qué entra en el build, comandos exactos, qué puede fallar, y en qué orden probar (B.8 primero, porque bloquea al resto).
 - `INFORME_OPTIMIZACION_ACCESIBILIDAD_2026-08-16.md` (16/8) — detalle línea por línea de la optimización de Capa 3 y del sobre-bloqueo de Mercado Pago, con el porqué de cada cambio y checklist de 9 puntos (ver B.13). Leerlo antes de tocar `LockSuiteAccessibilityService.kt`. **Ojo:** la parte que describe `BlockOverlayManager` como "una ventana por región" quedó desactualizada el 17/8 — ese archivo se reescribió a una sola capa de canvas (ver B.17).
+- `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md` (16/9) — **EL MÁS NUEVO: empezá por acá si vas a compilar, desplegar o probar.** Los DOS commits que hay que hacer y en qué orden (uno es trabajo del 15/9 que estaba sin commitear), qué se tocó archivo por archivo con sus finales de línea, las tres cosas concretas que podrían fallar en Gradle y cómo cambiarlas sin tocar comportamiento, el orden de prueba **con las dos regresiones primero** (que el catálogo de ilustraciones siga rebotando, y que las ofertas de Mercado Pago sigan rebotando), y siete cosas que no hay que "simplificar". Ver B.67 a B.70.
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_PANEL_UNIFICADO.md` (10/9 noche) — **EL MÁS NUEVO: empezá por acá si vas a compilar o desplegar lo de la tanda del panel unificado (B.62 a B.66).** Qué se tocó archivo por archivo, qué mirar si Compose no compila (con las tres cosas concretas que podrían fallar y cómo cambiarlas sin tocar comportamiento), el orden de prueba con **la regresión que más importa primero** (que Mercado Pago siga pagando con los dominios de ofertas cerrados), lo que necesita al dueño y no a Antigravity (el APK oficial de Waze), y siete cosas que no hay que "simplificar".
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_MAESTRO.md` (10/9) — **EL PUNTO DE ENTRADA DE HOY. Empezá por acá si vas a aplicar, compilar, desplegar o probar.** Cubre las DOS tandas del 10/9 (B.58 por un lado; B.59/B.60/B.61 por el otro), en qué orden se aplican los dos parches y por qué no se pueden invertir, el orden de prueba **consolidado** (las regresiones de las dos juntas al principio), qué hace falta que haga Antigravity que ninguna sesión de IA pudo, qué se verificó sin equipo y cuánto pesa cada cosa, y qué hacer si algo sale mal. Los dos documentos de detalle de abajo siguen valiendo para el porqué de cada decisión.
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_SOLICITUDES_IAB_QR.md` (10/9 tarde) — detalle de B.59, B.60 y B.61: los pedidos de apps, el detector estructural de navegadores embebidos y el alta por QR. Trae las siete cosas que no hay que "simplificar" y el diagnóstico completo de los dos bugs que tuvo el codificador de QR.
@@ -189,6 +190,9 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - **(10/9 noche) UNDÉCIMA vez que `device_bash` no monta, y la receta volvió a funcionar entera.** Clonar el repo público → leer todo del clon → verificar en el contenedor. Como el repo ya está commiteado y al día, esta vez ni siquiera hizo falta validar tamaños contra `device_list_dir`: alcanzó con confirmar que `git log -1` del clon coincide con lo que el dueño acababa de desplegar. **Sin `device_bash` no hay `git` sobre el disco del dueño, pero sí lo hay sobre el clon**: los commits se hacen en el clon y después se traen.
 - **(10/9 noche) LOS APKs DE LA TIENDA SE PUEDEN AUDITAR ENTEROS DESDE EL CONTENEDOR, Y VALE MUCHÍSIMO LA PENA.** `curl` a `github.com/<repo>/releases/download/<tag>/<archivo>` funciona sin credenciales mientras el repo sea público (la API de GitHub **no**: está restringida y devuelve "access not enabled", pero la descarga directa del asset sí). Con `pip install androguard` se saca de cada APK el paquete real, `versionName`, `minSdk`/`targetSdk`, las ABI (`lib/<abi>/`), si es un split (atributo `split` del manifiesto) y **el certificado de firma**. Los 16 de la Tienda se bajaron y analizaron en dos llamadas. **Así se encontró que Waze está reempaquetado por un tercero (B.66), que es algo que ningún informe iba a decir.** El alias del bloque v1 (`META-INF/<ALIAS>.RSA`) suele delatar al firmante de un vistazo.
 - **(10/9 noche) LAS PÁGINAS DEL PANEL SE PUEDEN RENDERIZAR ACÁ, Y AGARRAN BUGS QUE EL `node --check` NO.** Chromium y Playwright ya están en el contenedor (`/opt/pw-browsers/chromium`, `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` — **no correr `playwright install`**). Receta: copiar los `.html`/`.js`/`.css` a una carpeta aparte, reemplazar `firebase-config.js` por un stub que define `window.firebase` con datos de mentira **de la misma forma que los reales**, sacar los `<script src="https://gstatic…">`, abrir con `file://` y capturar. Se escuchan `console` y `pageerror` para no perder nada. En esta sesión encontró dos bugs de estilo reales en la primera vuelta. **Cuesta cinco minutos y conviene hacerlo siempre antes de entregar una página nueva.**
+- **(16/9) DUODÉCIMA vez que `device_bash` no monta, y un dato nuevo que ahorra una llamada: `device_request_folder_access` sobre una subcarpeta devuelve `alreadyGranted` y NO baja la profundidad.** Está escrito arriba desde el 21/8 y esta sesión lo volvió a comprobar por las dudas: el puente contesta `{"granted":[…],"alreadyGranted":true}` y `device_stage_files` sigue fallando con "8 folders below the connected folder, and at most 7 are supported". **Lo único que lo destraba es el botón "Add folder" de la app de escritorio.** Pedirlo de entrada, junto con la carpeta raíz, y no gastar el llamado a `device_request_folder_access`.
+- **(16/9) LOS APKs DE LA TIENDA TAMBIÉN SIRVEN PARA DIAGNOSTICAR, NO SOLO PARA AUDITAR.** El 10/9 se usó `androguard` para ver quién firma cada APK (B.66). Esta sesión lo usó para algo distinto y más directo: el dueño reportó *"al abrir Tefilon se me cierra"*, se bajó `Tfilon_3.1.10.apk` del release `store-apks-v1`, se leyó su manifiesto y **el nombre de su actividad de arranque (`tfilon.tfilon.TfilonStartActivity`) ERA la respuesta** — ver B.68. Dos llamadas, cero hipótesis. **Cuando el reporte es sobre una app concreta de la Tienda, bajar su APK y leer el manifiesto va ANTES que leer el código de LockSuite.** Y de paso se corrió el mismo chequeo sobre los 16 APKs para saber a cuántas más les pasaba.
+- **(16/9) Chromium está en `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`** — la ruta que figuraba antes (`/opt/pw-browsers/chromium`) es un enlace y la de `chromium-1148` ya no existe. Hay que pasarla con `executable_path=` y `args=["--no-sandbox"]`. Con eso la receta de renderizado de B.65 anda igual.
 - **Sí se puede type-checkear sin Gradle, y conviene hacerlo.** `kotlinc` 2.0.21 se baja de `github.com/JetBrains/kotlin/releases` (Maven Central da 404 para ese artefacto) y corre en el contenedor. Contra stubs mínimos de la API de Android + de las clases del proyecto que toque el archivo, agarra errores reales de tipos y de referencias. **Siempre con control negativo** (romper a propósito una referencia y confirmar que la detecta): sin eso, un "0 errores" puede ser simplemente que no compiló nada.
 
 ---
@@ -251,7 +255,10 @@ Mientras la suspensión está activa: `reapplyAllRestrictions()`, `refreshInstal
 
 **B.12 — El panel no ofrece suspender un grupo entero.** Deliberado: el interruptor de suspensión existe solo por dispositivo. Suspender un grupo con un clic es demasiado fácil de hacer sin querer para lo que implica. Si se decide agregarlo, va con confirmación escribiendo el nombre del grupo.
 
-**B.13 — Capa 3 optimizada y sobre-bloqueo de Mercado Pago corregido (16/8, sesión de Claude — escrito y type-checkeado, sin compilar en Gradle ni probar en equipo).** Archivos: `service/LockSuiteAccessibilityService.kt` y `service/BlockOverlayManager.kt`. Detalle completo con el porqué de cada cambio y checklist de 9 puntos: **`INFORME_OPTIMIZACION_ACCESIBILIDAD_2026-08-16.md`**. Backups del código previo en `_to_delete/*.pre-optimizacion-2026-08-16`. Pedido del dueño: que el servicio sea rápido, consuma poco y tape exactamente lo que tiene que tapar — ni de más ni de menos.
+**B.13 — Capa 3 optimizada y sobre-bloqueo de Mercado Pago corregido (16/8, sesión de Claude — escrito y type-checkeado, sin compilar en Gradle ni probar en equipo).**
+
+> ⚠️ **16/9: la corrección de Mercado Pago de este punto NO alcanzó, y la parte que faltaba era justamente su "red de seguridad". Lo vigente está en B.67; la decisión y las listas se mudaron a `mdm/MercadoPagoOffersPolicy.kt`.** El resto de B.13 (los caches del camino caliente, los topes de recorrido, el snapshot de flags, la capa de canvas) sigue vigente entero y **no hay que tocarlo**.
+ Archivos: `service/LockSuiteAccessibilityService.kt` y `service/BlockOverlayManager.kt`. Detalle completo con el porqué de cada cambio y checklist de 9 puntos: **`INFORME_OPTIMIZACION_ACCESIBILIDAD_2026-08-16.md`**. Backups del código previo en `_to_delete/*.pre-optimizacion-2026-08-16`. Pedido del dueño: que el servicio sea rápido, consuma poco y tape exactamente lo que tiene que tapar — ni de más ni de menos.
 
 **Contexto para no romperlo:** `onAccessibilityEvent` corre en el hilo principal y el sistema lo llama hasta 10 veces por segundo con la pantalla encendida. Hay un bloque de comentario al principio del archivo con las reglas del camino caliente. Leerlo antes de agregar cualquier cosa ahí: casi todos los problemas de abajo vinieron de agregar algo razonable en sí mismo, sin tener presente ese multiplicador.
 
@@ -921,6 +928,9 @@ Pedido del dueño: *"¿hay manera de que me averigües y bloquees de la mejor ma
 
 **B.47 — EL SELECTOR DE FOTO DE CONTACTO "A VECES NO REBOTABA": CUATRO CAUSAS, DOS MEDIDAS. [ESCRITO Y VERIFICADO EL 5/9; SIN COMPILAR NI PROBAR]**
 
+> ⚠️ **16/9: este rebote tenía una QUINTA causa, en el sentido contrario — rebotaba de más, y cerraba apps enteras. Ver B.68.** El marcador `"artactivity"` se comparaba con `contains` crudo y está adentro de `StartActivity`, uno de los nombres de clase más comunes de Android. Todo lo de abajo sigue siendo correcto; lo que cambió es CÓMO se comparan los marcadores.
+
+
 Reporte del dueño sobre el interruptor `block_contact_photo_picker` que había puesto Antigravity: *"me di cuenta que el bloqueo a veces no rebota, no sé por qué"*. Archivo nuevo `mdm/PhotoPickerPolicy.kt`.
 
 **Cuatro causas. Las dos primeras explican solas el "a veces":**
@@ -1402,130 +1412,176 @@ La salida: **`EnrollmentProfiles.POST_ALTA`** marca esas dos, el QR aplica el pe
 
 ---
 
+**B.67 — MERCADO PAGO BLOQUEABA DE MÁS: el asistente (Mago) y los cobros de ANSES. La causa era la "red de seguridad" de B.13. [ESCRITO, TYPE-CHECKEADO Y PROBADO EN BANCO EL 16/9; SIN COMPILAR NI PROBAR EN EQUIPO]**
+
+Reporte del dueño, textual: *"revises el mecanismo de bloqueo de ofertas por accesibilidad en mercado pago, que bloquea de mas y a veces no puedo hablar con el asistente (mago) quizas por alguna palabra que dice, o no pude entrar a cobros de anses"*.
+
+**LA CAUSA, Y LAS DOS MITADES DEL REPORTE SON LA MISMA.** B.13 dejó tres niveles de señal (frase fuerte / dos palabras débiles / view-id) **más una cuarta como red de seguridad: "pantalla WebView de Mercado Pago + UNA palabra débil"**. La idea era que la sección de ofertas real se renderiza como web y casi no expone texto accesible. El problema: **casi TODA Mercado Pago es una pantalla WebView** (`WebkitPageActivity` / `mlwebkit`) — cobros, ANSES, ayuda, comprobantes y el asistente. Así que esa cuarta regla no era una red de seguridad: **era la regla principal**, y bastaba UNA palabra de una lista de dieciséis en CUALQUIER nodo para expulsar al usuario.
+
+- **El asistente (Mago)** es una conversación, y lo que contesta es texto libre. Si la respuesta nombraba un beneficio, un descuento o Mercado Puntos, el filtro lo leía como si el usuario hubiera ENTRADO a la sección de ofertas. *"Quizás por alguna palabra que dice"* era literal.
+- **Cobros de ANSES**: ANSES llama **"beneficios"** a sus propias prestaciones, así que esa pantalla trae la palabra por su cuenta. Una palabra + pantalla web = afuera. Peor: `"tus beneficios"` y `"mis beneficios"` estaban además en la lista de frases FUERTES, que bloquean con una sola coincidencia.
+
+**La causa conceptual, que vale más que el parche: se estaba tratando la MENCIÓN de una palabra como si fuera la SECCIÓN.** Nombrar un descuento y estar parado en el catálogo de descuentos no son lo mismo, y un recorrido que solo junta palabras sueltas no distingue una cosa de la otra.
+
+**LO QUE SE HIZO.** La decisión se mudó a un archivo nuevo, **`mdm/MercadoPagoOffersPolicy.kt`**, que es una **función pura** sobre un retrato de la pantalla — sin `Context`, sin Android, sin preferencias. Mismo reparto que `EmbeddedBrowserDetector` (B.60) y `WhitelistManager.buildRules()` (B.53): el servicio arma el retrato en UN recorrido, la política decide. Eso es lo que permite ejercitarla en un banco en vez de discutirla.
+
+El orden **ES** la especificación:
+
+| # | Regla | Veredicto |
+|---|---|---|
+| 1 | un id de vista de ofertas (`offers`, `mercadopuntos`, `loyalty`…) | **bloquea** |
+| 2 | hay un campo de texto **editable** en pantalla | **permite** |
+| 3 | una palabra de pantalla segura (`anses`, `cobros`, `haberes`, `asistente`, `cvu`…) | **permite** |
+| 4 | una frase fuerte en un texto corto | **bloquea** |
+| 5 | dos palabras débiles distintas en textos cortos | **bloquea** |
+| 6 | cualquier otra cosa | permite |
+
+⚠️ **TRES COSAS QUE NO HAY QUE "SIMPLIFICAR"** (están escritas también en la cabecera del archivo):
+
+1. **El veto por campo editable va ANTES que cualquier palabra, y es estructural.** Una pantalla con un campo de texto es una conversación, un buscador o un formulario — nunca un catálogo de ofertas, que es una lista para mirar. Es la regla de B.19 punto 3, y es lo único que arregla el asistente **sin depender de qué conteste**. Si alguien lo saca "porque las ofertas también tienen buscador", vuelve el bug.
+2. **Las palabras solo se leen de textos CORTOS** (≤ 48 caracteres). Un título de sección entra en un renglón; una respuesta del asistente, la letra chica de una promoción o la descripción de un movimiento, no. Es el mismo truco con el que B.41 evita que la descripción de una app dispare un diagnóstico de Play Store. Y **achica** el trabajo del camino caliente en vez de agrandarlo: el texto largo se descarta antes de plegarle los acentos.
+3. **La lista de pantallas seguras le gana a las palabras, pero NO al id de vista.** Un `view-id` es estructura de la app, no una palabra que alguien escribió.
+
+**Cambios de lista, con el porqué:** se sacaron `"puntos"` y `"supermercado"` de las palabras débiles (son vocabulario normal de una app de pagos: *"puntos de venta"*, *"pagaste en un supermercado"*); se sacaron `"tus beneficios"` y `"mis beneficios"` de las frases fuertes (aparecen en la pantalla de cobro de ANSES). `"mercado puntos"` sigue siendo frase fuerte, que era el caso que de verdad importaba.
+
+**Y el diagnóstico, que es la mitad del valor:** el servicio publica el motivo exacto de cada decisión al panel vía **B.69**, bloquee o no. Hasta hoy *"Mercado Pago me saca de una pantalla"* no se podía contestar sin adivinar qué palabra la había disparado. Ahora, si se escapa una pantalla de ofertas, el título exacto que hay que agregar sale del equipo.
+
+**Falta probar en equipo real, en este orden:**
+
+1. **★ Abrir el asistente (Mago) y tener una conversación entera**, pidiéndole a propósito algo que lo haga nombrar descuentos, beneficios o Mercado Puntos. No tiene que rebotar ni una vez.
+2. **★ Entrar a cobros de ANSES** y completar el flujo.
+3. **⚠️ LA REGRESIÓN QUE MÁS IMPORTA: entrar a la sección de ofertas / Mercado Puntos de verdad y confirmar que SIGUE rebotando.** Si no rebota, mirar `layer3Audit` en el panel: el motivo va a decir con qué se quedó corto, y se agrega esa frase o ese id al archivo.
+4. **Hacer una transferencia real** (es la regresión que B.62 ya dejó anotada) y mirar un comprobante.
+5. Recorrer la pantalla de inicio, tarjetas, QR y actividad sin que rebote nada.
+6. Mirar `layer3Audit` en el panel después de todo eso: tiene que haber líneas de `mp-ofertas` con motivo, y las de las pantallas legítimas tienen que decir `permitida: …`.
+
+---
+
+**B.68 — TEFILON SE CERRABA AL ABRIRSE, Y NO TENÍA NADA QUE VER CON TEFILON: el marcador `"artactivity"` está adentro de `"StartActivity"`. [MEDIDO SOBRE EL APK REAL, ARREGLADO Y PROBADO EN BANCO EL 16/9; SIN COMPILAR NI PROBAR EN EQUIPO]**
+
+Reporte del dueño: *"al abrir Tefilon se me cierra, por bloqueo de accesibilidad, en la imagen de entrada que aparece"*.
+
+**LA MEDICIÓN, QUE FUE TODO EL DIAGNÓSTICO.** Se bajó `Tfilon_3.1.10.apk` del release `store-apks-v1` (sha256 idéntico al publicado en `storeApps`) y se leyó su manifiesto con `androguard`. Tiene **dos** actividades, y la de arranque —la "imagen de entrada"— es:
+
+```
+tfilon.tfilon.TfilonStartActivity
+```
+
+`PhotoPickerPolicy.shouldBounce()` compara los marcadores de selector de foto de perfil con `cls.contains(marcador)` sobre el nombre de clase en minúscula. Uno de esos marcadores es **`"artactivity"`**, puesto para agarrar el catálogo de ilustraciones de Google (`…contacts.art.ArtActivity`). Y:
+
+```
+"tfilon.tfilon.tfilonst[artactivity]"      ←  St + artActivity
+```
+
+O sea que LockSuite creía que el sidur era el catálogo de ilustraciones de Google y le mandaba `GLOBAL_ACTION_BACK` apenas aparecía la ventana. Para el usuario, eso es *"abro la app y se cierra sola"*, sin ningún cartel. **Y el interruptor `block_contact_photo_picker` viene ENCENDIDO de fábrica**, así que le pasaba a toda la flota.
+
+**Es la CUARTA vez que este proyecto paga el mismo error** —comparar por substring contra una palabra corta—: `"installing"` conteniendo `"install"` (B.9 p.1), `"Iniciar sesión"` matcheando `"iniciar"` de `OPEN_WORDS` (B.41 p.3) y el `swipe_refresh_layout` que contaba como control de navegación (B.60). **La regla que queda escrita: en un nombre de clase se compara por SEGMENTO, nunca por substring crudo.**
+
+**El arreglo:** `PhotoPickerPolicy.contieneMarcador()` exige que el marcador arranque al principio de la cadena o justo después de un separador de nombre de clase (`.`, `$`, `_`, `/`). El final no se exige, porque `artactivity` tiene que seguir matcheando `ArtActivityV2` y `photopicker` tiene que matchear `PhotoPickerActivity`. Sigue agarrando todos los casos reales que B.47 vino a cerrar (verificado en el banco, uno por uno).
+
+**Cuánto más abarcaba el bug, medido:** se corrió el mismo chequeo sobre **los 16 APKs de la Tienda**. Hoy Tefilon es el único cuya **pantalla de entrada** cae, pero también caen `*ChartActivity`, `*SmartActivity`, `*CartActivity`, `*RestartActivity` y cualquier `*StartActivity` — y Gboard tiene una actividad interna (`…utils.StartActivityForResult`) que caía igual. Es un nombre de clase comunísimo: el bug estaba esperando a que alguien instalara la app equivocada.
+
+**Falta probar en equipo real:** (1) **★ abrir Tefilon y que NO se cierre**; (2) **⚠️ la regresión: Contactos → editar contacto → foto → el catálogo de ilustraciones TIENE que seguir rebotando**, y también **inmediatamente después de ingresar el PIN** (esa es la prueba de la causa 1 de B.47); (3) **adjuntar una foto en WhatsApp tiene que seguir funcionando**; (4) sacar una foto con la cámara y recortarla para un contacto.
+
+---
+
+**B.69 — REGISTRO UNIFICADO DE REBOTES DE LA CAPA 3. Es la pieza que faltaba, y por eso B.67 y B.68 costaron una sesión entera. [ESCRITO Y PROBADO EN BANCO EL 16/9; SIN COMPILAR NI PROBAR EN EQUIPO]**
+
+El servicio de Accesibilidad tiene **nueve** lugares que pueden mandar `GLOBAL_ACTION_BACK` o `GLOBAL_ACTION_HOME`: WebView por app, detector de navegadores embebidos, ofertas de Mercado Pago, Estados/Canales de WhatsApp, selector de foto, cuenta de Google, menú de Accesibilidad, pantallas legales y portal cautivo. **Para el usuario los nueve se ven exactamente igual: la app se cierra sola y no dice nada.**
+
+Cada uno escribe en `logcat` con su propio formato, y tres de ellos publican un diagnóstico propio al panel (`debugLabels` de B.41, `googleAccountWebSeenClasses` de B.43, `photoPickerSeenClasses` de B.47). O sea que **la misma solución se redescubrió tres veces, siempre acotada a una función**, y nunca hubo respuesta para la pregunta que en realidad trae el dueño: *"se me cierra esta app, ¿por qué?"*.
+
+**Y hay un detalle que conviene tener escrito porque es el que más duele:** `photoPickerSeenClasses` existía y **no habría servido igual** para el caso de Tefilon — solo anota clases de paquetes que ya considera "relevantes" (selector, Fotos o Contactos), y Tefilon no lo es. **El diagnóstico existía y era ciego justo para el caso que hacía falta.**
+
+Archivo nuevo **`mdm/Layer3Audit.kt`**: un anillo de 20 entradas en `SharedPreferences` con `(origen, paquete, clase, motivo, bloqueado, veces, cuándo)`, publicado al panel como `layer3Audit` y dibujado en la ficha del celular (pestaña **Resumen**, tarjeta «🛑 Qué cerró la Capa 3»).
+
+⚠️ **Tres cosas que no hay que "simplificar":**
+
+1. **Persiste en disco, no en memoria.** `EmbeddedBrowserDetector` guarda su auditoría en un mapa en RAM y para lo suyo está bien; acá no alcanza, porque Android recrea los servicios de accesibilidad seguido (B.54 p.2) y un registro que se borra solo justo cuando el equipo está inestable no contesta nada.
+2. **Se anota también lo que NO se bloqueó, cuando estuvo cerca.** Ver que una pantalla legítima pasó raspando es lo que permite corregir un umbral **antes** de que alguien lo reporte.
+3. **Se agrupa por repetición en vez de acumular.** Un rebote en bucle llenaría el registro con la misma línea veinte veces y taparía todo lo demás — justo cuando más falta hace mirarlo.
+
+**Cómo se usa, y es la parte práctica:** el dueño abre la app que se le cierra, entra al panel → ficha del celular → Resumen, y la línea está ahí con el origen, la clase y el motivo. **Con esto, el reporte de Tefilon se contestaba en dos minutos en vez de en una sesión.**
+
+**Falta probar en equipo real:** que la tarjeta se llene al provocar un rebote a propósito (por ejemplo entrar a Ajustes → Accesibilidad con el interruptor de rebote encendido); que las repeticiones se agrupen en vez de acumularse; y que con el equipo sin rebotes nada la tarjeta diga que no cerró nada en vez de quedar vacía.
+
+---
+
+**B.70 — PORTAL CAUTIVO EN AVIONES: el guard cerraba la ventana antes de que el usuario terminara. [ESCRITO POR OTRA SESIÓN / ANTIGRAVITY EL 15/9; RECUPERADO DEL WORKING TREE Y COMMITEADO EL 16/9; SIN PROBAR EN EQUIPO]**
+
+Esta sesión encontró **cinco archivos modificados y sin commitear** en el disco del dueño con fecha 15/9 ~20:45 UTC (`LockSuiteAccessibilityService.kt`, `CaptivePortalPolicy.kt`, `EmbeddedBrowserDetector.kt`, `WhitelistCatalog.kt` y `catalog.js`). No son de esta sesión; se commitearon **tal cual, sin tocar una línea**, en un commit aparte, para que el trabajo del 16/9 quedara separado y revisable.
+
+Qué hacen, leídos del diff: es la continuación de **B.50**. En portales de avión (KLM / Viasat / Panasonic) la red **valida antes** de que el usuario termine de aceptar términos o de cargar el voucher, y el guard le cerraba la ventana en la cara. Ahora `VALIDATED_GRACE_MS` pasa de 1,5 s a **20 s** y se mide **desde que la red validó** (`captiveValidatedAt`), no desde que la ventana se abrió; además se exige **10 s sin que el usuario toque la pantalla** antes de cerrar, y los `TYPE_VIEW_CLICKED` / `TYPE_VIEW_SCROLLED` cuentan como señal de vida. Se suma `com.google.android.captiveportallogin` al reconocimiento de la ventana (antes solo se miraba el paquete de AOSP), se lo excluye del detector de navegadores embebidos, y se agregan los dominios de wifi a bordo (KLM, Viasat, Panasonic, Gogo, OnAir, BoardConnect) a la lista de infraestructura de la lista blanca.
+
+**Falta probar en equipo real:** un portal cautivo de verdad (alcanza el de un bar o un shopping) — que se pueda completar el login, que la ventana no se cierre a mitad del trámite, y que **siga cerrándose sola** cuando el usuario efectivamente terminó y dejó de tocarla. Mirar `captivePortalForcedCloses` en el panel: es el número que delata que el guard está cerrando de más.
+
+---
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**10/9 (noche 2) — Antigravity: Integración completa de parches Claude (B.62 a B.66), corrección de constructor en DomainRuleManager, UTF-8 en tools, y ajuste de dominios en Mercado Pago.**
+**16/9 — Claude: la Capa 3 bloqueaba de más en dos lugares distintos, y no había forma de saberlo desde el panel. Ver B.67, B.68 y B.69.**
 
-1. **Integración de parches y compilación real con Gradle:** Se aplicaron limpiamente los 3 parches de Claude (`0001`, `0002`, `0003`). Al compilar con `./gradlew.bat compileReleaseKotlin`, se detectó que `DomainRuleManager` requería dos parámetros en su constructor primario; se agregó el constructor secundario `constructor(context: Context)` resolviendo las llamadas desde `LockSuiteFirebaseService` y `FirebaseDeviceSync`.
-2. **Terminal Windows UTF-8:** Se corrigió `tools/check_panel_commands.py` para reconfigurar `sys.stdout` en UTF-8 y evitar excepciones por caracteres Unicode (emojis).
-3. **Ajuste de Mercado Pago pedido por el dueño:** En `WhitelistCatalog.kt`, se retiraron los 11 subdominios propios de Mercado Pago (`ofertas`, `promociones`, `beneficios`, `descuentos`, `deals`, `loyalty`, `matt`) de la lista de bloqueo incondicional (`block`), dejándolos permitidos. En su lugar, la lista de bloqueo de Mercado Pago quedó restringida estrictamente a los dominios del marketplace de Mercado Libre que se bloquean con el switch «Bloqueo de Mercado Libre en Mercado Pago» (`click1`, `listado`, `mobile`, `snoopy`, `www` tanto en `.com.ar` como en `.com`). Se sincronizó `MERCADO_LIBRE_MP_DOMAINS` en `PolicyManager.kt`, `WHITELIST_BUILTIN` en `app.js` (`block: 10`) y se regeneró `catalog.js`.
-4. **Verificación:** Los 6 chequeos de Python (`check_whitelist_sync.py`, `check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`) pasaron con código de salida 0.
+Pedido del dueño, en dos partes: revisar el bloqueo de ofertas de Mercado Pago *"que bloquea de más y a veces no puedo hablar con el asistente (mago) quizás por alguna palabra que dice, o no pude entrar a cobros de anses"*, y *"al abrir Tefilon se me cierra, por bloqueo de accesibilidad, en la imagen de entrada que aparece"*.
 
-**10/9 (noche) — Claude: revisión de la Tienda con evidencia, y rediseño del panel y de la app en una sola pantalla por celular. Ver B.62 a B.66.**
-
-Pedido del dueño, en tres partes: revisar que lo que hizo Antigravity con la Tienda esté *"perfecto, cómodo y sin bugs"*; *"locksuite y el panel web quedaron muy mareadores y cosas en distintas pestañas — hacelo más cómodo y unificado, rediseñá todo desde cero sin arruinar el código"* con una ficha por celular que se abra en pestaña nueva; y a mitad de camino, dos agregados: *"aunque hagamos modo lista negra, las apps mismas que permita tienen que quedar bloqueados sus dominios no kosher"* y *"una sección para decidir de forma global qué dominios son kosher y cuáles no en cada app, poné lo que ya hiciste así puedo corregir si te equivocaste"*.
-
-1. **La Tienda: el trabajo de Antigravity está bien, y se verificó bajando los 16 APKs, no leyendo el informe.** Los 16 `sha256` coinciden exactos, los 16 paquetes coinciden, ninguno es XAPK ni split. **Pero el informe omite tres cosas y una es grave: Waze no es el Waze oficial** — está firmado por `O=ANDROID-KOSHER, CN=YOLEVI`, o sea reempaquetado por un tercero, y la Tienda lo instala en silencio como Device Owner en toda la flota. **El checksum de B.58 garantiza "es el mismo archivo", no "el archivo es confiable"**, y esa distinción no estaba escrita en ningún lado. Además la tabla de compatibilidad del informe es falsa en 3 de 16 (Translate y Waze son solo arm64, Gboard solo armeabi-v7a) y Waze exige Android 10+, así que en el CAT S22 Flip varias no instalan. Ver **B.66**.
-2. **★ Un bug de la Tienda que la deja sin instalar NADA, y es la copia exacta del que arregló B.54.** `SelfUpdater.scheduleInstallSafetyTimeout` usaba `setExactAndAllowWhileIdle` sin chequear `canScheduleExactAlarms()`; si la alarma no se puede programar, `prepareTemporaryInstallAccess()` falla y la Tienda **y el OTA** dejan de instalar, con un mensaje que habla de "permisos temporales de instalación" y no de alarmas. B.54 blindó el otro llamado el 9/9 y esta copia quedó afuera. **Lección: cuando se arregla un patrón, hay que buscar el patrón en todo el proyecto** — un `grep` lo habría encontrado ese mismo día. Ver **B.64**.
-3. **El agujero de dominios que encontró el dueño era real y estaba medido.** Los 41 dominios no kosher que viven adentro de apps que el equipo usa (ofertas y marketplace de Mercado Pago, foro de Waze, juegos y streaming de DiDi, `translate.google.com` como proxy de navegación, Tenor/Giphy) **solo se bloqueaban si esa app tenía una decisión guardada**. En un equipo normal resolvían todos; lo único que se cerraba siempre eran 7. La causa conceptual vale más que el parche: se había tratado *"este host es contenido no kosher"* como consecuencia de la decisión sobre la app, cuando es **una propiedad del host**. Ver **B.62**.
-4. **El rediseño no era visual: el modelo de datos no coincidía con el modelo mental.** Configurar un celular tocaba cuatro lugares distintos, y **dos de ellos eran configuración global sin que nada lo dijera**. De ahí la ficha por celular (`celular.html`, en pestaña nueva) y los overrides por equipo (`devices/<id>/appPolicy`, que cierra el pendiente que B.53 dejó anotado). Y la idea que ordena todo: una app tiene tres estados, ese estado decide las tres cosas a la vez, y **"lista negra" y "lista blanca" dejan de ser dos pantallas para ser un selector de modo sobre la misma lista**. Ver **B.65**.
-5. **★ Un bug silencioso en la app del celular, destapado por lo anterior.** Los botones permitir/prohibir del teléfono escribían el mapa **global**, que el celular no puede escribir en Firebase: el cambio valía hasta el próximo `SYNC_WHITELIST`, que lo pisaba. O sea que tocar un botón en el celular **se deshacía solo, en silencio, horas después**. Misma familia que B.27. Ver **B.63**.
-6. **★ El chequeo nuevo `check_panel_commands.py` cazó dos comandos inexistentes sobre código recién escrito**, antes de que llegaran a un equipo: `REAPPLY_RESTRICTIONS` no existe en ningún lado, y `HEAL_VPN` existe pero es una acción **interna** de `KosherVpnService`, no un comando FCM — el botón "Reparar el túnel DNS" habría sido un botón que no hace nada y **contesta que sí**. Los dos pasaban `node --check` sin una queja.
-7. **★ Renderizar las páginas encontró dos bugs que leerlas no encontraba.** Se levantaron `celular.html` y `dominios.html` en Chromium con Firebase stubbeado (26 apps, 71 interruptores, 0 errores de consola): `styles.css` tiene un `button { width: 100% }` global que estiraba todos los botones nuevos, y el primer reset le ganaba por especificidad a `.ls-btn-primary` y **dejaba el botón "Guardar" invisible**. **Renderizar es barato y agarra una clase de error que el type-check no agarra** — es para el panel lo que el banco de comportamiento es para el Kotlin.
-8. **★ Y otra vez, los controles negativos encontraron huecos del propio banco.** Dos de los seis no se detectaban: el orden de escritura del Trie no era observable (hoy no hay ninguna colisión exacta entre bloqueos e infraestructura, medido) y `unblock` sobre un bloqueo puesto por el panel no estaba cubierto. Los dos se cerraron inyectando la colisión a propósito. **Es la segunda sesión seguida en que pasa esto: los controles negativos no son un trámite.**
-9. **Verificación total:** 63 aserciones de comportamiento contra el catálogo y el Trie reales (funciones **extraídas del archivo por script**, no transcritas), 0 rojas, 6 controles negativos los 6 detectados. `kotlinc` 2.0.21 contra stubs: 0 errores / 0 warnings, 8 controles negativos los 8 detectados. 0 errores de sintaxis en los 6 `.kt` tocados, con control negativo. Los dos HTML renderizados. `node --check` en los 5 `.js`. **Siete** chequeos de simetría en verde, dos de ellos nuevos. **No se corrió Gradle y no se probó nada en equipo real.**
-10. **Próximo paso, en orden:** correr los siete chequeos, compilar, desplegar hosting + functions (hay comandos nuevos en `ALLOWED_COMMANDS`), abrir el panel con **Ctrl+F5** (cache-buster en `v=39`), y seguir los órdenes de prueba de B.62 a B.65. **La regresión que más importa es la 1 de B.62** (que Mercado Pago siga pagando con los dominios de ofertas cerrados) y **la 1 de B.65** (que el panel viejo siga igual). Y queda pendiente del dueño conseguir el APK oficial de Waze.
-
-**10/9 (tarde) — Claude: pedidos de apps, detector de navegadores embebidos y alta por QR. Ver B.59, B.60 y B.61.**
-
-Pedido del dueño: *"hacé todo"* sobre los prompts A–D de `PROMPTS_PARA_OTRAS_CONVERSACIONES_2026-09-09.md`, y *"fijate qué falta de ahí"* — porque en paralelo otra conversación había cerrado la primera mitad del PROMPT A.
-
-1. **Lo primero fue mirar qué había hecho la otra sesión, y eso cambió el plan entero.** El PROMPT A traía como bloqueante *"B.6 sigue abierto"*, y B.6 **ya estaba cerrado** por la sesión de B.58 de esa misma madrugada — cuyo trabajo, además, **todavía no está aplicado en el disco**: vive como parche en `Claude outputs/B58_tienda_y_gracia.patch`. Todo lo de esta sesión se escribió **encima de ese parche aplicado**, y se entrega como una segunda tanda de commits que se aplica después. No se pisó nada.
-2. **B.59 — se cerró la segunda mitad del PROMPT A.** El botón "Bloqueada" de la Tienda **deja de existir como estado final**: ahora dice "Pedir". Antes, si el administrador no había adivinado de antemano qué app iba a necesitar esa persona, el usuario no tenía **ningún** canal salvo llamar por teléfono y dictar el nombre del paquete.
-3. **B.60 — se cerró B.44 de raíz, sin la lista blanca que el dueño ya había rechazado.** Un detector estructural: no una lista de apps conocidas, sino "esta pantalla tiene una barra de direcciones o los controles de un navegador". Viene **apagado y en simulación**, con dos interruptores separados.
-4. **B.61 — el alta por QR quedó completo.** Lo difícil es que el perfil se aplica **recortado** para que el equipo se pueda terminar de dar de alta —agregar la cuenta de Google y fijar el idioma— y el resto va con un botón "Terminar alta". Y el panel dibuja el código con un codificador propio, porque `:admin-app` no dejaría cargar uno de un CDN.
-5. **★ El banco de pruebas encontró un bug real y del tipo caro**, antes de que llegara a un equipo: contando *palabras* de navegación en vez de *funciones*, cualquier app con `SwipeRefreshLayout` y un botón "recargar" quedaba clasificada como navegador y se bloqueaba. Son el mismo control en dos idiomas.
-6. **★ Y dos controles negativos encontraron dos casos flojos del propio banco**, que decían afirmar algo y no lo afirmaban: el de `minutemaid` traía las dos palabras de la exclusión en la misma cadena, y el de "la URL de solo lectura no alcanza" no ponía la URL en ningún lado. Los dos se reescribieron. **Es la razón por la que los controles negativos no son un trámite.**
-7. **★ El codificador de QR no pasó la verificación en la primera vuelta, y ahí estuvo lo que se aprendió.** Tenía **dos** bugs estructurales, ninguno en el álgebra: las dos copias de la información de formato **traspuestas** (un error perfectamente simétrico, que "parece bien" al mirarlo) y el temporizador dibujado **antes** que los patrones de alineación, lo que hacía saltear los que caen sobre la línea de tiempo. El segundo explicaba por qué las versiones 1 a 6 salían perfectas y de la 7 en adelante no coincidía un solo módulo. Corregidos los dos: **84 casos idénticos sobre las 40 versiones, 10 controles negativos los 10 detectados**, y el payload real decodificado con OpenCV devolviendo los 608 bytes exactos.
-8. **Verificación: 185 aserciones de comportamiento en dos bancos que compilan LOS ARCHIVOS REALES**, 0 fallas, con 23 controles negativos (21 detectados; los otros 2 resultaron guardas redundantes y **se cuentan como tales, no como detectados**). Type-check con `kotlinc` 2.0.21 del código **extraído** de los archivos reales, 0 errores / 0 warnings, con 13 controles negativos más, los 13 detectados. Los **tres** chequeos de simetría en verde, incluido `tools/check_command_sync.py`, nuevo.
-9. **Próximo paso:** aplicar los dos parches en orden (primero el de B.58), correr los tres chequeos, compilar, y seguir los órdenes de prueba de `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_SOLICITUDES_IAB_QR.md`. **Lo primero al desplegar sigue siendo calcular las huellas de la tienda** (B.58), o parece que se rompió la Tienda.
-
-**10/9 — Claude: se cierra B.6 (checksum obligatorio de APK), perfil con vencimiento y selector de celular. Ver B.58.**
-
-1. **Se cerró B.6, que era el agujero más grande que quedaba y estaba desde el principio.** La Tienda administrada bajaba un APK de una URL y lo instalaba **en silencio, como Device Owner, sin verificar nada**. `ApkSignatureVerifier` (B.37) no podía cubrirlo —compara contra el paquete ya instalado y la Tienda hace primeras instalaciones—, así que cualquiera que pudiera cambiar el contenido de esa URL conseguía ejecución silenciosa con privilegios en toda la flota. Ahora el `sha256` se publica en `storeApps` y se verifica contra el archivo en disco antes de abrir la sesión de instalación. **Falla cerrado y no hay interruptor para saltearlo**, por la lección de B.31 (A Bloq tiene este código comentado con un `TEMPORARILY BYPASS` adentro).
-2. **El panel calcula la huella solo.** Un paso manual en un control de seguridad es un paso que se saltea. ⚠️ **Al desplegar hay que darle "Calcular huella" a las apps que ya estaban cargadas**, o los celulares dejan de instalarlas.
-3. **Perfil Nivel 4 — período de gracia**, pedido del dueño. Lo valioso no es el temporizador: durante el plazo, la auditoría de la lista blanca (B.53) anota qué dominios usa esa persona, así que **el período de gracia es lo que llena el catálogo** y permite cerrar con datos en vez de a ciegas.
-4. **El vencimiento lo sostienen dos relojes**, y esa fue la parte que más pensamiento pidió: el de pared (que el usuario puede atrasar) y un acumulador de tiempo real que nadie puede mover, más `DISALLOW_CONFIG_DATE_TIME` como defensa de adelante. Lo garantiza el `WatchdogWorker`, que sobrevive a que muera el proceso — el riesgo que B.11 dejó anotado para la suspensión.
-5. **Se arregló un defecto de diseño de B.57 que reportó el dueño:** *"si pongo aplicar, ¿a qué usuario se lo pondrá?"*. Sin celular seleccionado, el botón abría un `prompt()` pidiendo pegar el `ANDROID_ID` — exactamente la fricción que los perfiles venían a eliminar. Ahora hay un desplegable con la flota.
-6. **Verificación: 183 aserciones de comportamiento en tres bancos, todas verdes, con 13 controles negativos detectados**, además del type-check con 4 más. La central: **con el reloj movido diez años adelante, el acumulador cierra el período igual**.
-7. **Falta:** compilar, desplegar, **calcular las huellas de la tienda** y correr el orden de prueba. Todo en `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_TIENDA_Y_GRACIA.md`, con el commit listo.
-
-**9/9 — Claude: PERFILES MAESTROS DE ALTA, y el perfil deja de topar en FCM. Ver B.57.**
-
-Pedido del dueño: le pidió a Antigravity que le explicara cómo funcionan los MDM comerciales (MB Smart) para copiarles lo que sirva, le llegó una lista de cuatro mejoras, y pidió analizarlas, empezar por la más importante y dejar prompts para las otras.
-
-1. **Se analizaron las cuatro contra el código real. Tres son buenas y una no conviene hoy.** La que no: la categorización DNS en la nube, con tres objeciones concretas —la más grave es que `NetworkForwarder` reintenta contra `8.8.8.8`/`1.1.1.1` ante cualquier `IOException`, así que si el resolutor de arriba pasara a ser el que filtra, **cada timeout dejaría el equipo sin filtrar, en silencio**. La mejor de las cuatro resultó ser una que el dueño ya había rechazado en su versión gruesa: el "IAB Finder" de MB Smart es un detector **estructural** de navegadores embebidos y **no necesita la lista blanca de WebView que el dueño rechazó** — cierra B.44 de raíz sin contradecirlo. Prompt listo.
-2. **Se implementó la más importante: perfiles maestros de alta.** Tres perfiles escritos **dentro del APK**, aplicables de un toque desde la app y desde el panel, **sin red y sin cuenta de Google configurada** — que es justo el momento del alta, y por eso están en el binario y no en la nube.
-3. **El hallazgo que cambió el diseño está MEDIDO, y destapa un techo que nadie había visto.** `sendCommandV8` rechaza con 413 a los 3.000 bytes; el perfil de políticas de hoy pesa **2.009**, y sumándole lo que B.28 dejó anotado como faltante llega a **3.580**. O sea que **el perfil completo nunca pudo viajar por FCM**: B.28 tenía razón sobre lo que faltaba sin saber que era imposible agregarlo por esa vía. Se movió a `globalSettings/profiles/<id>` (patrón de B.53), **guardado como cadena** para que Realtime Database no le cambie la forma y le rompa la firma HMAC — que es literal el bug de B.28.
-4. **Dos bugs reales de la misma familia, encontrados de paso.** `captivePortalCoverImages` viajaba firmada desde el panel desde el 8/9 y **nadie la leía** (cuarta repetición de `no_apps_control`), y los tres interruptores de la lista blanca no estaban en el perfil (tercera vez que el perfil se queda atrás). Se agregó **`tools/check_profile_sync.py`**, que compara las tres listas que escriben un perfil contra la única que lo lee y falla si alguna clave se escribe y no se lee. Con eso esa familia de bugs deja de ser posible.
-5. **Verificación: type-check + una prueba de comportamiento de verdad.** 0 errores / 0 warnings en cuatro bancos con el código **extraído de los archivos reales**, con **12 controles negativos detectados**; y **91 aserciones** sobre `EnrollmentProfiles.buildData()` contra el `org.json` real, con **8 controles negativos detectados** — entre ellas, que ningún perfil de alta puede encender el kiosco, apagar el táctil, suspender todas las apps ni cortar internet, y que los tres niveles están anidados. Más el chequeo de simetría de B.38 sobre las cuatro listas de restricciones.
-6. **⚠️ DOS SESIONES SOBRE EL MISMO ÁRBOL, Y SE PISARON POR MINUTOS.** Otra conversación del dueño estaba trabajando en paralelo: tomó el número **B.54** y el cache-buster `v=32`, y modificó `app.js`, `index.html`, `PolicyManager.kt`, `KosherVpnService.kt` y `LockSuiteAccessibilityService.kt` sin commitear. Esta sesión se corrió a **B.55** y a **`v=33`**, bajó las versiones reales del disco y **reaplicó sus cambios encima de las de la otra sesión**. Lo único que evitó pisar `PolicyManager.kt` fue el **`expectedMtimeMs`** de `device_commit_files`: lo rechazó con el mtime y el tamaño nuevos. **Usarlo siempre, sin excepción.**
-7. **Fusión completada en disco:** `PolicyManager.kt` quedó fusionado de verdad con los cambios de ambas sesiones conviviendo limpiamente (+260 líneas: auto-concesión de runtime permissions de B.55 + perfiles maestros y estado de equipo de B.57). Se verificó la compilación exitosa con Gradle (`compileReleaseKotlin` exit 0) y los chequeos de simetría (`check_profile_sync.py` y `check_whitelist_sync.py` exit 0). Los parches temporales de `scratch/` fueron eliminados.
-8. **Próximo paso:** commitear la integración completa y ejecutar `deploy_all.ps1` para publicar el APK (código 111 / versión 0.6.48) y las Cloud Functions + Hosting del panel (con cache-buster `v=33`).
-
-**9/9 — Claude: revisión a fondo del flujo de actualizar apps (B.41/B.42). Tres silencios encontrados y arreglados, más una mejora de permisos. Ver B.54, B.55, B.56.**
-
-Pedido del dueño: que actualizar apps funcione **siempre y en cualquier idioma**, y que muestre **SIEMPRE** en qué está (actualizando con %, al día, o el error exacto), **igual desde la pantalla negra y desde el panel**. Revisar B.41 y B.42 línea por línea como código ajeno, buscando **casos donde el flujo se queda sin decir nada**.
-
-1. **El núcleo de B.41/B.42 está bien y no hay que rehacerlo.** Cada camino de `scanAndAct()` avanza, cierra con motivo, o fija etapa y sigue; la jerarquía de timeouts es coherente; el panel refleja las mismas etapas por `followUpdateFlow`; los rechazos previos llegan como ACK `failed` con motivo (camino entero verificado). El watcher de sesión no cierra por `success=false`.
-2. **Tres silencios que el diseño no cubría, ahora arreglados (B.54).** (a) El watchdog de 10 min —el respaldo final que saca la pantalla negra si todo falla— **no se armaba en Android 12+**: `setExactAndAllowWhileIdle` exige permiso de alarma exacta y el Manifest no lo declaraba, así que tiraba `SecurityException` en silencio, incluido el Android 13 del dueño. (b) Si el servicio de accesibilidad se **reiniciaba a mitad de flujo**, nadie re-armaba el ticker: quedaba Play Store destapada e instalación habilitada, sin pantalla y sin cierre. (c) El panel **publicaba `lastResultReason`/`freeSpaceMb` pero no los dibujaba**.
-3. **Mejora 1 (B.55): auto-concesión de permisos peligrosos desde Device Owner.** Hoy asegura `POST_NOTIFICATIONS` (Android 13+) para que el usuario no pueda dejar mudo el aviso de accesibilidad caída. Se aclara que `setPermissionGrantState` **solo** aplica a permisos de runtime — no a `MANAGE_EXTERNAL_STORAGE`/`SCHEDULE_EXACT_ALARM` (la descripción original de la mejora estaba parcialmente equivocada).
-4. **Mejora 2 (B.56): watchdog multi-proceso — solo conviene un pedazo, NO se implementó.** Sí: una alarma `AlarmManager` de respaldo (`setAndAllowWhileIdle`) que llene la brecha 20 s–15 min ante caída del foreground service. No: el segundo proceso `:bprocces` (memoria, mal en el CAT S22 Flip de 2 GB) ni el `NotificationListenerService` (consentimiento + lee todas las notificaciones). Toca batería: hay que escribirla y medirla con terminal real.
-5. **Pendiente acotado (idioma):** la detección es multiidioma, pero el **texto de la pantalla negra está en español fijo** (`stageLabel`, `BlockOverlayManager`, errores de `start()`). El usuario del celular puede estar en hebreo. Mover a `res/values*/strings.xml` es decisión de producto — preguntarle al dueño. También F5 (importar preset que falla no dice por qué) queda anotado en B.54/instrucciones.
-6. **Verificación:** `kotlinc` 2.0.21 con los tres bloques cambiados **extraídos** a un banco de pruebas, **0 errores, ocho controles negativos, los ocho detectados**. `node --check` sobre `app.js` con control negativo. Manifest XML well-formed. Verificado build completo con Gradle en release.
-7. **Despliegue y pruebas:** desplegar con `deploy_all.ps1` (hosting, functions y APK) y correr los órdenes de prueba de `INSTRUCCIONES_ANTIGRAVITY_2026-09-09_ACTUALIZACION_REVISION.md` y `INSTRUCCIONES_ANTIGRAVITY_2026-09-09_PERFILES_MAESTROS.md`.
+1. **★ Lo de Tefilon no tenía nada que ver con Tefilon, y se resolvió MIDIENDO en vez de leyendo código.** Se bajó el APK real de la Tienda y se leyó su manifiesto: su pantalla de entrada es `tfilon.tfilon.TfilonStartActivity`, y el marcador `"artactivity"` del bloqueo del selector de fotos **está adentro de `"StartActivity"`** (`St` + `artActivity`). LockSuite creía que el sidur era el catálogo de ilustraciones de Google y le mandaba "atrás" apenas aparecía. **Cuarta vez que este proyecto paga el mismo error: comparar por substring contra una palabra corta.** Ahora se compara por segmento de nombre de clase. Ver **B.68**.
+2. **★ Lo de Mercado Pago eran las dos mitades del MISMO bug, y era la "red de seguridad" de B.13.** La regla *"pantalla WebView + UNA palabra débil → bloquear"* parecía un caso de borde, pero **casi toda Mercado Pago es una pantalla WebView**: cobros, ANSES, ayuda, comprobantes y el asistente. Entonces bastaba una palabra —`beneficio`, `descuento`, `puntos`— en cualquier nodo para expulsar al usuario. El asistente contesta texto libre, y ANSES llama *"beneficios"* a sus prestaciones. **La causa conceptual: se trataba la MENCIÓN de una palabra como si fuera la SECCIÓN.** Ver **B.67**.
+3. **La decisión de Mercado Pago se mudó a una función pura con banco de pruebas** (`mdm/MercadoPagoOffersPolicy.kt`), igual que B.60 y B.53. El veto que arregla el asistente es **estructural y no mira palabras**: una pantalla con un campo de texto editable es una conversación o un formulario, nunca un catálogo. Y las palabras ahora solo se leen de textos cortos, que es lo que separa un título de sección de la prosa que habla de algo.
+4. **★ Y la pieza que faltaba y explica por qué esto costó una sesión entera: no había ningún registro de qué cierra la Capa 3.** Hay nueve rebotes distintos y para el usuario los nueve se ven igual. Peor: `photoPickerSeenClasses` existía y **habría sido ciego justo para Tefilon**, porque solo anota paquetes que ya considera "relevantes". Se agregó `mdm/Layer3Audit.kt` — un registro unificado, persistente, que se publica al panel y se dibuja en la ficha del celular. **Con esto, el reporte de hoy se contestaba en dos minutos.** Ver **B.69**.
+5. **Se encontró trabajo SIN COMMITEAR en el disco del dueño**, del 15/9 a la noche: el arreglo del portal cautivo en aviones (KLM/Viasat). Se commiteó **tal cual, aparte**, para no pisarlo y para que lo de hoy quede revisable por separado. Ver **B.70**.
+6. **★ Los controles negativos encontraron TRES huecos del propio banco, y uno del arnés.** Primero el arnés le pasaba los `.bak` a `kotlinc` y los 14 controles daban "detectado" **sin ejercitar una sola aserción**. Ya corregido eso, tres controles reales no se detectaban: las aserciones del asistente pasaban por la palabra `"asistente"` y no por el veto estructural; el caso de `"puntos"` no discriminaba; y las de separadores daban verde aunque los campos quedaran corridos. **Tercera sesión seguida en que los controles negativos encuentran el hueco antes en el banco que en el código: no son un trámite.**
+7. **Verificación: 77 aserciones de comportamiento contra los archivos REALES** (copiados por script, no transcriptos), 0 rojas, con **14 controles negativos, los 14 detectados** y con la cuenta de aserciones caídas en cada uno para probar que son de comportamiento y no de compilación. Type-check con `kotlinc` 2.0.21 del bloque nuevo del servicio **extraído del archivo real por número de línea**, 0 errores / 0 warnings, con **6 controles negativos más, los 6 detectados**. Balance de llaves/paréntesis idéntico a HEAD en los seis `.kt` tocados. `node --check` con control negativo. **Los seis chequeos de simetría en verde.** La ficha del celular **renderizada en Chromium** con Firebase stubbeado: la tarjeta nueva dibuja bien, la línea mal formada se ignora sola, 0 errores de consola.
+8. **No se corrió Gradle y no se probó nada en equipo real.**
+9. **Próximo paso, en orden:** compilar, desplegar hosting (hay cambios en `celular.html`/`celular.js`, cache-buster en `celular.js?v=2`), y correr el orden de prueba de B.68 → B.67 → B.69. **Las dos regresiones que más importan: que el catálogo de ilustraciones de Google SIGA rebotando desde Contactos (B.68 prueba 2) y que la sección de ofertas real de Mercado Pago SIGA rebotando (B.67 prueba 3).** Todo el detalle, archivo por archivo, está en `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md`.
 
 **Sesiones previas (una línea; detalle en cada punto B):**
 
-- **8/9 (tarde) — MODO LISTA BLANCA completo; cierra media B.52. Ver B.53.**
-- **8/9 (mañana) — el guard de portal cautivo dejaba sin Wi-Fi; arreglado en 8 archivos. 0.6.46/109. Ver B.50.**
-- **6/9 (tarde) — causa raíz de "se cae el internet" (`stopVpn();startVpn()` dejaba la tabla de rutas vacía). 0.6.45/108. Ver B.49.**
+- **15/9 (noche) — portal cautivo en aviones: el guard cerraba antes de tiempo. Recuperado del working tree. Ver B.70.**
+- **10/9 (noche 2) — Antigravity: integración de los parches B.62–B.66, y los subdominios propios de Mercado Pago salen de la lista de bloqueo (quedan solo los del marketplace de Mercado Libre). 0.6.51/114.**
+- **10/9 (noche) — la Tienda auditada con los APKs en la mano (Waze no es el oficial), y el panel rediseñado en una ficha por celular. Ver B.62 a B.66.**
+- **10/9 (tarde) — pedidos de apps, detector de navegadores embebidos y alta por QR. Ver B.59, B.60, B.61.**
+- **10/9 — B.6 cerrado (checksum obligatorio de APK), perfil con vencimiento. Ver B.58.**
+- **9/9 — perfiles maestros de alta; el perfil deja de topar en FCM. Ver B.57.**
+- **8/9 (tarde) — modo lista blanca completo; cierra media B.52. Ver B.53.**
 
 ---
 
 ## Estado del repo (git)
 
-**10/9 (noche):** al arrancar la sesión, lo commiteado y desplegado era **0.6.50 / código 113** (`bf0e300`), con las dos tandas del 10/9 (B.58 y B.59-B.61) **ya aplicadas y commiteadas por Antigravity**, más su trabajo de la Tienda. Esta sesión trabajó sobre eso y dejó **dos commits** encima:
+**16/9:** al arrancar la sesión, lo commiteado era **0.6.51 / código 114** (`376cef2`), **pero el árbol de trabajo NO estaba limpio**: había cinco archivos modificados sin commitear del 15/9 a la noche (ver B.70). Esta sesión los commiteó aparte y dejó **dos commits** en el clon del contenedor:
 
-- `feat(panel/filtro): ficha completa por celular, editor global de dominios, y los dominios no kosher se bloquean siempre` — B.62, B.63, B.64, B.65 y B.66.
-- `feat(app): pestaña Inicio y las mismas secciones que la ficha del panel` — B.65-b.
+- `fix(portal cautivo): que el guard no cierre la ventana en portales de avion` — el trabajo recuperado del 15/9, sin tocar una línea.
+- `fix(capa 3): dejar de cerrar apps por un marcador mal comparado y de echar al usuario del asistente de Mercado Pago` — B.67, B.68 y B.69.
 
-⚠️ **`device_bash` no montó la carpeta por UNDÉCIMA vez consecutiva**, así que esta sesión tampoco pudo escribir directo en el disco del dueño: **los commits están en el clon del contenedor** y hay que traerlos. El camino más corto es `git pull` si se pushearon, o los parches. El resto de la receta funcionó igual que siempre: clonar el repo público, leer todo del clon, verificar en el contenedor.
+⚠️ **`device_bash` no montó la carpeta por DUODÉCIMA vez consecutiva**, así que los commits están en el clon del contenedor y **hay que traerlos**. Y un dato nuevo que conviene anotar: **desde el contenedor tampoco se puede PUSHEAR**, aunque el repo sea público — el proxy de git de la sesión responde `403: CHKI541/Lock-Suite is not in this session's authorized repository set` y no inyecta credencial. O sea que el clon sirve para leer y para commitear localmente, nunca para publicar. Los dos commits quedaron además como parches en `Claude outputs/2026-09-16_000{1,2}_*.patch`. Los archivos SÍ quedaron escritos en el disco del dueño (vía `device_commit_files`, con `expectedMtimeMs`), así que la vía más corta es que Antigravity haga el `git add` + `git commit` con los mensajes que están en `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md`, **en los dos commits separados y en ese orden**.
 
-**Antes de desplegar hay que correr los SIETE chequeos** (dos son nuevos de esta sesión):
+**Archivos tocados el 16/9** (finales de línea respetados: el servicio, `PolicyManager`, `FirebaseDeviceSync`, `celular.html` y `celular.js` van en **CRLF**; `PhotoPickerPolicy` y los dos archivos nuevos van en **LF**):
+
+```
+app/src/main/java/com/ejemplo/locksuite/mdm/MercadoPagoOffersPolicy.kt   (NUEVO)
+app/src/main/java/com/ejemplo/locksuite/mdm/Layer3Audit.kt               (NUEVO)
+app/src/main/java/com/ejemplo/locksuite/mdm/PhotoPickerPolicy.kt
+app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt
+app/src/main/java/com/ejemplo/locksuite/service/LockSuiteAccessibilityService.kt
+app/src/main/java/com/ejemplo/locksuite/util/FirebaseDeviceSync.kt
+admin-backend/public/celular.html
+admin-backend/public/celular.js
+```
+
+**Antes de desplegar hay que correr los SEIS chequeos** (esta sesión los corrió y dieron los seis en verde):
 
 ```
 python tools/check_whitelist_sync.py
 python tools/check_profile_sync.py
 python tools/check_command_sync.py
-python tools/check_panel_commands.py      ← nuevo
-python tools/gen_catalog_js.py --check    ← nuevo
-python tools/gen_policies_js.py --check   ← nuevo
+python tools/check_panel_commands.py
+python tools/gen_catalog_js.py --check
+python tools/gen_policies_js.py --check
 ```
 
-(`catalog.js` y `policies.js` son **generados**: si alguien los edita a mano, el `--check` falla y hay que regenerarlos, no arreglarlos a mano.)
+**No hay comandos FCM nuevos**, así que alcanza con desplegar `hosting`; `functions` no cambió. **Cache-buster de `celular.js` en `v=2`** (el de `app.js` sigue en `v=39` porque `app.js` no se tocó). Al abrir la ficha del celular después de desplegar, **Ctrl+F5**.
 
-**Cache-buster de `app.js` en `v=39`.** Al abrir el panel después de desplegar, **Ctrl+F5**. Hay comandos nuevos en `ALLOWED_COMMANDS`, así que **hay que desplegar `functions` además de `hosting`** — si se despliega solo hosting, la ficha nueva va a poder mandar reglas DNS y la Function las va a rechazar.
-
-**10/9 (tarde):** al arrancar esa sesión, lo commiteado y desplegado era **0.6.48 / código 111** (`199a2de`), con el working tree **limpio y byte-idéntico al clon** en todo lo revisado. Antigravity ya había commiteado y desplegado B.57.
-
-📌 **EMPEZÁ POR `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_MAESTRO.md`**, que es el punto de entrada único: cubre las dos tandas, el orden de aplicación, el orden de prueba consolidado y qué hace falta que haga Antigravity que ninguna sesión de IA pudo. Los otros dos documentos del 10/9 quedan como referencia de detalle de cada tanda.
-
-⚠️ **HAY DOS TANDAS DE TRABAJO SIN APLICAR, Y VAN EN ESTE ORDEN:**
-
-1. `Claude outputs/B58_tienda_y_gracia.patch` — B.6 cerrado + Nivel 4 con vencimiento + selector de celular. **De la sesión de la madrugada del 10/9, que no pudo escribir a disco porque se cortó el puente.**
-2. `Claude outputs/B59_B61_solicitudes_iab_qr.patch` — B.59 + B.60 + B.61, **cinco commits** cuyo padre es el commit del parche 1. Si el 1 no se aplicó, el 2 no aplica. (Son cinco y no tres porque B.61 se entregó primero sin el dibujo del QR y se completó después, en una sesión que se cortó por límite diario en el medio; el historial quedó tal cual, que es más útil que aplastarlo.)
-
-Los dos se aplican con `git am`. **Esta sesión tampoco pudo commitear en el disco** (`device_bash` no monta la carpeta desde hace diez sesiones, y sin él no hay `git`), así que el commit real lo corre Antigravity. Los mensajes ya vienen adentro de los parches.
-
-**9/9:** al arrancar la sesión, lo commiteado era **0.6.47 / código 110** (`413b419`) — Antigravity ya había commiteado y desplegado B.53 (lista blanca) por encima de 0.6.46. La sección C anterior, que decía "0.6.46 + B.53 sin commitear", había quedado desactualizada; **se confía en el estado real del repo, no en esa sección** (regla de "puede haber más de un agente"). El working tree estaba limpio y byte-idéntico al clon en los siete archivos tocados (validado contra `device_list_dir`).
-
-**Encima de 0.6.47, se integran y despliegan los cambios de las DOS sesiones de la madrugada del 9/9 ya FUSIONADAS**:
-De la sesión de B.54/B.55/B.56: los **seis archivos** (`app/src/main/AndroidManifest.xml` —en CRLF—, `util/UpdateFlowManager.kt`, `service/LockSuiteAccessibilityService.kt`, `mdm/PolicyManager.kt`, `admin-backend/public/app.js`, `admin-backend/public/index.html`) y el documento `INSTRUCCIONES_ANTIGRAVITY_2026-09-09_ACTUALIZACION_REVISION.md`.
-De la sesión de **B.57**: `mdm/EnrollmentProfiles.kt` y `tools/check_profile_sync.py` nuevos, más `util/FirebaseDeviceSync.kt`, `service/LockSuiteFirebaseService.kt`, `ui/dashboard/DashboardActivity.kt`, `admin-backend/functions/index.js`, y los documentos `INSTRUCCIONES_ANTIGRAVITY_2026-09-09_PERFILES_MAESTROS.md` y `PROMPTS_PARA_OTRAS_CONVERSACIONES_2026-09-09.md`.
-`PolicyManager.kt` convive con ambas modificaciones intactas. Los parches de `scratch/` fueron purgados y `scratch/` se encuentra protegido por `.gitignore`.
-`admin-backend/public/index.html` lleva el cache-buster de `app.js` en **`v=33`**. Al abrir el panel después de desplegar, **Ctrl+F5**.
+**El versionCode NO se subió a mano**: `deploy_all.ps1` hace `currentCode + 1` solo. Si se compila a mano, subirlo a mano por encima de 114.

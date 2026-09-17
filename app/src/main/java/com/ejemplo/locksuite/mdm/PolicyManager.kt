@@ -1306,6 +1306,19 @@ class PolicyManager(private val context: Context) {
      * supo clasificar. Es el dato con el que se calibra el rebote en un equipo donde
      * no dispara, en vez de adivinar (misma idea que `debugLabels` de B.41).
      */
+    /**
+     * El registro unificado de la Capa 3: qué cerró, cuándo y por qué (16/9/2026).
+     *
+     * Hasta hoy, "se me cierra esta app" no se podía contestar desde el panel: cada uno
+     * de los nueve rebotes del servicio de Accesibilidad escribía en `logcat` con su
+     * propio formato y algunos publicaban un diagnóstico propio, siempre acotado a su
+     * función. El reporte de Tefilon del 16/9 costó una sesión entera justamente por
+     * eso. Ver `mdm/Layer3Audit.kt`.
+     */
+    fun getLayer3Audit(): String = Layer3Audit.crudo(context)
+
+    fun clearLayer3Audit() = Layer3Audit.limpiarTodo(context)
+
     fun getGoogleAccountWebSeenClasses(): String =
         PrefsHelper.getMdmPrefs(context).getString("google_account_web_seen", "") ?: ""
 

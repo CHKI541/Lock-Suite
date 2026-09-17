@@ -125,6 +125,59 @@ object PhotoPickerPolicy {
         "camera"
     )
 
+    /**
+     * ¿El marcador aparece en la clase COMO SEGMENTO, y no como pedazo de una palabra
+     * más larga?
+     *
+     * ─────────────────────────────────────────────────────────────────────────
+     * ⚠️ 16/9/2026 — ACÁ ESTABA EL BUG QUE CERRABA TEFILON AL ABRIRLO.
+     * ─────────────────────────────────────────────────────────────────────────
+     *
+     * La comparación era `cls.contains(marcador)` a secas, sobre el nombre de clase
+     * entero y en minúscula. El marcador `"artactivity"` existe para agarrar el
+     * catálogo de ilustraciones de Google (`…contacts.art.ArtActivity`) — pero
+     * **`"artactivity"` también está adentro de `"StartActivity"`**:
+     *
+     *     "tfilon.tfilon.tfilonst[artactivity]"     ← St + artActivity
+     *
+     * `StartActivity` es uno de los nombres de clase más comunes de Android, así que
+     * el rebote —que además viene ENCENDIDO de fábrica— le mandaba `GLOBAL_ACTION_BACK`
+     * a cualquier app cuya pantalla de entrada se llamara así. Para el usuario eso es
+     * *"abro la app y se me cierra sola"*, sin ningún cartel que lo explique. Medido
+     * sobre el APK real de la Tienda: `tfilon.tfilon.TfilonStartActivity`. Caen igual
+     * `*ChartActivity`, `*SmartActivity`, `*CartActivity`.
+     *
+     * Es la CUARTA vez que este proyecto paga el mismo error —comparar por substring
+     * contra una palabra corta—: `"installing"` conteniendo `"install"` (B.9 p.1),
+     * `"Iniciar sesión"` matcheando `"iniciar"` de OPEN_WORDS (B.41 p.3) y el
+     * `swipe_refresh_layout` que contaba como control de navegación (B.60). La regla
+     * que queda escrita: **en un nombre de clase se compara por SEGMENTO, nunca por
+     * substring crudo.**
+     *
+     * Un nombre de clase se separa por `.`, `$` (clases anidadas), `_` y `/`. Se exige
+     * que el marcador arranque justo después de uno de esos separadores o al principio
+     * de la cadena. El final no se exige: `artactivity` tiene que poder matchear
+     * `ArtActivityV2`, y `photopicker` tiene que matchear `PhotoPickerActivity`, que es
+     * el caso normal.
+     *
+     * Los casos reales que tiene que SEGUIR agarrando (verificados en el banco):
+     *   com.google.android.apps.contacts.art.ArtActivity          → art.[artactivity]
+     *   com.android.providers.media.photopicker.PhotoPickerActivity → .[photopicker]…
+     *   com.google.android.apps.photos.picker.external.ExternalPickerActivity
+     *   …libraries.user.profile.photopicker.IllustrationPickerActivity
+     */
+    internal fun contieneMarcador(cls: String, marcador: String): Boolean {
+        if (marcador.isEmpty()) return false
+        var i = cls.indexOf(marcador)
+        while (i >= 0) {
+            if (i == 0) return true
+            val anterior = cls[i - 1]
+            if (anterior == '.' || anterior == '$' || anterior == '_' || anterior == '/') return true
+            i = cls.indexOf(marcador, i + 1)
+        }
+        return false
+    }
+
     /** ¿Este paquete es una app de contactos / agenda? */
     fun isContactsPackage(packageName: String?): Boolean {
         if (packageName.isNullOrEmpty()) return false
@@ -153,7 +206,8 @@ object PhotoPickerPolicy {
         if (cls.isNotEmpty() && CLASS_EXCLUSIONS.any { cls.contains(it) }) return false
 
         // 1. Selector de foto de PERFIL: siempre. Incluye el catálogo de ilustraciones.
-        if (PROFILE_PICKER_MARKERS.any { cls.contains(it) }) return true
+        //    ⚠️ Por SEGMENTO, no por substring: ver el comentario de contieneMarcador().
+        if (PROFILE_PICKER_MARKERS.any { contieneMarcador(cls, it) }) return true
         if (packageName == "com.android.avatarpicker" || packageName == "com.google.android.avatarpicker") {
             return true
         }
@@ -162,8 +216,8 @@ object PhotoPickerPolicy {
         //    para no romper "adjuntar una foto" en el resto de las apps.
         val esSelectorGenerico =
             PICKER_PACKAGES.contains(packageName) ||
-            (packageName == PKG_PHOTOS && GENERIC_PICKER_MARKERS.any { cls.contains(it) }) ||
-            GENERIC_PICKER_MARKERS.any { cls.contains(it) }
+            (packageName == PKG_PHOTOS && GENERIC_PICKER_MARKERS.any { contieneMarcador(cls, it) }) ||
+            GENERIC_PICKER_MARKERS.any { contieneMarcador(cls, it) }
         return esSelectorGenerico && cameFromContacts
     }
 }

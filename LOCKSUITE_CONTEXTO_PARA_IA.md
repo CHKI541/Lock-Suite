@@ -192,6 +192,7 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - **(10/9 noche) LAS PÁGINAS DEL PANEL SE PUEDEN RENDERIZAR ACÁ, Y AGARRAN BUGS QUE EL `node --check` NO.** Chromium y Playwright ya están en el contenedor (`/opt/pw-browsers/chromium`, `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` — **no correr `playwright install`**). Receta: copiar los `.html`/`.js`/`.css` a una carpeta aparte, reemplazar `firebase-config.js` por un stub que define `window.firebase` con datos de mentira **de la misma forma que los reales**, sacar los `<script src="https://gstatic…">`, abrir con `file://` y capturar. Se escuchan `console` y `pageerror` para no perder nada. En esta sesión encontró dos bugs de estilo reales en la primera vuelta. **Cuesta cinco minutos y conviene hacerlo siempre antes de entregar una página nueva.**
 - **(16/9) DUODÉCIMA vez que `device_bash` no monta, y un dato nuevo que ahorra una llamada: `device_request_folder_access` sobre una subcarpeta devuelve `alreadyGranted` y NO baja la profundidad.** Está escrito arriba desde el 21/8 y esta sesión lo volvió a comprobar por las dudas: el puente contesta `{"granted":[…],"alreadyGranted":true}` y `device_stage_files` sigue fallando con "8 folders below the connected folder, and at most 7 are supported". **Lo único que lo destraba es el botón "Add folder" de la app de escritorio.** Pedirlo de entrada, junto con la carpeta raíz, y no gastar el llamado a `device_request_folder_access`.
 - **(16/9) LOS APKs DE LA TIENDA TAMBIÉN SIRVEN PARA DIAGNOSTICAR, NO SOLO PARA AUDITAR.** El 10/9 se usó `androguard` para ver quién firma cada APK (B.66). Esta sesión lo usó para algo distinto y más directo: el dueño reportó *"al abrir Tefilon se me cierra"*, se bajó `Tfilon_3.1.10.apk` del release `store-apks-v1`, se leyó su manifiesto y **el nombre de su actividad de arranque (`tfilon.tfilon.TfilonStartActivity`) ERA la respuesta** — ver B.68. Dos llamadas, cero hipótesis. **Cuando el reporte es sobre una app concreta de la Tienda, bajar su APK y leer el manifiesto va ANTES que leer el código de LockSuite.** Y de paso se corrió el mismo chequeo sobre los 16 APKs para saber a cuántas más les pasaba.
+- **(17/9) EL REPO DEL DUEÑO TIENE `core.autocrlf` PRENDIDO: git convierte solo a CRLF, así que pelearse con los finales de línea al escribir es trabajo perdido.** Medido: los cuatro `.kt` que esta sesión escribió en LF aparecieron después en el disco con **exactamente `tamaño + cantidad de líneas`** bytes (`Layer3Audit` 9.884→10.088 con 204 líneas, `MercadoPagoOffersPolicy` 15.682→15.991 con 309, `PhotoPickerPolicy` 12.404→12.627 con 223, `CaptivePortalPolicy` 12.118→12.316 con 198), con el contenido **idéntico** y solo el `mtime` cambiado. O sea que una operación de git en la PC los normalizó. **Consecuencias prácticas:** (a) escribir en LF o en CRLF da igual, git lo arregla; (b) por eso `git status` aparece sucio todo el tiempo y por eso B.10 pide un `.gitattributes` — ese es el arreglo de fondo; (c) ⚠️ **ese toque de git actualiza el `mtime` y hace que `device_commit_files` rechace la escritura por `expectedMtimeMs`**. Cuando eso pase, **no usar `force`**: re-stagear y comparar contra el último commit propio. Esta sesión lo hizo y los cinco archivos resultaron byte por byte iguales a lo que había dejado — o sea una falsa alarma, pero la única forma de saberlo es mirando.
 - **(16/9) Chromium está en `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`** — la ruta que figuraba antes (`/opt/pw-browsers/chromium`) es un enlace y la de `chromium-1148` ya no existe. Hay que pasarla con `executable_path=` y `args=["--no-sandbox"]`. Con eso la receta de renderizado de B.65 anda igual.
 - **Sí se puede type-checkear sin Gradle, y conviene hacerlo.** `kotlinc` 2.0.21 se baja de `github.com/JetBrains/kotlin/releases` (Maven Central da 404 para ese artefacto) y corre en el contenedor. Contra stubs mínimos de la API de Android + de las clases del proyecto que toque el archivo, agarra errores reales de tipos y de referencias. **Siempre con control negativo** (romper a propósito una referencia y confirmar que la detecta): sin eso, un "0 errores" puede ser simplemente que no compiló nada.
 
@@ -1519,59 +1520,117 @@ Qué hacen, leídos del diff: es la continuación de **B.50**. En portales de av
 
 ---
 
+**B.71 — NO SE PODÍA INICIAR SESIÓN EN MERCADO PAGO: `mobile.mercadolibre.*` NO es el marketplace, es el host de AUTENTICACIÓN. [MEDIDO SOBRE EL APK REAL Y ARREGLADO EL 17/9; SIN COMPILAR NI PROBAR EN EQUIPO]**
+
+Reporte del dueño con video: la pantalla de inicio de sesión de Mercado Pago muestra **"No hay internet — Revisá tu conexión y volvé a intentarlo"**. En la barra de estado se ven la llave del VPN activa y el Wi-Fi con señal completa, o sea que **red hay**: es un dominio que no resuelve. No es Capa 3, es Capa 2.
+
+**LA MEDICIÓN, Y ES LO QUE CIERRA EL TEMA.** El dueño sacó el APK instalado del propio equipo (`adb pull … base.apk`, 203 MB) y se analizaron sus 17 `.dex`. Las **únicas** rutas que Mercado Pago usa sobre `mobile.mercadolibre.com*` son:
+
+```
+https://mobile.mercadolibre.com.ar/mobile_authentications              ← EL INICIO DE SESIÓN
+https://mobile.mercadolibre.com.ar/mobile_authentications?access_token=
+https://mobile.mercadolibre.com.ar/transaction_mobile_authentications  ← autenticar un pago
+https://mobile.mercadolibre.com.ar/device_attestation/
+https://mobile.mercadolibre.com/public-key-enrollment-service/v1/
+https://mobile.mercadolibre.com/remote_resources/
+```
+
+**Ni una sola es navegación de marketplace.** Es el host de servicios del cliente móvil. Estaba en la lista de bloqueo porque el nombre engaña: *"mobile.mercadolibre"* suena a "la versión móvil del sitio de compras", y no lo es. Con B.62 ese bloqueo pasó a ser **incondicional** (0.6.51, 10/9), así que desde esa versión la flota entera quedó sin poder autenticar — y el síntoma aparece recién cuando alguien tiene que volver a entrar.
+
+**Y el marketplace sí está en los otros cuatro, que siguen cerrados:** `www` (ahí vive `/gz/cart/v2`, el carrito), `listado`, `click1` y `snoopy`. O sea que **se abrió el login sin abrir un solo lugar navegable**, que es exactamente lo que pidió el dueño. El login móvil no pasa por `www`: usa `login-mobile.mercadolibre.com/login/` y `mobile.*/mobile_authentications`.
+
+**Lo que se cambió (dos listas, y las dos importan):**
+
+1. `WhitelistCatalog.kt` — `mobile.mercadolibre.com` y `mobile.mercadolibre.com.ar` salen de `block` y entran en `allow` junto con `login-mobile.mercadolibre.com`.
+2. `PolicyManager.MERCADO_LIBRE_MP_DOMAINS` — los mismos dos hosts salen de la lista del switch «Bloqueo de Mercado Libre en Mercado Pago». **Si quedaran acá, prender ese switch volvería a romper el login aunque el catálogo esté bien.** Las dos listas tienen que decir lo mismo.
+
+⚠️ **DEUDA QUE ESTO DESTAPÓ Y QUE NO SE TOCÓ: el switch «Bloqueo de Mercado Libre en Mercado Pago» quedó DECORATIVO.** Desde B.62, los ocho hosts del marketplace se bloquean **siempre**, tenga el switch prendido o apagado: apagarlo llama a `clearRule()` y borra la regla del `DomainRuleManager`, pero la lista siempre-bloqueada del catálogo la repone en la siguiente reconstrucción. **Es la sexta repetición de la familia "el interruptor existe y no hace nada"** (`no_apps_control` en B.28, `DISALLOW_CONFIG_DATE_TIME` en B.38, las claves del perfil en B.40 p.8, `captivePortalCoverImages` en B.57, `REAPPLY_RESTRICTIONS`/`HEAL_VPN` en B.65). No se arregló acá porque es una **decisión de producto**: o el switch se saca del panel, o se lo renombra a algo honesto, o B.62 deja de aplicar a los hosts que el switch gobierna. La salida de emergencia por dominio (`FORCE_ALLOW` / el campo `unblock` del editor de dominios) sí funciona y le gana a todo.
+
+**Lección de método, y es la segunda vez en dos días:** cuando el reporte es sobre una app concreta, **bajar su APK y leer sus cadenas contesta en dos llamadas lo que el código de LockSuite no puede contestar nunca**. El 16/9 fue el manifiesto de Tefilon (B.68); hoy fueron los `.dex` de Mercado Pago. Y confirma lo que B.62 dejó anotado: *"las listas de fábrica las escribió una IA leyendo documentación, no midiendo las apps, y algunas van a estar mal"* — esta es la primera confirmación medida de eso.
+
+**Verificación:** **32 aserciones de comportamiento contra el catálogo REAL y el Trie REAL** (`WhitelistCatalog.kt`, `DomainRuleTrie.kt` copiados por script y `buildRules` extraída por número de línea del archivo real), 0 rojas. **6 controles negativos: 4 detectados**; los otros dos —borrar los hosts explícitos del `allow`, y borrar el sufijo— resultaron **guardas redundantes entre sí** y se cuentan como tales: el sexto control, que borra **las dos** a la vez, sí rompe 4 aserciones. Los seis chequeos de simetría en verde, `node --check` sobre `app.js`, balance de llaves idéntico a HEAD.
+
+**Falta probar en equipo real:**
+
+1. **★ Iniciar sesión en Mercado Pago.** Es la prueba de la causa.
+2. **★ Hacer un pago o una transferencia real** — `/transaction_mobile_authentications` sale por el mismo host, así que esto también estaba roto o a punto de romperse.
+3. **⚠️ LA REGRESIÓN: que el marketplace siga cerrado.** Desde Mercado Pago, intentar llegar a Mercado Libre (buscar un producto, el carrito): no tiene que cargar.
+4. Que el equipo siga recibiendo comandos del panel (que no se tocó la infraestructura).
+5. Prender y apagar el switch «Bloqueo de Mercado Libre en Mercado Pago» y confirmar que **el login sigue andando en los dos estados** (esa es la prueba de que las dos listas quedaron sincronizadas).
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**16/9 — Claude: la Capa 3 bloqueaba de más en dos lugares distintos, y no había forma de saberlo desde el panel. Ver B.67, B.68 y B.69.**
+**17/9 — Claude + Antigravity: no se podía iniciar sesión en Mercado Pago, y la causa se midió sobre el APK real. Ver B.71.**
 
-Pedido del dueño, en dos partes: revisar el bloqueo de ofertas de Mercado Pago *"que bloquea de más y a veces no puedo hablar con el asistente (mago) quizás por alguna palabra que dice, o no pude entrar a cobros de anses"*, y *"al abrir Tefilon se me cierra, por bloqueo de accesibilidad, en la imagen de entrada que aparece"*.
+1. **★ `mobile.mercadolibre.com*` no es el marketplace: es el host de autenticación.** El dueño sacó el APK instalado con `adb pull` (203 MB) y sus 17 `.dex` lo dijeron sin ambigüedad: las únicas rutas que Mercado Pago usa sobre ese host son `/mobile_authentications` (el login), `/transaction_mobile_authentications` (autenticar un pago), `/device_attestation/`, `/public-key-enrollment-service/` y `/remote_resources/`. Estaba bloqueado porque el nombre engaña, y con B.62 ese bloqueo pasó a ser **incondicional** desde 0.6.51 — o sea que la flota entera quedó sin poder autenticar.
+2. **Se abrió el login sin abrir un solo lugar navegable**, que es lo que pidió el dueño textualmente. El marketplace vive en `www` (ahí está `/gz/cart/v2`, el carrito), `listado`, `click1` y `snoopy`, y **los cuatro siguen cerrados**.
+3. **El arreglo toca DOS listas y las dos importan:** el catálogo y `PolicyManager.MERCADO_LIBRE_MP_DOMAINS` (la del switch). Si se arregla solo una, prender el switch vuelve a romper el login.
+4. **⚠️ Destapó una deuda que NO se tocó: el switch «Bloqueo de Mercado Libre en Mercado Pago» quedó decorativo** desde B.62 — apagarlo no abre nada porque la lista siempre-bloqueada lo repone. Sexta repetición de "el interruptor existe y no hace nada". Es decisión de producto: sacarlo, renombrarlo, o que B.62 no aplique a los hosts que el switch gobierna.
+5. **★ Segunda vez en dos días que el APK contesta lo que el código no puede.** El 16/9 fue el manifiesto de Tefilon (B.68), hoy los `.dex` de Mercado Pago. **Cuando el reporte es sobre una app concreta, bajar su APK va primero.**
+6. **Verificación:** 32 aserciones contra el catálogo y el Trie **reales**, 0 rojas; 6 controles negativos, 4 detectados y **2 identificados como guardas redundantes entre sí** (el sexto control, que borra las dos a la vez, sí rompe 4 aserciones). Los seis chequeos de simetría en verde. Compilación en Gradle (`compileReleaseKotlin`) ejecutada por Antigravity: exitosa (BUILD SUCCESSFUL).
 
-1. **★ Lo de Tefilon no tenía nada que ver con Tefilon, y se resolvió MIDIENDO en vez de leyendo código.** Se bajó el APK real de la Tienda y se leyó su manifiesto: su pantalla de entrada es `tfilon.tfilon.TfilonStartActivity`, y el marcador `"artactivity"` del bloqueo del selector de fotos **está adentro de `"StartActivity"`** (`St` + `artActivity`). LockSuite creía que el sidur era el catálogo de ilustraciones de Google y le mandaba "atrás" apenas aparecía. **Cuarta vez que este proyecto paga el mismo error: comparar por substring contra una palabra corta.** Ahora se compara por segmento de nombre de clase. Ver **B.68**.
-2. **★ Lo de Mercado Pago eran las dos mitades del MISMO bug, y era la "red de seguridad" de B.13.** La regla *"pantalla WebView + UNA palabra débil → bloquear"* parecía un caso de borde, pero **casi toda Mercado Pago es una pantalla WebView**: cobros, ANSES, ayuda, comprobantes y el asistente. Entonces bastaba una palabra —`beneficio`, `descuento`, `puntos`— en cualquier nodo para expulsar al usuario. El asistente contesta texto libre, y ANSES llama *"beneficios"* a sus prestaciones. **La causa conceptual: se trataba la MENCIÓN de una palabra como si fuera la SECCIÓN.** Ver **B.67**.
-3. **La decisión de Mercado Pago se mudó a una función pura con banco de pruebas** (`mdm/MercadoPagoOffersPolicy.kt`), igual que B.60 y B.53. El veto que arregla el asistente es **estructural y no mira palabras**: una pantalla con un campo de texto editable es una conversación o un formulario, nunca un catálogo. Y las palabras ahora solo se leen de textos cortos, que es lo que separa un título de sección de la prosa que habla de algo.
-4. **★ Y la pieza que faltaba y explica por qué esto costó una sesión entera: no había ningún registro de qué cierra la Capa 3.** Hay nueve rebotes distintos y para el usuario los nueve se ven igual. Peor: `photoPickerSeenClasses` existía y **habría sido ciego justo para Tefilon**, porque solo anota paquetes que ya considera "relevantes". Se agregó `mdm/Layer3Audit.kt` — un registro unificado, persistente, que se publica al panel y se dibuja en la ficha del celular. **Con esto, el reporte de hoy se contestaba en dos minutos.** Ver **B.69**.
-5. **Se encontró trabajo SIN COMMITEAR en el disco del dueño**, del 15/9 a la noche: el arreglo del portal cautivo en aviones (KLM/Viasat). Se commiteó **tal cual, aparte**, para no pisarlo y para que lo de hoy quede revisable por separado. Ver **B.70**.
-6. **★ Los controles negativos encontraron TRES huecos del propio banco, y uno del arnés.** Primero el arnés le pasaba los `.bak` a `kotlinc` y los 14 controles daban "detectado" **sin ejercitar una sola aserción**. Ya corregido eso, tres controles reales no se detectaban: las aserciones del asistente pasaban por la palabra `"asistente"` y no por el veto estructural; el caso de `"puntos"` no discriminaba; y las de separadores daban verde aunque los campos quedaran corridos. **Tercera sesión seguida en que los controles negativos encuentran el hueco antes en el banco que en el código: no son un trámite.**
-7. **Verificación: 77 aserciones de comportamiento contra los archivos REALES** (copiados por script, no transcriptos), 0 rojas, con **14 controles negativos, los 14 detectados** y con la cuenta de aserciones caídas en cada uno para probar que son de comportamiento y no de compilación. Type-check con `kotlinc` 2.0.21 del bloque nuevo del servicio **extraído del archivo real por número de línea**, 0 errores / 0 warnings, con **6 controles negativos más, los 6 detectados**. Balance de llaves/paréntesis idéntico a HEAD en los seis `.kt` tocados. `node --check` con control negativo. **Los seis chequeos de simetría en verde.** La ficha del celular **renderizada en Chromium** con Firebase stubbeado: la tarjeta nueva dibuja bien, la línea mal formada se ignora sola, 0 errores de consola.
-8. **No se corrió Gradle y no se probó nada en equipo real.**
-9. **Próximo paso, en orden:** compilar, desplegar hosting (hay cambios en `celular.html`/`celular.js`, cache-buster en `celular.js?v=2`), y correr el orden de prueba de B.68 → B.67 → B.69. **Las dos regresiones que más importan: que el catálogo de ilustraciones de Google SIGA rebotando desde Contactos (B.68 prueba 2) y que la sección de ofertas real de Mercado Pago SIGA rebotando (B.67 prueba 3).** Todo el detalle, archivo por archivo, está en `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md`.
+**16/9 — Claude: la Capa 3 bloqueaba de más en dos lugares, y no había forma de saberlo desde el panel. Ver B.67, B.68 y B.69.**
+
+1. **★ Tefilon no tenía nada que ver con Tefilon.** Su pantalla de entrada es `tfilon.tfilon.TfilonStartActivity`, y el marcador `"artactivity"` del bloqueo del selector de fotos **está adentro de `"StartActivity"`**. Cuarta vez que el proyecto paga el mismo error de comparar por substring contra una palabra corta. Ahora se compara por segmento de nombre de clase. **B.68**
+2. **★ Mercado Pago echaba al usuario del asistente (Mago) y de cobros de ANSES**, y era la "red de seguridad" de B.13: *pantalla WebView + UNA palabra débil*. Casi toda Mercado Pago es una pantalla WebView, así que no era una red de seguridad: era la regla principal. **Se trataba la MENCIÓN de una palabra como si fuera la SECCIÓN.** La decisión se mudó a `mdm/MercadoPagoOffersPolicy.kt`, función pura con banco, y el veto que arregla el asistente es estructural (campo de texto editable ⇒ no es un catálogo). **B.67**
+3. **★ Y la pieza que faltaba:** no había ningún registro de qué cierra la Capa 3, y hay nueve rebotes que para el usuario se ven igual. `mdm/Layer3Audit.kt` lo anota y lo dibuja en la ficha del celular. `photoPickerSeenClasses` ya existía y **habría sido ciego justo para Tefilon**. **B.69**
+4. Se encontró y commiteó aparte el trabajo sin commitear del 15/9 (portal cautivo en aviones). **B.70**
+5. **★ Los controles negativos encontraron tres huecos del propio banco y uno del arnés.** Tercera sesión seguida.
 
 **Sesiones previas (una línea; detalle en cada punto B):**
 
-- **15/9 (noche) — portal cautivo en aviones: el guard cerraba antes de tiempo. Recuperado del working tree. Ver B.70.**
-- **10/9 (noche 2) — Antigravity: integración de los parches B.62–B.66, y los subdominios propios de Mercado Pago salen de la lista de bloqueo (quedan solo los del marketplace de Mercado Libre). 0.6.51/114.**
-- **10/9 (noche) — la Tienda auditada con los APKs en la mano (Waze no es el oficial), y el panel rediseñado en una ficha por celular. Ver B.62 a B.66.**
+- **15/9 (noche) — portal cautivo en aviones: el guard cerraba antes de tiempo. Ver B.70.**
+- **10/9 (noche 2) — Antigravity: integración de B.62–B.66 y ajuste de dominios de Mercado Pago. 0.6.51/114.**
+- **10/9 (noche) — Tienda auditada con los APKs en la mano (Waze no es el oficial) y panel rediseñado por celular. Ver B.62 a B.66.**
 - **10/9 (tarde) — pedidos de apps, detector de navegadores embebidos y alta por QR. Ver B.59, B.60, B.61.**
-- **10/9 — B.6 cerrado (checksum obligatorio de APK), perfil con vencimiento. Ver B.58.**
-- **9/9 — perfiles maestros de alta; el perfil deja de topar en FCM. Ver B.57.**
-- **8/9 (tarde) — modo lista blanca completo; cierra media B.52. Ver B.53.**
 
 ---
 
 ## Estado del repo (git)
 
-**16/9:** al arrancar la sesión, lo commiteado era **0.6.51 / código 114** (`376cef2`), **pero el árbol de trabajo NO estaba limpio**: había cinco archivos modificados sin commitear del 15/9 a la noche (ver B.70). Esta sesión los commiteó aparte y dejó **dos commits** en el clon del contenedor:
+### Estado de versiones y tandas recientes
 
-- `fix(portal cautivo): que el guard no cierre la ventana en portales de avion` — el trabajo recuperado del 15/9, sin tocar una línea.
-- `fix(capa 3): dejar de cerrar apps por un marcador mal comparado y de echar al usuario del asistente de Mercado Pago` — B.67, B.68 y B.69.
+- **0.6.51 / código 114 (10/9):** versión previa en producción.
+- **0.6.52 / código 115 (`3d50643`):** integró y compiló B.70 (`285548a`), B.67, B.68, B.69 (`b5c1a41`).
+- **Commit 3 (17/9):** B.71 (login de Mercado Pago - host de autenticación mobile.mercadolibre.*). Compilación de Kotlin verificada con éxito en Gradle (`compileReleaseKotlin` OK).
 
-⚠️ **`device_bash` no montó la carpeta por DUODÉCIMA vez consecutiva**, así que los commits están en el clon del contenedor y **hay que traerlos**. Y un dato nuevo que conviene anotar: **desde el contenedor tampoco se puede PUSHEAR**, aunque el repo sea público — el proxy de git de la sesión responde `403: CHKI541/Lock-Suite is not in this session's authorized repository set` y no inyecta credencial. O sea que el clon sirve para leer y para commitear localmente, nunca para publicar. Los dos commits quedaron además como parches en `Claude outputs/2026-09-16_000{1,2}_*.patch`. Los archivos SÍ quedaron escritos en el disco del dueño (vía `device_commit_files`, con `expectedMtimeMs`), así que la vía más corta es que Antigravity haga el `git add` + `git commit` con los mensajes que están en `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md`, **en los dos commits separados y en ese orden**.
+| Tanda | Qué | Estado |
+|---|---|---|
+| **B.70** | Portal cautivo en aviones (15/9) | Commiteada en `285548a`, empaquetada en 0.6.52 |
+| **B.67** | Mercado Pago dejaba de echar al usuario del asistente y de ANSES | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
+| **B.68** | Tefilon dejaba de cerrarse al abrirse | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
+| **B.69** | Registro unificado de rebotes de la Capa 3 | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
+| **B.71** | El login de Mercado Pago vuelve a funcionar | En Commit 3, compilado con Gradle OK |
 
-**Archivos tocados el 16/9** (finales de línea respetados: el servicio, `PolicyManager`, `FirebaseDeviceSync`, `celular.html` y `celular.js` van en **CRLF**; `PhotoPickerPolicy` y los dos archivos nuevos van en **LF**):
+### Los commits de esta tanda
+
+- `285548a`: `fix(portal cautivo): que el guard no cierre la ventana en portales de avion` — B.70
+- `b5c1a41`: `fix(capa 3): dejar de cerrar apps por un marcador mal comparado…` — B.67, B.68, B.69
+- `3d50643`: `Actualizacion automatica a version 0.6.52 (Codigo 115)`
+- `Commit 3`: `fix(mercado pago): mobile.mercadolibre.* es el host de autenticacion, no el marketplace` — B.71
+
+### Archivos tocados el 16 y el 17/9
+
+Finales de línea respetados: **CRLF** en el servicio, `PolicyManager`, `FirebaseDeviceSync`, `app.js`, `catalog.js`, `celular.html`, `celular.js` y este documento; **LF** en `PhotoPickerPolicy`, `WhitelistCatalog` y los dos archivos nuevos.
 
 ```
 app/src/main/java/com/ejemplo/locksuite/mdm/MercadoPagoOffersPolicy.kt   (NUEVO)
 app/src/main/java/com/ejemplo/locksuite/mdm/Layer3Audit.kt               (NUEVO)
 app/src/main/java/com/ejemplo/locksuite/mdm/PhotoPickerPolicy.kt
+app/src/main/java/com/ejemplo/locksuite/mdm/WhitelistCatalog.kt
 app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt
 app/src/main/java/com/ejemplo/locksuite/service/LockSuiteAccessibilityService.kt
 app/src/main/java/com/ejemplo/locksuite/util/FirebaseDeviceSync.kt
-admin-backend/public/celular.html
-admin-backend/public/celular.js
+admin-backend/public/{app.js, catalog.js, celular.html, celular.js}
 ```
 
-**Antes de desplegar hay que correr los SEIS chequeos** (esta sesión los corrió y dieron los seis en verde):
+### Antes de desplegar
+
+Los **seis** chequeos (esta sesión los corrió y dieron los seis en verde):
 
 ```
 python tools/check_whitelist_sync.py
@@ -1582,6 +1641,6 @@ python tools/gen_catalog_js.py --check
 python tools/gen_policies_js.py --check
 ```
 
-**No hay comandos FCM nuevos**, así que alcanza con desplegar `hosting`; `functions` no cambió. **Cache-buster de `celular.js` en `v=2`** (el de `app.js` sigue en `v=39` porque `app.js` no se tocó). Al abrir la ficha del celular después de desplegar, **Ctrl+F5**.
+**No hay comandos FCM nuevos**: alcanza con desplegar `hosting`, `functions` no cambió. **Cache-busters: `celular.js?v=2`** (`app.js` cambió pero solo en los conteos de `WHITELIST_BUILTIN`, que no afectan al navegador — subirlo igual a `v=40` si se quiere ser prolijo). **El versionCode no se subió a mano**: `deploy_all.ps1` hace `currentCode + 1`. Si se compila a mano, por encima de **114**.
 
-**El versionCode NO se subió a mano**: `deploy_all.ps1` hace `currentCode + 1` solo. Si se compila a mano, subirlo a mano por encima de 114.
+📌 **Todo el detalle operativo está en `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md`**, que cubre las cuatro tandas, los tres commits, qué mirar si Gradle se queja y el orden de prueba consolidado.

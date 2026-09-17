@@ -55,21 +55,22 @@ window.LOCKSUITE_CATALOG = {
         "mercadopago.com.ar",
         "mercadolibre.com",
         "mercadolibre.com.ar",
-        "mlstatic.com"
+        "mlstatic.com",
+        "login-mobile.mercadolibre.com",
+        "mobile.mercadolibre.com",
+        "mobile.mercadolibre.com.ar"
       ],
       "block": [
         "click1.mercadolibre.com",
         "click1.mercadolibre.com.ar",
         "listado.mercadolibre.com",
         "listado.mercadolibre.com.ar",
-        "mobile.mercadolibre.com",
-        "mobile.mercadolibre.com.ar",
         "snoopy.mercadolibre.com",
         "snoopy.mercadolibre.com.ar",
         "www.mercadolibre.com",
         "www.mercadolibre.com.ar"
       ],
-      "note": "PAGOS: probar una transferencia real en simulación antes de pasar a estricto."
+      "note": "PAGOS: probar una transferencia real en simulación antes de pasar a estricto. "
     },
     {
       "pkg": "com.google.android.apps.walletnfcrel",

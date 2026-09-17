@@ -259,17 +259,56 @@ object WhitelistCatalog {
             // bloquea el marketplace, que es la parte navegable.
             allow = listOf(
                 "mercadopago.com", "mercadopago.com.ar", "mercadolibre.com",
-                "mercadolibre.com.ar", "mlstatic.com"
+                "mercadolibre.com.ar", "mlstatic.com",
+                // ── 17/9: los hosts del INICIO DE SESIÓN del cliente móvil ──
+                // ⚠️ SON UNA SEGUNDA GUARDA, REDUNDANTE CON EL SUFIJO DE ARRIBA, y
+                // conviene saberlo exactamente para no sacar la que toca. El banco lo
+                // midió con controles negativos: borrar SOLO estos tres no rompe
+                // ninguna aserción (los cubre el sufijo `mercadolibre.com*`), y borrar
+                // SOLO el sufijo tampoco (los cubren estos tres). Borrar **las dos
+                // cosas** sí rompe el modo estricto — cuatro aserciones.
+                //
+                // Se dejan las dos a propósito. Lo que de verdad rompe el login no es
+                // que falte un permiso, es que alguien ponga estos hosts en `block`:
+                // eso es lo que pasó y lo que dejó a la flota sin poder entrar. Verlos
+                // escritos acá arriba, con este comentario, es el recordatorio de que
+                // ese host es del inicio de sesión y no del marketplace.
+                "login-mobile.mercadolibre.com", "mobile.mercadolibre.com",
+                "mobile.mercadolibre.com.ar"
             ),
             block = listOf(
-                // Solo los dominios de Mercado Libre que se bloquean con el switch "bloquear mercado libre en mercado pago"
+                // ⚠️ 17/9 — SE SACARON `mobile.mercadolibre.com` Y `mobile.mercadolibre.com.ar`,
+                // Y ES EL ARREGLO DE QUE NO SE PUDIERA INICIAR SESIÓN. Ver B.71.
+                //
+                // Estaban acá porque el nombre engaña: "mobile.mercadolibre" suena a
+                // "la versión móvil del sitio de compras". **No lo es.** Medido sobre
+                // el APK real de Mercado Pago (`base.apk`, 203 MB, extraído del equipo
+                // del dueño con `adb pull`), las ÚNICAS rutas que la app usa sobre ese
+                // host son infraestructura del cliente:
+                //
+                //     /mobile_authentications                 ← EL INICIO DE SESIÓN
+                //     /transaction_mobile_authentications     ← autenticar un pago
+                //     /device_attestation/                    ← atestación del equipo
+                //     /public-key-enrollment-service/v1/      ← enrolar clave pública
+                //     /remote_resources/
+                //
+                // Ni una sola es navegación de marketplace. Bloquearlo dejaba la app
+                // sin poder autenticar: la pantalla de login mostraba "No hay internet".
+                //
+                // El marketplace sí vive en los otros cuatro, y esos SIGUEN cerrados:
+                // `www` (`/gz/cart/v2`, el carrito), `listado`, `click1` y `snoopy`.
+                // O sea que se abre el login sin abrir un solo lugar navegable.
+                //
+                // **Antes de sacar o agregar un host de acá, medir el APK.** Las listas
+                // de fábrica las escribió una IA leyendo documentación, no midiendo las
+                // apps — B.62 ya lo dejó anotado y esto es la primera confirmación.
                 "click1.mercadolibre.com", "click1.mercadolibre.com.ar",
                 "listado.mercadolibre.com", "listado.mercadolibre.com.ar",
-                "mobile.mercadolibre.com", "mobile.mercadolibre.com.ar",
                 "snoopy.mercadolibre.com", "snoopy.mercadolibre.com.ar",
                 "www.mercadolibre.com", "www.mercadolibre.com.ar"
             ),
-            note = "PAGOS: probar una transferencia real en simulación antes de pasar a estricto."
+            note = "PAGOS: probar una transferencia real en simulación antes de pasar a estricto. " +
+                "mobile.mercadolibre.* NO es marketplace, es el host de autenticación: no volver a bloquearlo (B.71)."
         ),
 
         Entry(

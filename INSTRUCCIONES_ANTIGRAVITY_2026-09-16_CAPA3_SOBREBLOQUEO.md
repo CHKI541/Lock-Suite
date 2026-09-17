@@ -1,9 +1,21 @@
-# INSTRUCCIONES PARA ANTIGRAVITY — 16/9/2026
-## La Capa 3 bloqueaba de más en dos lugares, y no había forma de verlo desde el panel
+# INSTRUCCIONES PARA ANTIGRAVITY — 16 y 17/9/2026
+## El filtro bloqueaba de más en tres lugares, y no había forma de verlo desde el panel
 
-**Empezá por acá si vas a aplicar, compilar, desplegar o probar lo del 16/9.**
-Cubre B.67 (Mercado Pago), B.68 (Tefilon), B.69 (registro de rebotes) y B.70 (el
-trabajo del 15/9 que estaba sin commitear).
+**Empezá por acá. Es el punto de entrada único de las cuatro tandas que hay sin compilar.**
+Cubre B.67 (ofertas de Mercado Pago), B.68 (Tefilon), B.69 (registro de rebotes),
+B.70 (portal cautivo en aviones, del 15/9) y **B.71 (el inicio de sesión de Mercado
+Pago, del 17/9 — es el más urgente: hoy la flota no puede entrar a la app)**.
+
+> ## 🔴 LO PRIMERO, EN UNA LÍNEA
+> **Lo instalado en la flota es 0.6.51 / código 114, del 10/9, y desde entonces nadie
+> corrió Gradle.** Hay cinco arreglos escritos esperando un build, y uno de ellos
+> (B.71) arregla que **hoy no se pueda iniciar sesión en Mercado Pago**. Compilar y
+> desplegar va antes que cualquier otra cosa.
+>
+> **Mientras tanto, el dueño se destraba sin compilar:** panel → ficha del celular →
+> pestaña 🌐 DNS → **Forzar permitir** sobre `mobile.mercadolibre.com.ar` y
+> `mobile.mercadolibre.com`. `FORCE_ALLOW` se resuelve antes que todo
+> (`KosherVpnService` línea 767), así que le gana a la lista siempre-bloqueada.
 
 ---
 
@@ -114,6 +126,44 @@ Ver B.67, B.68 y B.69.
 EOF
 ```
 
+### Commit 3 — el login de Mercado Pago (B.71, del 17/9)
+
+```
+git add app/src/main/java/com/ejemplo/locksuite/mdm/WhitelistCatalog.kt \
+        app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt \
+        admin-backend/public/app.js admin-backend/public/catalog.js
+git commit -F- <<'EOF'
+fix(mercado pago): mobile.mercadolibre.* es el host de autenticacion, no el marketplace
+
+El duenio reporto con video que la pantalla de inicio de sesion de Mercado Pago dice
+"No hay internet" con el VPN activo y el wifi con senial completa: o sea un dominio
+que no resuelve.
+
+Medido sobre el APK instalado en el equipo (adb pull, 203 MB, 17 dex): las UNICAS
+rutas que la app usa sobre mobile.mercadolibre.com* son /mobile_authentications (el
+login), /transaction_mobile_authentications (autenticar un pago), /device_attestation/,
+/public-key-enrollment-service/ y /remote_resources/. Ninguna es navegacion de
+marketplace. Estaba en la lista de bloqueo porque el nombre engania, y con B.62 ese
+bloqueo paso a ser incondicional desde 0.6.51: la flota entera quedo sin poder
+autenticar.
+
+Se sacan los dos hosts de la lista de bloqueo del catalogo Y de
+PolicyManager.MERCADO_LIBRE_MP_DOMAINS (la del switch): si quedaran en la segunda,
+prender el switch volveria a romper el login aunque el catalogo este bien. Se agregan
+login-mobile.mercadolibre.com y los dos mobile.* al allow.
+
+El marketplace sigue cerrado: www (ahi vive /gz/cart/v2, el carrito), listado, click1
+y snoopy. O sea que se abre el login sin abrir un solo lugar navegable.
+
+Verificado: 32 aserciones contra el catalogo y el Trie REALES, 0 rojas, con 6
+controles negativos (4 detectados; 2 identificados como guardas redundantes entre si,
+y un sexto control que borra las dos a la vez si rompe 4 aserciones). Los seis
+chequeos de simetria en verde. SIN Gradle y SIN probar en equipo.
+
+Ver B.71.
+EOF
+```
+
 ---
 
 ## 1. QUÉ SE TOCÓ, ARCHIVO POR ARCHIVO
@@ -128,10 +178,19 @@ EOF
 | `util/FirebaseDeviceSync.kt` | Publica `layer3Audit` al panel. | **CRLF** |
 | `admin-backend/public/celular.html` | Tarjeta «🛑 Qué cerró la Capa 3» en Resumen; cache-buster `celular.js?v=2`. | **CRLF** |
 | `admin-backend/public/celular.js` | `pintarLayer3()` y su llamada desde `pintarResumen()`. | **CRLF** |
+| `mdm/WhitelistCatalog.kt` **(17/9)** | `mobile.mercadolibre.com*` sale de `block` y entra en `allow` junto con `login-mobile.mercadolibre.com`. | LF |
+| `mdm/PolicyManager.kt` **(17/9)** | Los mismos dos hosts salen de `MERCADO_LIBRE_MP_DOMAINS`. | **CRLF** |
+| `admin-backend/public/app.js` **(17/9)** | Conteos de MP en `WHITELIST_BUILTIN`: `allow: 8, block: 8`. | **CRLF** |
+| `admin-backend/public/catalog.js` **(17/9)** | **Generado** — `python tools/gen_catalog_js.py`. No editar a mano. | **CRLF** |
 
-**Escribir con el final de línea equivocado ensucia el `git status` entero sin
-cambiar una línea de contenido** (B.10). Los archivos ya quedaron escritos con el
-final que corresponde; esta tabla es por si tenés que reescribir alguno.
+**Sobre los finales de línea: da igual, y ahora está medido.** Esta tabla estaba
+pensada para no ensuciar el `git status` (B.10), pero el 17/9 se comprobó que **el repo
+de la PC tiene `core.autocrlf` prendido y normaliza solo**: los cuatro `.kt` escritos en
+LF aparecieron después en el disco con exactamente `tamaño + cantidad de líneas` bytes y
+el contenido idéntico. Así que la tabla queda como referencia, no como algo que tengas
+que cuidar. **Lo que sí conviene hacer de una vez es el `.gitattributes` con
+`* text=auto eol=lf` que B.10 viene pidiendo** — es la razón de fondo de que el
+`git status` esté sucio permanentemente.
 
 ---
 
@@ -164,6 +223,20 @@ aislados y no tocan la forma de la decisión.
 
 Va ordenado por **cuál te avisa más rápido si algo se rompió**. Las dos primeras son
 regresiones: si fallan, el arreglo es peor que el problema.
+
+### 🔴 0. B.71 — QUE SE PUEDA INICIAR SESIÓN EN MERCADO PAGO
+
+Va antes que todo porque es lo que está roto hoy en la flota.
+
+- **Iniciar sesión en Mercado Pago.** Es la prueba de la causa.
+- **Hacer un pago o una transferencia real** — `/transaction_mobile_authentications`
+  sale por el mismo host, así que esto también estaba roto o a punto de romperse.
+- **⚠️ La regresión: que el marketplace siga cerrado.** Desde Mercado Pago, intentar
+  llegar a Mercado Libre (buscar un producto, el carrito): no tiene que cargar.
+- **Prender y apagar el switch «Bloqueo de Mercado Libre en Mercado Pago» y confirmar
+  que el login anda en los DOS estados.** Esa es la prueba de que las dos listas
+  quedaron sincronizadas; si falla con el switch prendido, quedó `mobile.*` en
+  `PolicyManager.MERCADO_LIBRE_MP_DOMAINS`.
 
 ### ⚠️ 1. LA REGRESIÓN DE B.68 — que el selector de foto SIGA rebotando
 
@@ -239,6 +312,28 @@ regresiones: si fallan, el arreglo es peor que el problema.
    mismo algoritmo fue la causa 1 de B.18.
 7. **El id de vista le gana al veto, y el veto le gana a las palabras.** Ese orden
    es la especificación, no un detalle de implementación.
+
+---
+
+## 5-bis. UNA DEUDA QUE ESTO DESTAPÓ Y QUE NO SE TOCÓ
+
+**El switch «Bloqueo de Mercado Libre en Mercado Pago» quedó decorativo.** Desde B.62
+los ocho hosts del marketplace se bloquean **siempre**: apagar el switch llama a
+`clearRule()` y borra la regla del `DomainRuleManager`, pero la lista siempre-bloqueada
+del catálogo la repone en la siguiente reconstrucción. O sea que el administrador ve un
+interruptor que no hace nada.
+
+**Es la sexta repetición de esa familia** (`no_apps_control` en B.28,
+`DISALLOW_CONFIG_DATE_TIME` en B.38, las claves del perfil en B.40 p.8,
+`captivePortalCoverImages` en B.57, `REAPPLY_RESTRICTIONS`/`HEAL_VPN` en B.65). **No lo
+arreglé porque es decisión de producto**, y hay tres salidas razonables:
+
+1. Sacar el switch del panel (el bloqueo pasa a ser siempre, que es lo que hoy hace).
+2. Renombrarlo a algo honesto y dejarlo como informativo.
+3. Que B.62 no aplique a los hosts que el switch gobierna, y que el switch mande.
+
+Mientras tanto la salida de emergencia por dominio sí funciona: `FORCE_ALLOW` desde la
+sección DNS, y el campo `unblock` del editor global de dominios.
 
 ---
 

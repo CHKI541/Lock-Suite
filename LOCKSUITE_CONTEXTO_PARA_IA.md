@@ -1615,7 +1615,7 @@ Además se encontraron dos fuentes de sobrebloqueo adicionales:
 - **0.6.51 / código 114 (10/9):** versión previa en producción.
 - **0.6.52 / código 115 (`3d50643`):** integró B.70 (`285548a`), B.67, B.68, B.69 (`b5c1a41`).
 - **0.6.53 / código 116 (`6c726c6`):** integró B.71 (`07f0d0f`: `mobile.mercadolibre.*` allow).
-- **0.6.54 / código 117 (en despliegue):** B.72 (`www.mercadolibre.com` allow para captcha, arreglo de `WebViewPolicy`, saneamiento de `DomainRuleManager`).
+- **0.6.54 / código 117 (`2ead7d5`):** B.72 (`www.mercadolibre.com` allow para captcha, arreglo de `WebViewPolicy`, saneamiento de `DomainRuleManager`). Desplegado a producción.
 
 | Tanda | Qué | Estado |
 |---|---|---|
@@ -1624,7 +1624,7 @@ Además se encontraron dos fuentes de sobrebloqueo adicionales:
 | **B.68** | Tefilon dejaba de cerrarse al abrirse | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
 | **B.69** | Registro unificado de rebotes de la Capa 3 | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
 | **B.71** | El login de Mercado Pago: host mobile.* | Commiteada en `07f0d0f`, empaquetada en 0.6.53 |
-| **B.72** | El captcha de Mercado Pago: host www.* | Arreglado, probado con video, empaquetado en 0.6.54 |
+| **B.72** | El captcha de Mercado Pago: host www.* | Commiteada en `1d2f806`, empaquetada y desplegada en 0.6.54 |
 
 ### Los commits de esta tanda
 
@@ -1633,6 +1633,8 @@ Además se encontraron dos fuentes de sobrebloqueo adicionales:
 - `3d50643`: `Actualizacion automatica a version 0.6.52 (Codigo 115)`
 - `07f0d0f`: `fix(mercado pago): mobile.mercadolibre.* es el host de autenticacion, no el marketplace` — B.71
 - `6c726c6`: `Actualizacion automatica a version 0.6.53 (Codigo 116)`
+- `1d2f806`: `fix(mercado pago): permitir www.mercadolibre.* para el captcha de inicio de sesion` — B.72
+- `2ead7d5`: `Actualizacion automatica a version 0.6.54 (Codigo 117)`
 
 ### Archivos tocados el 16 y el 17/9
 
@@ -1644,6 +1646,8 @@ app/src/main/java/com/ejemplo/locksuite/mdm/Layer3Audit.kt               (NUEVO)
 app/src/main/java/com/ejemplo/locksuite/mdm/PhotoPickerPolicy.kt
 app/src/main/java/com/ejemplo/locksuite/mdm/WhitelistCatalog.kt
 app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt
+app/src/main/java/com/ejemplo/locksuite/mdm/WebViewPolicy.kt
+app/src/main/java/com/ejemplo/locksuite/dns/DomainRuleManager.kt
 app/src/main/java/com/ejemplo/locksuite/service/LockSuiteAccessibilityService.kt
 app/src/main/java/com/ejemplo/locksuite/util/FirebaseDeviceSync.kt
 admin-backend/public/{app.js, catalog.js, celular.html, celular.js}

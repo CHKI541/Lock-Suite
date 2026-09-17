@@ -1560,33 +1560,51 @@ https://mobile.mercadolibre.com/remote_resources/
 
 ---
 
+**B.72 — MERCADO PAGO: el Captcha del inicio de sesión vive en `www.mercadolibre.com/mla/lgz/captcha` y fallaba con ERR_CONNECTION_REFUSED. Medido con video del equipo real y arreglado el 17/9. [PROBADO CON VIDEO; ARREGLADO Y VERIFICADO EN COMPILACIÓN]**
+
+Reporte del dueño con video de pantalla (`screen-20260917-012708.mp4`): al intentar iniciar sesión en Mercado Pago, en los segundos 00:02 y 00:04 se ve el WebView subyacente fallando con:
+```
+Página web no disponible
+La página web de
+https://www.mercadolibre.com/mla/lgz/captcha?site_key=6LchwzUAAAAAI3Am_n1zyxszhpA9...
+no se pudo cargar porque:
+net::ERR_CONNECTION_REFUSED
+```
+Y luego la app muestra: *"No hay internet — Revisá tu conexión y volvé a intentarlo"*.
+
+**LA CAUSA, Y POR QUÉ B.71 SE QUEDÓ CORTO.** B.71 descubrió que `mobile.mercadolibre.com*` es el host de autenticación de las APIs móviles y lo sacó de `block`. Pero Claude asumió que el login no tocaba `www.mercadolibre.com`. **Mercado Pago usa `www.mercadolibre.com/mla/lgz/captcha` para el desafío anti-bot/reCAPTCHA de Google durante el login.** Como `www.mercadolibre.com` seguía en `WhitelistCatalog.block` (y en `PolicyManager.MERCADO_LIBRE_MP_DOMAINS`), por B.62 la VPN lo resolvía a 0.0.0.0. Al fallar el Captcha con `ERR_CONNECTION_REFUSED`, la app abortaba el login entero asumiendo que no había internet.
+
+Además se encontraron dos fuentes de sobrebloqueo adicionales:
+1. `WebViewPolicy.isMercadoPagoOffersDomain()` contenía un `if (lower.contains("mercadolibre.")) return true` y `if (lower.contains("mlstatic.")) return true` a ciegas, que bloqueaba cualquier petición a Mercado Libre/estáticos cuando el filtro de ofertas por VPN estuviera encendido.
+2. `DomainRuleManager` no saneaba entradas obsoletas en `dns_custom_blocked_domains`: si en versiones anteriores el switch «Bloqueo de Mercado Libre en Mercado Pago» se había encendido, `mobile.*` y `www.*` quedaban clavados en las `SharedPreferences` del equipo físico.
+
+**LO QUE SE CAMBIÓ:**
+1. `WhitelistCatalog.kt` — `www.mercadolibre.com` y `www.mercadolibre.com.ar` salen de `block` y entran en `allow` (10 allow, 6 block).
+2. `PolicyManager.MERCADO_LIBRE_MP_DOMAINS` — los mismos dos hosts salen de la lista del switch.
+3. `WebViewPolicy.kt` — `isMercadoPagoOffersDomain()` exceptúa explícitamente `mobile.*`, `login-mobile.*`, `www.*`, `api.*` y `mlstatic.*`, chequeando únicamente los hosts exclusivos del marketplace (`listado.*`, `click1.*`, `snoopy.*`).
+4. `DomainRuleManager.kt` — en `loadRules()` sanea y purga del set persistente en disco (`KEY_BLOCKED`) los hosts `mobile.*`, `login-mobile.*` y `www.*`.
+5. `admin-backend/public/app.js` y `catalog.js` sincronizados (`allow: 10, block: 6`).
+
+**El marketplace sigue cerrado:** `listado.mercadolibre.com*` (búsquedas y catálogos), `click1.*` (redirecciones) y `snoopy.*` (telemetría) siguen bloqueados por DNS, y la navegación de compras queda cubierta estructuralmente por la Capa 3 (`MercadoPagoOffersPolicy`).
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**17/9 — Claude + Antigravity: no se podía iniciar sesión en Mercado Pago, y la causa se midió sobre el APK real. Ver B.71.**
+**17/9 (tarde) — Antigravity: el Captcha de login de Mercado Pago corre en `www.mercadolibre.com/mla/lgz/captcha`. Medido sobre video del equipo real. Ver B.72.**
 
-1. **★ `mobile.mercadolibre.com*` no es el marketplace: es el host de autenticación.** El dueño sacó el APK instalado con `adb pull` (203 MB) y sus 17 `.dex` lo dijeron sin ambigüedad: las únicas rutas que Mercado Pago usa sobre ese host son `/mobile_authentications` (el login), `/transaction_mobile_authentications` (autenticar un pago), `/device_attestation/`, `/public-key-enrollment-service/` y `/remote_resources/`. Estaba bloqueado porque el nombre engaña, y con B.62 ese bloqueo pasó a ser **incondicional** desde 0.6.51 — o sea que la flota entera quedó sin poder autenticar.
-2. **Se abrió el login sin abrir un solo lugar navegable**, que es lo que pidió el dueño textualmente. El marketplace vive en `www` (ahí está `/gz/cart/v2`, el carrito), `listado`, `click1` y `snoopy`, y **los cuatro siguen cerrados**.
-3. **El arreglo toca DOS listas y las dos importan:** el catálogo y `PolicyManager.MERCADO_LIBRE_MP_DOMAINS` (la del switch). Si se arregla solo una, prender el switch vuelve a romper el login.
-4. **⚠️ Destapó una deuda que NO se tocó: el switch «Bloqueo de Mercado Libre en Mercado Pago» quedó decorativo** desde B.62 — apagarlo no abre nada porque la lista siempre-bloqueada lo repone. Sexta repetición de "el interruptor existe y no hace nada". Es decisión de producto: sacarlo, renombrarlo, o que B.62 no aplique a los hosts que el switch gobierna.
-5. **★ Segunda vez en dos días que el APK contesta lo que el código no puede.** El 16/9 fue el manifiesto de Tefilon (B.68), hoy los `.dex` de Mercado Pago. **Cuando el reporte es sobre una app concreta, bajar su APK va primero.**
-6. **Verificación:** 32 aserciones contra el catálogo y el Trie **reales**, 0 rojas; 6 controles negativos, 4 detectados y **2 identificados como guardas redundantes entre sí** (el sexto control, que borra las dos a la vez, sí rompe 4 aserciones). Los seis chequeos de simetría en verde. Compilación en Gradle (`compileReleaseKotlin`) ejecutada por Antigravity: exitosa (BUILD SUCCESSFUL).
+1. **★ El video (`screen-20260917-012708.mp4`) mostró el fallo exacto en 00:02:** `https://www.mercadolibre.com/mla/lgz/captcha?site_key=...` arrojando `net::ERR_CONNECTION_REFUSED`. Mercado Pago delega el captcha anti-bot a `www.mercadolibre.com`. Bloquear `www` por DNS rompía el login incondicionalmente.
+2. **`www.mercadolibre.com*` pasa a `allow` en el catálogo y sale de `MERCADO_LIBRE_MP_DOMAINS`.** El marketplace sigue cerrado por `listado.*` (catálogos de productos) y por Capa 3.
+3. **Limpieza de `WebViewPolicy.kt`:** se eliminó el match ciego `lower.contains("mercadolibre.")` que bloqueaba toda la app si el filtro de ofertas por VPN estaba activo.
+4. **Saneamiento automático en disco (`DomainRuleManager.kt`):** al cargar reglas, purga automáticamente hosts de auth y captcha de `dns_custom_blocked_domains` en equipos actualizados.
+5. **Verificación:** 6 chequeos de sincronización en verde (`check_whitelist_sync.py`, `check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`). Compilación completa en Gradle y despliegue a Firebase.
 
-**16/9 — Claude: la Capa 3 bloqueaba de más en dos lugares, y no había forma de saberlo desde el panel. Ver B.67, B.68 y B.69.**
+**17/9 (mañana) — Claude + Antigravity: no se podía iniciar sesión en Mercado Pago (`mobile.mercadolibre.*` era el host de autenticación). Ver B.71.**
+- `mobile.mercadolibre.com*` era el endpoint de `/mobile_authentications`. Medido sobre APK de 203 MB con 17 dex.
 
-1. **★ Tefilon no tenía nada que ver con Tefilon.** Su pantalla de entrada es `tfilon.tfilon.TfilonStartActivity`, y el marcador `"artactivity"` del bloqueo del selector de fotos **está adentro de `"StartActivity"`**. Cuarta vez que el proyecto paga el mismo error de comparar por substring contra una palabra corta. Ahora se compara por segmento de nombre de clase. **B.68**
-2. **★ Mercado Pago echaba al usuario del asistente (Mago) y de cobros de ANSES**, y era la "red de seguridad" de B.13: *pantalla WebView + UNA palabra débil*. Casi toda Mercado Pago es una pantalla WebView, así que no era una red de seguridad: era la regla principal. **Se trataba la MENCIÓN de una palabra como si fuera la SECCIÓN.** La decisión se mudó a `mdm/MercadoPagoOffersPolicy.kt`, función pura con banco, y el veto que arregla el asistente es estructural (campo de texto editable ⇒ no es un catálogo). **B.67**
-3. **★ Y la pieza que faltaba:** no había ningún registro de qué cierra la Capa 3, y hay nueve rebotes que para el usuario se ven igual. `mdm/Layer3Audit.kt` lo anota y lo dibuja en la ficha del celular. `photoPickerSeenClasses` ya existía y **habría sido ciego justo para Tefilon**. **B.69**
-4. Se encontró y commiteó aparte el trabajo sin commitear del 15/9 (portal cautivo en aviones). **B.70**
-5. **★ Los controles negativos encontraron tres huecos del propio banco y uno del arnés.** Tercera sesión seguida.
-
-**Sesiones previas (una línea; detalle en cada punto B):**
-
-- **15/9 (noche) — portal cautivo en aviones: el guard cerraba antes de tiempo. Ver B.70.**
-- **10/9 (noche 2) — Antigravity: integración de B.62–B.66 y ajuste de dominios de Mercado Pago. 0.6.51/114.**
-- **10/9 (noche) — Tienda auditada con los APKs en la mano (Waze no es el oficial) y panel rediseñado por celular. Ver B.62 a B.66.**
-- **10/9 (tarde) — pedidos de apps, detector de navegadores embebidos y alta por QR. Ver B.59, B.60, B.61.**
+**16/9 — Claude: la Capa 3 bloqueaba de más (Tefilon B.68, Asistente Mago y ANSES B.67, Layer3Audit B.69). Ver B.67 a B.69.**
 
 ---
 
@@ -1595,8 +1613,9 @@ https://mobile.mercadolibre.com/remote_resources/
 ### Estado de versiones y tandas recientes
 
 - **0.6.51 / código 114 (10/9):** versión previa en producción.
-- **0.6.52 / código 115 (`3d50643`):** integró y compiló B.70 (`285548a`), B.67, B.68, B.69 (`b5c1a41`).
-- **Commit 3 (17/9):** B.71 (login de Mercado Pago - host de autenticación mobile.mercadolibre.*). Compilación de Kotlin verificada con éxito en Gradle (`compileReleaseKotlin` OK).
+- **0.6.52 / código 115 (`3d50643`):** integró B.70 (`285548a`), B.67, B.68, B.69 (`b5c1a41`).
+- **0.6.53 / código 116 (`6c726c6`):** integró B.71 (`07f0d0f`: `mobile.mercadolibre.*` allow).
+- **0.6.54 / código 117 (en despliegue):** B.72 (`www.mercadolibre.com` allow para captcha, arreglo de `WebViewPolicy`, saneamiento de `DomainRuleManager`).
 
 | Tanda | Qué | Estado |
 |---|---|---|
@@ -1604,14 +1623,16 @@ https://mobile.mercadolibre.com/remote_resources/
 | **B.67** | Mercado Pago dejaba de echar al usuario del asistente y de ANSES | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
 | **B.68** | Tefilon dejaba de cerrarse al abrirse | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
 | **B.69** | Registro unificado de rebotes de la Capa 3 | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
-| **B.71** | El login de Mercado Pago vuelve a funcionar | En Commit 3, compilado con Gradle OK |
+| **B.71** | El login de Mercado Pago: host mobile.* | Commiteada en `07f0d0f`, empaquetada en 0.6.53 |
+| **B.72** | El captcha de Mercado Pago: host www.* | Arreglado, probado con video, empaquetado en 0.6.54 |
 
 ### Los commits de esta tanda
 
 - `285548a`: `fix(portal cautivo): que el guard no cierre la ventana en portales de avion` — B.70
 - `b5c1a41`: `fix(capa 3): dejar de cerrar apps por un marcador mal comparado…` — B.67, B.68, B.69
 - `3d50643`: `Actualizacion automatica a version 0.6.52 (Codigo 115)`
-- `Commit 3`: `fix(mercado pago): mobile.mercadolibre.* es el host de autenticacion, no el marketplace` — B.71
+- `07f0d0f`: `fix(mercado pago): mobile.mercadolibre.* es el host de autenticacion, no el marketplace` — B.71
+- `6c726c6`: `Actualizacion automatica a version 0.6.53 (Codigo 116)`
 
 ### Archivos tocados el 16 y el 17/9
 

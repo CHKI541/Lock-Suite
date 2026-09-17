@@ -274,41 +274,23 @@ object WhitelistCatalog {
                 // escritos acá arriba, con este comentario, es el recordatorio de que
                 // ese host es del inicio de sesión y no del marketplace.
                 "login-mobile.mercadolibre.com", "mobile.mercadolibre.com",
-                "mobile.mercadolibre.com.ar"
-            ),
-            block = listOf(
-                // ⚠️ 17/9 — SE SACARON `mobile.mercadolibre.com` Y `mobile.mercadolibre.com.ar`,
-                // Y ES EL ARREGLO DE QUE NO SE PUDIERA INICIAR SESIÓN. Ver B.71.
-                //
-                // Estaban acá porque el nombre engaña: "mobile.mercadolibre" suena a
-                // "la versión móvil del sitio de compras". **No lo es.** Medido sobre
-                // el APK real de Mercado Pago (`base.apk`, 203 MB, extraído del equipo
-                // del dueño con `adb pull`), las ÚNICAS rutas que la app usa sobre ese
-                // host son infraestructura del cliente:
-                //
-                //     /mobile_authentications                 ← EL INICIO DE SESIÓN
-                //     /transaction_mobile_authentications     ← autenticar un pago
-                //     /device_attestation/                    ← atestación del equipo
-                //     /public-key-enrollment-service/v1/      ← enrolar clave pública
-                //     /remote_resources/
-                //
-                // Ni una sola es navegación de marketplace. Bloquearlo dejaba la app
-                // sin poder autenticar: la pantalla de login mostraba "No hay internet".
-                //
-                // El marketplace sí vive en los otros cuatro, y esos SIGUEN cerrados:
-                // `www` (`/gz/cart/v2`, el carrito), `listado`, `click1` y `snoopy`.
-                // O sea que se abre el login sin abrir un solo lugar navegable.
-                //
-                // **Antes de sacar o agregar un host de acá, medir el APK.** Las listas
-                // de fábrica las escribió una IA leyendo documentación, no midiendo las
-                // apps — B.62 ya lo dejó anotado y esto es la primera confirmación.
-                "click1.mercadolibre.com", "click1.mercadolibre.com.ar",
-                "listado.mercadolibre.com", "listado.mercadolibre.com.ar",
-                "snoopy.mercadolibre.com", "snoopy.mercadolibre.com.ar",
+                "mobile.mercadolibre.com.ar",
+                // ── B.72: el CAPTCHA del inicio de sesión vive en www.mercadolibre.com/mla/lgz/captcha ──
+                // Medido sobre video del equipo real: Mercado Pago abre un WebView con
+                // https://www.mercadolibre.com/mla/lgz/captcha?site_key=...
+                // Si www.mercadolibre.com está bloqueado en DNS, el WebView falla con
+                // ERR_CONNECTION_REFUSED y la app dice "No hay internet". El marketplace
+                // queda bloqueado por listado.* (catálogo/búsquedas), click1/snoopy y por Capa 3.
                 "www.mercadolibre.com", "www.mercadolibre.com.ar"
             ),
+            block = listOf(
+                // Subdominios del marketplace y tracking de Mercado Libre (sin autenticación ni captcha)
+                "click1.mercadolibre.com", "click1.mercadolibre.com.ar",
+                "listado.mercadolibre.com", "listado.mercadolibre.com.ar",
+                "snoopy.mercadolibre.com", "snoopy.mercadolibre.com.ar"
+            ),
             note = "PAGOS: probar una transferencia real en simulación antes de pasar a estricto. " +
-                "mobile.mercadolibre.* NO es marketplace, es el host de autenticación: no volver a bloquearlo (B.71)."
+                "mobile.mercadolibre.* y www.mercadolibre.com (/mla/lgz/captcha) son necesarios para el login: no bloquearlos por DNS (B.71, B.72)."
         ),
 
         Entry(

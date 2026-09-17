@@ -151,11 +151,25 @@ object WebViewPolicy {
 
     /**
      * Verifica si un dominio pertenece a la sección de ofertas/comercio de Mercado Libre / Mercado Pago.
+     * ⚠️ NO bloquear mobile.mercadolibre.* (login), login-mobile.*, www.mercadolibre.* (captcha /mla/lgz/captcha)
+     * ni mlstatic.* (recursos visuales de la app). Ver B.71 y B.72.
      */
     fun isMercadoPagoOffersDomain(queriedDomain: String): Boolean {
         val lower = queriedDomain.lowercase()
-        if (lower.contains("mercadolibre.")) return true
-        if (lower.contains("mlstatic.")) return true
+        // Excepciones explícitas de infraestructura/login/captcha
+        if (lower.contains("mobile.mercadolibre.") ||
+            lower.contains("login-mobile.mercadolibre.") ||
+            lower.contains("www.mercadolibre.") ||
+            lower.contains("api.mercadolibre.") ||
+            lower.contains("mlstatic.")) {
+            return false
+        }
+
+        // Subdominios de marketplace de Mercado Libre
+        if (PolicyManager.MERCADO_LIBRE_MP_DOMAINS.any { lower == it || lower.endsWith(".$it") }) {
+            return true
+        }
+
         if (lower.contains("ofertas.mercadopago") || 
             lower.contains("promociones.mercadopago") || 
             lower.contains("deals.mercadopago") ||

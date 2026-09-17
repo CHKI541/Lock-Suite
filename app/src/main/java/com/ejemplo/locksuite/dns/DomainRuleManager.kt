@@ -37,6 +37,25 @@ class DomainRuleManager(
 
     /** Carga las reglas desde SharedPreferences y actualiza el engine. */
     fun loadRules() {
+        // ── Saneamiento B.71 / B.72 ──
+        // Si versiones anteriores guardaron los hosts de autenticación o captcha
+        // de Mercado Pago en la lista de bloqueados personalizados, removerlos del disco
+        val staleBlocked = listOf(
+            "mobile.mercadolibre.com", "mobile.mercadolibre.com.ar",
+            "login-mobile.mercadolibre.com",
+            "www.mercadolibre.com", "www.mercadolibre.com.ar"
+        )
+        val currentBlocked = readSet(KEY_BLOCKED)
+        var changed = false
+        for (stale in staleBlocked) {
+            if (currentBlocked.remove(normalizeDomain(stale))) {
+                changed = true
+            }
+        }
+        if (changed) {
+            prefs().edit().putStringSet(KEY_BLOCKED, currentBlocked).apply()
+        }
+
         val map = mutableMapOf<String, RuleType>()
         for ((type, key) in KEY_BY_TYPE) {
             for (d in readSet(key)) map[normalizeDomain(d)] = type

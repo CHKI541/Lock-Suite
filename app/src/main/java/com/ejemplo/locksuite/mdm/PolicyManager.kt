@@ -18,7 +18,7 @@ class PolicyManager(private val context: Context) {
     private val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     private val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
 
-    private companion object {
+    companion object {
         /** Guarda de una vez por proceso para autoGrantDeclaredPermissions(). Ver B.55. */
         @Volatile private var permissionsAutoGranted = false
 
@@ -35,22 +35,18 @@ class PolicyManager(private val context: Context) {
          * Hosts del marketplace de Mercado Libre que cierra el switch "Bloqueo de
          * Mercado Libre en Mercado Pago".
          *
-         * ⚠️ 17/9 — `mobile.mercadolibre.com` y `mobile.mercadolibre.com.ar` SALIERON
-         * de esta lista, y sacarlos de acá es tan importante como sacarlos del
-         * catálogo: si quedaran, prender el switch volvería a romper el inicio de
-         * sesión aunque el catálogo esté bien. **Las dos listas tienen que decir lo
-         * mismo.** Ese host no es marketplace, es el de `/mobile_authentications`
-         * (medido sobre el APK real). Ver B.71 y `WhitelistCatalog`.
+         * ⚠️ 17/9 — `mobile.mercadolibre.com*` y `www.mercadolibre.com*` SALIERON
+         * de esta lista. `mobile` aloja la autenticación y `www` aloja el captcha
+         * (/mla/lgz/captcha). Bloquear www en DNS rompía el captcha de inicio de sesión
+         * con ERR_CONNECTION_REFUSED. Ver B.71, B.72 y `WhitelistCatalog`.
          */
         val MERCADO_LIBRE_MP_DOMAINS = listOf(
             "click1.mercadolibre.com.ar",
             "listado.mercadolibre.com.ar",
             "snoopy.mercadolibre.com.ar",
-            "www.mercadolibre.com.ar",
             "click1.mercadolibre.com",
             "listado.mercadolibre.com",
-            "snoopy.mercadolibre.com",
-            "www.mercadolibre.com"
+            "snoopy.mercadolibre.com"
         )
     }
 

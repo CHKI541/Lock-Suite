@@ -199,6 +199,9 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - **Sí se puede type-checkear sin Gradle, y conviene hacerlo.** `kotlinc` 2.0.21 se baja de `github.com/JetBrains/kotlin/releases` (Maven Central da 404 para ese artefacto) y corre en el contenedor. Contra stubs mínimos de la API de Android + de las clases del proyecto que toque el archivo, agarra errores reales de tipos y de referencias. **Siempre con control negativo** (romper a propósito una referencia y confirmar que la detecta): sin eso, un "0 errores" puede ser simplemente que no compiló nada.
 - **(22/9) GRADLE COMPILA DE VERDAD EN EL CONTENEDOR — y corren las pruebas unitarias y el lint.** La receta quedó en el repo: `tools/ia_contenedor/` (README con los pasos). En corto: SDK en `/opt/android-sdk`; espejo de Maven Central en `~/.gradle/init.d/` (Central da 429 desde el contenedor); compilar en una COPIA del clon (el `gradle.properties` del repo fija `trustStoreType=WINDOWS-ROOT`, que en Linux rompe el wrapper; la copia además lleva un `google-services.json` y un keystore de mentira, nunca los reales); `bash ./gradlew`. Con eso ya no hace falta type-checkear Kotlin a mano con stubs. **Ojo con la memoria (8 GB):** los daemons de Gradle y de Kotlin se comen 5 GB; matarlos (`pkill -f "[G]radleDaemon"; pkill -f "[K]otlinCompileDaemon"`) antes de correr Node o el emulador de Firebase.
 - **(22/9) Las reglas de la base se prueban contra el emulador real:** `tools/rules_tests/` (`npm install && npm test`, necesita Java). Ver B.73. Antes de este día, lo que se decía de las reglas era razonado, no medido — y estaba mal en dos puntos graves.
+- **(23/9) DECIMOCUARTA vez que `device_bash` no monta, y dos datos nuevos sobre el tope de 7 niveles que corrigen lo de arriba:** (1) **el tope es solo para LEER** (`device_stage_files`): `device_commit_files` **escribió** `KosherVpnService.kt` a 8 niveles sin problema, y `device_list_dir` lista a cualquier profundidad. (2) **Para validar un `.kt` del disco sin leerlo alcanza con su tamaño** contra el clon: si en el disco hay trabajo sin commitear, aplicar antes al clon el parche de `Claude outputs/` y comparar con los CRLF contados (tamaño en LF + cantidad de líneas; el 23/9 dio 73.555 + 1.346 = 74.901, exacto). Con eso esta sesión **no necesitó** la carpeta `app\src\main\java` (la pidió de más, a mitad de camino). Sigue haciendo falta solo si hay que LEER un archivo del disco que no coincide con el clon ni con ningún parche: en ese caso, pedirla en el primer mensaje.
+- **(23/9) Para saber qué hace Android por dentro sin un equipo:** `sdkmanager --sdk_root=/opt/android-sdk "sources;android-36"` baja el código de la API pública con su Javadoc a `/opt/android-sdk/sources/android-36/` (por ejemplo `android/net/VpnService.java`). Lo que corre en el sistema (`services/…`, como `Vpn.java`) no viene ahí: se leyó del espejo de AOSP en GitHub (`aosp-mirror/platform_frameworks_base`). Así se verificó B.87 sin suponer.
+- **(23/9) `tools/ia_contenedor/setup_sdk.sh` fallaba en su último paso** (no copiaba el espejo de Maven: resolvía su ruta relativa después de hacer `cd` al SDK). Arreglado. Y `lintDebug` necesita dependencias que la compilación no baja: la primera vez, sin `--offline` (anotado en el README).
 - **(22/9) DECIMOTERCERA vez que `device_bash` no monta**, esta vez con las tres carpetas conectadas (la raíz, `app\src\main\java` y `admin-app\src\main\java`). La receta de siempre funcionó: clonar, trabajar en el clon, validar tamaños contra `device_list_dir` (esta vez los 24 archivos a tocar coincidían byte por byte con `HEAD`, en LF o CRLF), y escribir con `device_commit_files` + `expectedMtimeMs`.
 
 ---
@@ -1592,7 +1595,7 @@ Además se encontraron dos fuentes de sobrebloqueo adicionales:
 
 **El marketplace sigue cerrado:** `listado.mercadolibre.com*` (búsquedas y catálogos), `click1.*` (redirecciones) y `snoopy.*` (telemetría) siguen bloqueados por DNS, y la navegación de compras queda cubierta estructuralmente por la Capa 3 (`MercadoPagoOffersPolicy`).
 
-**B.73 — REGLAS DE LA BASE: EL CELULAR NO PODÍA LEER SU PROPIA CONFIGURACIÓN, Y CUALQUIER SESIÓN ANÓNIMA PODÍA ADUEÑARSE DE UN EQUIPO AJENO. [ESCRITO Y PROBADO CONTRA EL EMULADOR REAL EL 22/9 — 44/44 en verde, 17 en rojo con las reglas viejas; SIN DESPLEGAR NI PROBAR EN EQUIPO]**
+**B.73 — REGLAS DE LA BASE: EL CELULAR NO PODÍA LEER SU PROPIA CONFIGURACIÓN, Y CUALQUIER SESIÓN ANÓNIMA PODÍA ADUEÑARSE DE UN EQUIPO AJENO. [ESCRITO Y PROBADO CONTRA EL EMULADOR REAL EL 22/9 — 44/44 en verde, 17 en rojo con las reglas viejas; SIN DESPLEGAR NI PROBAR EN EQUIPO]** *(23/9: el respaldo de las reglas publicadas que pide §2 de las instrucciones del 22/9 **se intentó y quedó VACÍO**: `scratch/reglas_publicadas_2026-09-22.json` pesa 0 bytes, porque el `firebase database:get /.settings/rules` se cortó por errores de red (`premature close`, ver `firebase-debug.log`). Sin eso no hay plan B para estas reglas. Rehacerlo antes de desplegar: recuadro de §1 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`.)*
 
 Medido con el emulador real de Realtime Database (`firebase-tools` 13 + emulador 4.11.2), no razonado:
 
@@ -1699,34 +1702,66 @@ El guard cerraba la ventana del portal "por inactividad" mientras el usuario le�
 
 **B.86 — `UPDATE_APP` y el desbloqueo de desinstalación si el proceso muere a mitad de cierre. [VISTO EL 22/9; NO TOCADO]** `UpdateFlowManager.finish()` restaura `setUninstallBlocked` del paquete en un `postDelayed`; si el proceso muere justo en ese intervalo, esa app puede quedar desinstalable hasta que algo vuelva a aplicar su bloqueo. Caso borde; anotado para cuando se toque ese archivo.
 
+**B.87 — ANDROID AUTO NO ARRANCA CON LOCKSUITE: "Error de comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto". [ESCRITO Y COMPILADO EL 23/9, PRUEBAS UNITARIAS EN VERDE; SIN PROBAR EN EQUIPO NI EN EL AUTO]**
+
+Reporte del dueño con dos capturas: la pantalla roja de Android Auto con ese error, y su "Ayuda con la conexión", que sugiere dos cosas: desactivar la VPN y desactivar la depuración por USB.
+
+**Causa.** Android Auto se niega a arrancar si su red es una VPN, y no mira qué enruta. La de LockSuite solo captura DNS, pero es la VPN permanente del equipo (always-on, `lockdown=false`), así que **todas** las apps, Android Auto incluida, quedan en la red VPN. El Android Auto inalámbrico tiene además un segundo problema: necesita abrir sockets sobre la Wi-Fi del auto, y una VPN sin `allowBypass()` —la nuestra— no deja que las apps que cubre elijan otra red (Javadoc de `allowBypass`: *"by default… it is not possible for apps to side-step the VPN"*). Es un problema conocido de las apps de filtro que funcionan como VPN local. Microsoft Defender (VPN local de protección web, la misma arquitectura) lo tiene sin resolver desde hace años porque no permite excluir apps. Los bloqueadores tipo Blokada o NetGuard lo resuelven excluyendo Android Auto de la VPN.
+
+**Arreglo** (`service/KosherVpnService.kt`: constante `ANDROID_AUTO_PACKAGES` + un bucle en `buildTunnel()`): `addDisallowedApplication("com.google.android.projection.gearhead")`, igual que ya se hacía con la propia LockSuite. Según el Javadoc de Android 36, una app excluida *"will use networking as if the VPN wasn't running"*: su red por omisión pasa a ser la física, Android Auto deja de ver la VPN y puede usar la Wi-Fi del auto. **No toca rutas, direcciones, MTU ni la lógica de reestablecimiento de B.49**: solo agrega un paquete a la lista de excluidos, que es la misma para los dos intentos de MTU.
+
+**Costo para el filtro: prácticamente nulo.** Se excluye solo la app Android Auto, que no tiene navegador ni WebView. Las apps que se proyectan al auto (Maps, Waze, Spotify, WhatsApp, el Asistente) corren en sus propios procesos y siguen filtradas igual. Efecto lateral bueno: con la lista blanca (B.53) encendida, los dominios de Android Auto tampoco pueden quedar bloqueados por "no listados".
+
+**Verificado en el código de Android (23/9), porque era el riesgo grave.** Si `establish()` fallara en un equipo sin Android Auto, ese equipo quedaría **sin filtro**. No pasa. El sistema convierte cada paquete excluido a UID con su propia identidad (`Vpn.getAppUid()` en AOSP, con `clearCallingIdentity`): si el paquete no existe devuelve -1, `getAppsUids()` lo saltea y el túnel se arma igual. En Android 36, además, `Builder.verifyApp()` ni siquiera mira el resultado. Y como resuelve el sistema, la visibilidad de paquetes de Android 11+ no interfiere (el manifiesto igual tiene `QUERY_ALL_PACKAGES`). La `NameNotFoundException` que documenta el método se atrapa igual, por si algún fabricante la tira.
+
+**Lo que NO se hizo, a propósito:**
+
+- **No se excluye Google Play Services (`com.google.android.gms`)**, aunque algún foro lo sugiera para el Android Auto inalámbrico. En ese proceso corre "Gestionar tu cuenta de Google" (`gms.accountsettings`, con el historial de YouTube y Mi Actividad adentro): excluirlo **reabre B.43 entero**. Quedó escrito en el código, al lado de la constante.
+- **No se usa `allowBypass()`:** dejaría a cualquier app salir del filtro con solo atarse a la Wi-Fi.
+- **No se apaga el filtro al conectar el auto:** deja todo el equipo sin filtro mientras se maneja y además llega tarde, porque Android Auto chequea la VPN al conectar. Queda como último recurso.
+
+**Falta probar**, en este orden (detalle en `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`):
+
+1. Regresión: internet y filtro igual que antes.
+2. Por ADB, que la UID de Android Auto quedó **fuera** de los rangos de la VPN (`ip rule`).
+3. En el auto: con cable y, si el auto lo tiene, inalámbrico.
+
+Si con la depuración por USB prendida el auto sigue sin conectar, apagarla es lo segundo que pide la ayuda de Android Auto, y eso no depende de LockSuite.
+
+**Si en el auto sigue el error 21 con la UID ya excluida:** no agregar GMS a ciegas. Primero medir (logcat de Android Auto durante la conexión, está en las instrucciones) y después decidir con el dueño entre excluir GMS (reabre B.43) o pausar el filtro durante la conexión.
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**22/9 — Claude (Cowork, contenedor en la nube): revisión completa para producción con varios usuarios. Ver B.73 a B.86.**
+**23/9 — Claude (Cowork, contenedor en la nube): Android Auto no arrancaba con LockSuite ("error de comunicación 21"). Ver B.87.**
 
-El pedido del dueño: revisar toda la app y el panel, función por función, para empezar a usarla con varios usuarios. Que el internet no se trabe nunca, que funcionen todas las restricciones y la lista blanca/negra, que la actualización de apps funcione siempre, que el panel mande sin importar cómo esté el celular, y que no gaste CPU.
+El pedido del dueño: *"al usar VPN no logra conectarse"*, con dos capturas: la pantalla roja de Android Auto (*"Error de comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto"*) y su ayuda de conexión (desactivar la VPN, desactivar la depuración por USB).
 
-Lo que salió, de más grave a menos:
+Qué se encontró y qué se hizo:
 
-1. **B.73 — reglas de la base.** Con las reglas del repo, el celular no podía leer su propia configuración (la ficha por equipo de B.63 no funcionaba en ninguno) y cualquier sesión anónima podía adueñarse de un equipo ajeno. Reglas nuevas, flujo de re-vinculación para equipos reinstalados (`deviceClaims` + cartel con Aprobar en el panel) y 44 pruebas contra el emulador real.
-2. **B.82 — el panel ejecutaba HTML que manda el celular.** El nombre de una app instalada en cualquier equipo podía correr código en la sesión del administrador.
-3. **B.75 — `PackageReceiver` no funcionaba en Android 8+.** Nada de lo que hace al instalar o actualizar corría. Despertarlo tal cual habría desinstalado las apps de la Tienda: se cerró eso antes.
-4. **B.74 — buzón de comandos.** Un comando del panel ya no se pierde si el FCM no llega; se aplica cuando el equipo vuelve.
-5. **B.81 — actualización de apps.** Un reinicio en medio de una instalación dejaba la instalación abierta para siempre.
-6. **B.78 — la única rendija del filtro DNS que fallaba abierta.**
-7. **B.79 / B.80 / B.76 / B.77 / B.84** — internet que se trababa en dos casos, CPU y batería, "bloquear instalación" con dos fuentes de verdad, lista blanca que no se releía, portal cautivo.
+1. **Causa:** Android Auto se niega a arrancar si su red es una VPN, sin mirar qué enruta. Con la VPN permanente de LockSuite, todas las apps quedan en esa red. Con Android Auto inalámbrico, además, la VPN no lo deja usar la Wi-Fi del auto.
+2. **Arreglo:** Android Auto (`com.google.android.projection.gearhead`) sale del túnel con `addDisallowedApplication`, como ya salía LockSuite. Un solo archivo (`KosherVpnService.kt`), sin tocar rutas ni la lógica de reestablecimiento.
+3. **Verificado en el código de Android, no supuesto:** un equipo sin Android Auto no pierde el filtro (el sistema saltea el paquete inexistente, `establish()` no falla), y la visibilidad de paquetes no interfiere.
+4. **Decidido y escrito en el código:** NO se excluye Google Play Services (reabriría B.43) ni se usa `allowBypass()`.
 
 Cómo se verificó:
 
-- **Gradle de verdad en el contenedor** (receta nueva en `tools/ia_contenedor/`): `compileDebugKotlin` OK; `testDebugUnitTest` 13/13 (`CommandMailboxTest` 6, `DnsPacketParserTest` 5, `NetworkForwarderTest` 2); `lintDebug` sin errores nuevos y uno menos.
-- **Reglas:** 44/44 contra el emulador real (`tools/rules_tests/`); control negativo: 17 en rojo con las reglas anteriores.
-- Los seis chequeos de `tools/` en verde, después de adaptar dos al archivo nuevo `CommandProcessor.kt`. `node --check` en todo el JS del panel y de la Function.
-- **Nada probado en un equipo real ni desplegado.** Por eso no se tachó ningún punto de B.
+- **Base igual al disco:** el clon se llevó al estado del disco aplicando el parche del 22/9 y se comparó: el contexto, idéntico byte a byte salvo los CRLF; `KosherVpnService.kt`, mismo tamaño exacto contando los CRLF (73.555 + 1.346 líneas = 74.901 bytes).
+- **Gradle de verdad en el contenedor:** `compileDebugKotlin` OK; `testDebugUnitTest` 13/13; `lintDebug` sin avisos nuevos (los 3 del archivo son de código viejo que solo se corrió de línea). La clase compilada contiene el paquete nuevo.
+- **El script de ADB de las instrucciones** (`check_android_auto.ps1`): su lógica, con las mismas expresiones regulares, probada contra el formato real de `ip rule` del A06 y siete variantes, 9/9. El PowerShell en sí no se pudo correr (GitHub da 403 desde el contenedor para bajar `pwsh`).
+- **El procedimiento de los dos commits** (`git apply --cached` de cada parche) se simuló en un repo en `fd76ccc` con el disco imitado (CRLF, `core.autocrlf` y `filemode = false`, como la PC): mismos árboles que los commits de la sesión y `git status` limpio.
+- **Documentación y código de Android:** Javadoc de `addDisallowedApplication` y `allowBypass` (fuentes de Android 36 bajadas con `sdkmanager`) y `Vpn.java` de AOSP.
+- **Nada probado en un equipo real ni en el auto.** Por eso no se tachó nada de B.
 
-Lo que sigue: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-22_PRODUCCION.md`** (compilar, desplegar en orden, probar en equipo, commitear), y las decisiones del dueño de B.85.
+De paso, dos cosas más:
+
+- **El respaldo de las reglas del 22/9 está vacío** (0 bytes): el comando de Firebase se cortó por errores de red. Es el plan B de B.73, así que hay que rehacerlo antes de desplegar (anotado en B.73 y en las instrucciones).
+- `tools/ia_contenedor/setup_sdk.sh` fallaba en su último paso (ruta relativa después de un `cd`), y el README no avisaba que `lintDebug` necesita bajar dependencias la primera vez. Los dos arreglados (ver sección A).
+
+**Lo del 22/9 sigue sin commitear, desplegar ni probar.** Lo del 23/9 va encima: dos commits en orden, sin descartar nada del disco. Lo que sigue: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`** (commitear los dos → seguir las del 22/9 para desplegar → pruebas de Android Auto).
 
 ---
 
@@ -1735,7 +1770,19 @@ Lo que sigue: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-22_PRODUCCION.md`** (compilar
 ### Estado de versiones
 
 - **0.6.54 / código 117 (`2ead7d5`):** la última desplegada (B.72). Commit de documentación posterior: `fd76ccc`.
-- **Esta sesión (22/9):** sin subir versión (lo hace `deploy_all.ps1`). Todo quedó escrito en el disco del dueño **sin commitear ahí**, porque `device_bash` no montó y sin él no hay `git` sobre el disco. El commit está hecho en el clon de la sesión, con un parche de respaldo en `Claude outputs/`; el mensaje exacto para commitear en la PC está en las instrucciones.
+- **22/9 y 23/9: dos sesiones escritas en el disco del dueño, SIN COMMITEAR AHÍ**, y sin subir versión (lo hace `deploy_all.ps1`). En las dos, `device_bash` no montó y sin él no hay `git` sobre el disco. Al 23/9 el `HEAD` del disco sigue en `fd76ccc` (leído de `.git/logs/HEAD`). Cada sesión dejó su commit hecho en el clon, más **parche + mensaje** en `Claude outputs/` (`2026-09-22_*` y `2026-09-23_*`). **Los dos tocan `KosherVpnService.kt` y este documento**, así que el `git add` de las instrucciones del 22/9 ya no sirve tal cual: metería lo del 23/9 en el commit del 22/9. El procedimiento que los separa sin descartar nada (`git apply --cached` de cada parche + `git commit`) está en §0 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`, probado en el contenedor.
+
+### Archivos tocados el 23/9
+
+Mismo criterio de finales de línea: como estaban en el disco. **CRLF** en `KosherVpnService.kt` y este documento; **LF** en `setup_sdk.sh`, `README.md` de `tools/ia_contenedor/` y el archivo nuevo.
+
+```
+app/src/main/java/com/ejemplo/locksuite/service/KosherVpnService.kt     (B.87)
+tools/ia_contenedor/setup_sdk.sh                                          (ruta relativa después del cd)
+tools/ia_contenedor/README.md                                             (lint: la primera vez, en línea)
+LOCKSUITE_CONTEXTO_PARA_IA.md
+INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md                     (NUEVO)
+```
 
 ### Archivos tocados el 22/9
 

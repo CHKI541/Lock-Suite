@@ -109,6 +109,55 @@ class KosherVpnService : VpnService() {
             "2620:fe::fe", "2620:fe::9"                      // Quad9
         )
 
+        // ──────────────────────────────────────────────────────────────────────────
+        // ANDROID AUTO FUERA DEL TÚNEL  (23/9/2026 — B.87)
+        //
+        // SÍNTOMA. Con LockSuite activa, Android Auto no arranca: "Error de comunicación
+        // 21 - Conectarse a una VPN podría impedir que se inicie Android Auto".
+        //
+        // POR QUÉ. Android Auto se niega a arrancar si SU red es una VPN, sin mirar qué
+        // enruta esa VPN. Como LockSuite es la VPN permanente del equipo (always-on, sin
+        // lockdown), TODAS las apps quedan en la red VPN, así que Android Auto la ve
+        // aunque este túnel solo capture DNS. Y el Android Auto inalámbrico tiene un
+        // segundo problema: necesita abrir sockets sobre la Wi-Fi del auto, y una VPN sin
+        // `allowBypass()` —esta— no deja que las apps que cubre elijan otra red.
+        //
+        // ARREGLO. Sacar Android Auto del túnel con `addDisallowedApplication`, igual que
+        // se saca LockSuite. Según la documentación de Android, una app excluida "usa la
+        // red como si la VPN no estuviera": su red por omisión es la física (es lo mismo
+        // que hace que el `registerDefaultNetworkCallback` de LockSuite vea la Wi-Fi y no
+        // la VPN). Android Auto deja de ver la VPN y puede usar la red del auto.
+        //
+        // COSTO PARA EL FILTRO: prácticamente nulo. Se excluye SOLO la app Android Auto,
+        // que no tiene navegador ni WebView. Las apps que se proyectan al auto (Maps,
+        // Waze, Spotify, WhatsApp, el Asistente) corren en SUS procesos y siguen
+        // filtradas exactamente igual.
+        //
+        // ⚠️ NO AGREGAR `com.google.android.gms` A ESTA LISTA, aunque un informe o un foro
+        // diga que Android Auto la necesita. En ese proceso corre "Gestionar tu cuenta de
+        // Google" (`com.google.android.gms.accountsettings`), con el historial de YouTube
+        // y Mi Actividad adentro: excluirlo reabre B.43 entero. Tampoco `allowBypass()`:
+        // dejaría a CUALQUIER app salir del filtro con solo atarse a la Wi-Fi.
+        //
+        // UN EQUIPO SIN ANDROID AUTO NO PIERDE EL FILTRO (verificado en el código de Android
+        // el 23/9, porque si `establish()` fallara por esto el equipo quedaría sin filtro):
+        //  · La documentación dice que `addDisallowedApplication` tira NameNotFoundException
+        //    si la app no está: se atrapa abajo y se sigue.
+        //  · En Android 36, `Builder.verifyApp()` ni siquiera mira el resultado, así que no
+        //    tira: el nombre viaja tal cual en la configuración.
+        //  · El sistema (`Vpn.getAppUid()`/`getAppsUids()` en AOSP) lo convierte a UID con
+        //    su propia identidad (`clearCallingIdentity`), devuelve -1 si no existe y lo
+        //    SALTEA. `establish()` no falla. Y como resuelve el sistema, la visibilidad de
+        //    paquetes de Android 11+ no interfiere (igual el manifiesto tiene
+        //    QUERY_ALL_PACKAGES).
+        // Si Android Auto se instala DESPUÉS de levantado el túnel, queda excluida a más
+        // tardar en el próximo reestablecimiento (cambio de red, reparación o reinicio).
+        // En Android 10+ viene preinstalada, así que en la práctica ya está.
+        // ──────────────────────────────────────────────────────────────────────────
+        private val ANDROID_AUTO_PACKAGES = listOf(
+            "com.google.android.projection.gearhead" // Android Auto
+        )
+
         /**
          * ¿El túnel está realmente leyendo paquetes en este proceso?
          *
@@ -628,6 +677,19 @@ class KosherVpnService : VpnService() {
             builder.addDisallowedApplication(packageName)
         } catch (e: Exception) {
             android.util.Log.w("KosherVPN", "No se pudo desautorizar la propia app de la VPN: ${e.message}")
+        }
+
+        // Android Auto también queda afuera: si ve la VPN no arranca ("error 21"). El
+        // porqué, y por qué NO se agrega Google Play Services, en ANDROID_AUTO_PACKAGES.
+        ANDROID_AUTO_PACKAGES.forEach { pkg ->
+            try {
+                builder.addDisallowedApplication(pkg)
+            } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+                // No está instalada en este equipo: no hay nada que excluir, así que no es
+                // una advertencia. (En Android 36 ni siquiera se llega acá: ver arriba.)
+            } catch (e: Exception) {
+                android.util.Log.w("KosherVPN", "No se pudo excluir $pkg de la VPN: ${e.message}")
+            }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

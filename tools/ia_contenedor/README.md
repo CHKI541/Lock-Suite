@@ -26,7 +26,11 @@ bash ./gradlew --offline -q :app:compileDebugKotlin :app:testDebugUnitTest
 bash ./gradlew --offline -q :app:lintDebug          # opcional, lento
 ```
 
-(`--offline` solo después de la primera compilación, que baja las dependencias.)
+(`--offline` solo después de la primera compilación, que baja las dependencias. **Y la
+primera vez que se corre `lintDebug`, también sin `--offline`:** el lint arma el modelo de
+`androidTest`, cuyas dependencias —`ui-test-junit4`, `androidx.test`, `espresso`— la
+compilación no baja; con `--offline` falla en un segundo con "No cached version". Medido
+el 23/9.)
 
 Por qué se compila en una COPIA y no en el clon:
 

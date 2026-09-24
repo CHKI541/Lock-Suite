@@ -253,6 +253,16 @@ object SelfUpdater {
                     Toast.makeText(context, "Instalando $label en segundo plano...", Toast.LENGTH_SHORT).show()
                 }
 
+                // 22/9/2026 — anotar QUÉ paquete está instalando la Tienda, antes del
+                // commit. Con la instalación bloqueada, `PackageReceiver` desinstala todo
+                // paquete nuevo que no esté en la lista local `allowed_packages`, y la
+                // Tienda instala lo permitido en `globalSettings/allowedPackages`: sin esta
+                // marca, la app recién bajada se desinstalaba sola. Ver PackageReceiver.
+                PrefsHelper.getMdmPrefs(context).edit()
+                    .putString(com.ejemplo.locksuite.receiver.PackageReceiver.KEY_STORE_INSTALL_PKG, packageName)
+                    .putLong(com.ejemplo.locksuite.receiver.PackageReceiver.KEY_STORE_INSTALL_AT, System.currentTimeMillis())
+                    .commit()
+
                 // Levantar restricciones ANTES de crear la sesión (Android valida al crear, no al commit)
                 if (!prepareTemporaryInstallAccess(context)) {
                     return@withContext "No se pudieron preparar los permisos temporales de instalación."
@@ -320,6 +330,10 @@ object SelfUpdater {
             PrefsHelper.getMdmPrefs(context)
                 .edit()
                 .putBoolean("mdm_install_in_progress", true)
+                // Identidad de ESTA ventana de instalación para la red de seguridad de
+                // UpdateFlowManager.healStaleInstall() (la alarma de 2 min no sobrevive
+                // a un reinicio; sin esto la instalación quedaba abierta para siempre).
+                .putLong(UpdateFlowManager.KEY_INSTALL_STARTED_AT, System.currentTimeMillis())
                 .apply()
 
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager

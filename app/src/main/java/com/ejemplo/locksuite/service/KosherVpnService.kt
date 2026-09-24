@@ -224,9 +224,53 @@ class KosherVpnService : VpnService() {
          *
          * La llama el ciclo de 20 s del `WatchdogForegroundService`.
          */
+        // ── VENTANA DESLIZANTE (22/9/2026, cierra la mitad de B.51) ──────────────
+        //
+        // `tunnelHealth()` mira contadores ACUMULADOS desde que se levantó el túnel: en
+        // cuanto pasó UNA respuesta, queda en OK para siempre. O sea que un túnel que
+        // anduvo y DESPUÉS se rompió —las consultas entran pero ninguna vuelve— no se
+        // reparaba solo nunca: para el usuario, "se trabó el internet" hasta apagar y
+        // prender. Esto mide lo mismo pero sobre los últimos WINDOW_MS: si en esa
+        // ventana entraron al menos WINDOW_MIN_QUERIES consultas y NO salió ninguna
+        // respuesta (ni siquiera una de bloqueo, que también cuenta), el camino de
+        // salida está roto AHORA.
+        //
+        // Solo se evalúa cuando tunnelHealth() ya dijo OK, o sea con la pantalla
+        // encendida y una red física VALIDADA por el sistema: si el equipo de verdad no
+        // tiene internet, la red no está validada y esto no dispara. Y el reinicio sigue
+        // teniendo el mismo enfriamiento de 5 minutos que el resto de la auto-reparación.
+        private const val WINDOW_MS = 120_000L
+        private const val WINDOW_MIN_QUERIES = 8L
+        @Volatile private var windowStartAtMs = 0L
+        @Volatile private var windowPacketsAtStart = 0L
+        @Volatile private var windowResponsesAtStart = 0L
+
+        private fun windowedUpstreamBroken(): Boolean {
+            val now = android.os.SystemClock.elapsedRealtime()
+            val inNow = tunnelPacketsIn.get()
+            val outNow = tunnelResponsesOut.get()
+            // Contadores que bajaron = túnel nuevo: la ventana arranca de cero.
+            if (windowStartAtMs == 0L || inNow < windowPacketsAtStart || outNow < windowResponsesAtStart) {
+                windowStartAtMs = now
+                windowPacketsAtStart = inNow
+                windowResponsesAtStart = outNow
+                return false
+            }
+            if (now - windowStartAtMs < WINDOW_MS) return false
+            val entraron = inNow - windowPacketsAtStart
+            val salieron = outNow - windowResponsesAtStart
+            windowStartAtMs = now
+            windowPacketsAtStart = inNow
+            windowResponsesAtStart = outNow
+            return entraron >= WINDOW_MIN_QUERIES && salieron == 0L
+        }
+
         @JvmStatic
         fun healIfBroken(context: android.content.Context) {
-            val health = tunnelHealth(context)
+            var health = tunnelHealth(context)
+            if (health == HEALTH_OK && windowedUpstreamBroken()) {
+                health = HEALTH_NO_UPSTREAM
+            }
             if (health != HEALTH_NO_CAPTURE && health != HEALTH_NO_UPSTREAM) return
 
             val now = android.os.SystemClock.elapsedRealtime()
@@ -325,6 +369,9 @@ class KosherVpnService : VpnService() {
      * un par de segundos sin poder resolver dominios.
      */
     @Volatile private var lastNetworkHandle: Long = 0L
+
+    /** ¿Ya llegó el primer onAvailable desde que se registró el callback? */
+    @Volatile private var firstDefaultNetworkSeen = false
 
     /**
      * Instancias caras que antes se construían en CADA consulta DNS. `PolicyManager`
@@ -715,8 +762,14 @@ class KosherVpnService : VpnService() {
 
     private fun handleDnsQuery(packet: IpPacketParser.ParsedPacket, output: FileOutputStream) {
         val queriedDomain = DnsPacketParser.extractQueriedDomain(packet.payload)?.lowercase()?.trimEnd('.')
-        if (queriedDomain == null) {
-            NetworkForwarder.forwardDnsQuery(packet, output, this)
+        if (queriedDomain.isNullOrEmpty()) {
+            // 22/9/2026 — era el ÚNICO camino del filtro que fallaba ABIERTO (B.10): una
+            // consulta cuyo nombre no se podía leer se reenviaba sin filtrar. El
+            // resolutor del sistema nunca arma consultas así (sin nombre, con un
+            // puntero de compresión en la pregunta, o truncadas); solo una app que
+            // arma el paquete a mano para esquivar el filtro. Se contesta como
+            // bloqueada, que es instantáneo y no deja a nadie esperando un timeout.
+            NetworkForwarder.sendBlockedDnsResponse(packet, output)
             return
         }
 
@@ -1193,6 +1246,18 @@ class KosherVpnService : VpnService() {
                     }
                     if (handle != 0L && handle == lastNetworkHandle) {
                         if (VERBOSE) android.util.Log.i("KosherVPN", "onAvailable de la misma red; no se reestablece el tunel.")
+                        return
+                    }
+                    // 22/9/2026 — el PRIMER aviso después de registrar el callback no es un
+                    // cambio de red: Android lo manda siempre, con la red por defecto de ese
+                    // momento, que es la misma sobre la que el túnel se está levantando (o
+                    // ya se levantó). Antes, si llegaba con el túnel ya arriba —pasa en
+                    // equipos lentos—, disparaba un reestablecimiento en CADA arranque del
+                    // servicio: 2-3 s con el túnel abajo, o sea DNS sin filtrar, más el
+                    // riesgo de la carrera de tablas de rutas de B.49. Se anota y listo.
+                    if (!firstDefaultNetworkSeen) {
+                        firstDefaultNetworkSeen = true
+                        lastNetworkHandle = handle
                         return
                     }
                     android.util.Log.i("KosherVPN", "Cambio la red fisica por defecto; reestableciendo tunel VPN.")

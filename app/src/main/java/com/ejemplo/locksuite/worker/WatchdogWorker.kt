@@ -84,6 +84,16 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             e.printStackTrace()
         }
 
+        // 22/9/2026 — Instalación "en curso" que quedó colgada (reinicio en el medio de
+        // una actualización: las alarmas de cierre no sobreviven). Va ANTES de re-aplicar,
+        // así esa misma vuelta ya vuelve a poner el bloqueo de instalación. Ver
+        // UpdateFlowManager.healStaleInstall().
+        try {
+            com.ejemplo.locksuite.util.UpdateFlowManager.healStaleInstall(applicationContext, "WatchdogWorker")
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Re-aplicar todas las restricciones MDM guardadas.
         // Envuelto en try/catch: antes, una excepción acá (p.ej. un fallo transitorio
         // de Binder con DevicePolicyManager) abortaba el resto de doWork() sin
@@ -143,6 +153,31 @@ class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(contex
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+            // 22/9/2026 — RELEER LA CONFIGURACIÓN DE APPS, ~1 VEZ POR HORA.
+            //
+            // La lista blanca/negra (catálogo global + la ficha de ESTE equipo) solo se
+            // leía cuando llegaba un FCM `SYNC_WHITELIST`. Si ese mensaje se perdía, el
+            // equipo se quedaba con la configuración vieja PARA SIEMPRE, y el panel
+            // mostrando la nueva. Es estado, no un comando: releerlo es idempotente
+            // (reemplaza los mapas enteros y reconcilia solo lo que difiere), así que
+            // hacerlo una vez por hora cierra ese hueco sin costo visible.
+            try {
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.pullWhitelistConfig(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        // 22/9/2026 — BUZÓN DE COMANDOS, en TODAS las vueltas.
+        //
+        // Si un comando del panel no llegó por FCM (equipo apagado más de un día, FCM que
+        // descartó mensajes, token viejo), acá se aplica igual: la Function deja una copia
+        // firmada en `devices/<id>/pendingCommands`. Con el buzón vacío —el caso normal—
+        // es una lectura chica. Ver util/CommandMailbox.kt.
+        try {
+            com.ejemplo.locksuite.util.CommandMailbox.drainNow(applicationContext, "WatchdogWorker")
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
         // Auditoría de la lista blanca (8/9/2026). Va en TODAS las vueltas, no una de

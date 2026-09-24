@@ -12,7 +12,11 @@ class UninstallReceiver : BroadcastReceiver() {
         if (status == PackageInstaller.STATUS_SUCCESS) {
             Toast.makeText(context, "Aplicación desinstalada con éxito", Toast.LENGTH_SHORT).show()
             // Enviar broadcast local para refrescar el Dashboard de inmediato (H17)
+            // setPackage: en Android 14 (targetSdk 34) un broadcast implícito no le llega a
+            // un receptor registrado con RECEIVER_NOT_EXPORTED (el del Dashboard). Dirigido
+            // a la propia app llega siempre, y ninguna otra app lo ve.
             val refreshIntent = Intent("com.ejemplo.locksuite.ACTION_APP_UNINSTALLED")
+                .setPackage(context.packageName)
             context.sendBroadcast(refreshIntent)
         } else {
             val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "Fallo al desinstalar la aplicación"

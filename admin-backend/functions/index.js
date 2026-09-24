@@ -193,6 +193,52 @@ function canonicalCommandPayload(payload) {
     .join("\n");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BUZÓN DE COMANDOS (22/9/2026) — ver app/util/CommandMailbox.kt
+//
+// Además del FCM, cada comando firmado queda en devices/<id>/pendingCommands/<commandId>.
+// El celular lo drena solo (Worker de 15 min, arranque, onDeletedMessages), así que un
+// comando que FCM perdió —equipo apagado más de un día, token viejo, Play Services
+// restringido, más de 100 mensajes en cola— se aplica igual cuando el equipo vuelve.
+//
+// "Familia": dos comandos que pisan la MISMA política (BLOCK_WIFI / UNBLOCK_WIFI,
+// HIDE_APP x / UNHIDE_APP x) comparten familia, y al encolar el nuevo se borra el
+// viejo. Así el buzón nunca crece más que la cantidad de políticas distintas, y un
+// "bloquear y después desbloquear" con el equipo apagado termina desbloqueado.
+// ─────────────────────────────────────────────────────────────────────────────
+function commandFamily(command, packages) {
+  const reglas = [
+    [/^UNBLOCK_/, "BLOCK_"],
+    [/^UNSUSPEND_/, "SUSPEND_"],
+    [/^UNHIDE_/, "HIDE_"],
+    [/^UNPROTECT_/, "PROTECT_"],
+    [/^(ENABLE|DISABLE)_/, "TOGGLE_"],
+    [/^RESUME_LOCKSUITE$/, "SUSPEND_LOCKSUITE"],
+    [/^CANCEL_UPDATE_APP$/, "UPDATE_APP"],
+    [/^SET_IMAGE_BLOCK_.*$/, "SET_IMAGE_BLOCK"],
+    [/^SET_GOOGLE_ACCOUNT_MODE_.*$/, "SET_GOOGLE_ACCOUNT_MODE"],
+    [/^SET_WHITELIST_(SIMULATION|ENFORCE)$/, "SET_WHITELIST_SIM"],
+    [/^(SET_DOMAIN_RULE_.*|REMOVE_DOMAIN_RULE)$/, "DOMAIN_RULE"],
+    [/^APPLY_(PRESET_PROFILE|MASTER_PROFILE|PROFILE)$/, "APPLY_ANY_PROFILE"],
+  ];
+  let fam = String(command);
+  for (const [re, rep] of reglas) {
+    if (re.test(fam)) { fam = fam.replace(re, rep); break; }
+  }
+  const pk = packages ? String(packages) : "";
+  // Las claves de RTDB no admiten . # $ [ ] /
+  return (pk ? fam + "|" + pk : fam).replace(/[.#$\[\]\/]/g, "_");
+}
+
+// Comandos de ACCIÓN (no de estado): tarde no sirven, vencen en un día. El resto son
+// estado deseado y se aplican aunque el equipo vuelva a las semanas.
+const ACTION_COMMANDS = new Set([
+  "LOCK_DEVICE", "UPDATE_APP", "CANCEL_UPDATE_APP", "UPDATE_LOCKSUITE",
+  "SYNC_WHITELIST", "SYNC_APP_REQUESTS", "CLEAR_WHITELIST_AUDIT", "CLEAR_IAB_AUDIT",
+]);
+const MAILBOX_TTL_ACTION_MS = 24 * 60 * 60 * 1000;
+const MAILBOX_TTL_STATE_MS = 30 * 24 * 60 * 60 * 1000;
+
 // Helper para verificar admin por UID (fuente de verdad alineada con database.rules.json)
 async function checkAdminByUid(uid) {
   if (!uid) throw { status: 403, message: "Acceso denegado: UID inválido." };
@@ -483,11 +529,70 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
         .digest("base64");
     }
 
-    await admin.messaging().send({
-      token,
-      data: payload,
-      android: { priority: "high" },
-    });
+    // 22/9/2026 — el ack "sent" se escribe ANTES de mandar el FCM. Antes iba después, con
+    // set(): si el celular contestaba muy rápido, su "applied" llegaba primero y la
+    // Function lo PISABA con "sent", y el panel esperaba una confirmación que ya había
+    // llegado (timeout falso). Ahora el "sent" ya está cuando llega el "applied".
+    const ackData = { status: "sent", command, timestamp: admin.database.ServerValue.TIMESTAMP };
+    await deviceRef.child(`commandAcks/${commandId}`).set(ackData);
+
+    // Buzón: la copia firmada del comando, por si el FCM no llega (ver commandFamily()).
+    // Se encola ANTES del FCM por el mismo motivo que el ack: si el celular lo aplica
+    // al instante, su borrado de la copia tiene que encontrarla ya escrita. Sin
+    // commandSecret no hay firma, y el celular descartaría la copia: no se encola.
+    let queued = false;
+    if (hasCommandSecret) {
+      try {
+        const family = commandFamily(command, payload.packages);
+        const pendRef = deviceRef.child("pendingCommands");
+        const pendSnap = await pendRef.once("value");
+        const updates = {};
+        // "Cancelar actualización" va SIN paquete (cancela la que esté en curso, sea
+        // cual sea), así que su familia es "UPDATE_APP" y no la "UPDATE_APP|<paquete>"
+        // del pedido que cancela. Sin esto, un equipo que vuelve después de ambos
+        // arrancaba la actualización y la cancelaba en el mismo segundo.
+        const cancelaActualizaciones = command === "CANCEL_UPDATE_APP" && !payload.packages;
+        pendSnap.forEach((c) => {
+          const v = c.val() || {};
+          if (v.family === family) updates[c.key] = null;   // el nuevo reemplaza al viejo
+          else if (cancelaActualizaciones && typeof v.family === "string" &&
+                   v.family.startsWith("UPDATE_APP|")) updates[c.key] = null;
+        });
+        const ahora = Date.now();
+        updates[commandId] = {
+          data: payload,
+          family,
+          queuedAt: ahora,
+          expiresAt: ahora + (ACTION_COMMANDS.has(command) ? MAILBOX_TTL_ACTION_MS : MAILBOX_TTL_STATE_MS),
+        };
+        await pendRef.update(updates);
+        queued = true;
+      } catch (e) {
+        console.warn("No se pudo encolar el comando en el buzón:", e && e.message);
+      }
+    }
+
+    try {
+      await admin.messaging().send({
+        token,
+        data: payload,
+        android: { priority: "high" },
+      });
+    } catch (e) {
+      // Token viejo o inválido: con el buzón el comando igual llega (hasta 15 min). Se
+      // informa al panel en vez de tirar un 500 que parece que no pasó nada.
+      const code = (e && (e.code || e.errorInfo && e.errorInfo.code)) || "";
+      if (queued) {
+        await deviceRef.child(`commandAcks/${commandId}`).update({ status: "queued", reason: "FCM falló (" + code + "): quedó en el buzón del equipo" }).catch(() => {});
+        await admin.database().ref(`commandLog/${deviceId}`).push({
+          command, commandId, packages: payload.packages || null,
+          sentBy: adminUid, sentAt: admin.database.ServerValue.TIMESTAMP, fcmError: String(code),
+        }).catch(() => {});
+        res.json({ success: true, commandId, queued: true, fcmError: String(code) });
+        return;
+      }
+      throw e;
+    }
 
     await admin.database().ref(`commandLog/${deviceId}`).push({
       command, commandId,
@@ -495,11 +600,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       sentBy: adminUid, sentAt: admin.database.ServerValue.TIMESTAMP,
     });
 
-    const ackData = { status: "sent", command, timestamp: admin.database.ServerValue.TIMESTAMP };
-    await deviceRef.child(`commandAcks/${commandId}`).set(ackData);
-    await deviceRef.child(`info/commandAcks/${commandId}`).set(ackData).catch(() => {});
-
-    res.json({ success: true, commandId });
+    res.json({ success: true, commandId, queued });
   } catch (e) {
     console.error("sendCommandV3 error:", e);
     const status = e.status || 500;
@@ -553,7 +654,7 @@ exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: 
         res.status(400).json({ error: "Falta el parámetro routeId." });
         return;
       }
-      const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/stops-for-route.action?id=${routeId}`;
+      const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/stops-for-route.action?id=${encodeURIComponent(routeId)}`;
       const response = await fetch(url);
       if (!response.ok) throw new Error("Error consultando el servidor de paradas.");
       const html = await response.text();
@@ -577,7 +678,7 @@ exports.colectivosApi = onRequest({ region: "us-central1", cors: true, invoker: 
         res.status(400).json({ error: "Falta el parámetro stopId." });
         return;
       }
-      const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/stop.action?id=${stopId}`;
+      const url = `https://cuandosubo.sube.gob.ar/onebusaway-webapp/where/iphone/stop.action?id=${encodeURIComponent(stopId)}`;
       const response = await fetch(url);
       if (!response.ok) throw new Error("Error consultando el servidor de arribos.");
       const html = await response.text();

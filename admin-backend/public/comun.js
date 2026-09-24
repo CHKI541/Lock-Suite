@@ -162,21 +162,30 @@
 
       return await new Promise((resolve) => {
         const ref = LS.db.ref("devices/" + deviceId + "/commandAcks/" + data.commandId);
+        let ultimo = "";
         const t = setTimeout(() => {
           ref.off();
           resolve({
             ok: false,
             status: "timeout",
-            // El texto nombra las tres causas reales, como pide B.42: un equipo
-            // que no contesta está dormido, sin red, o con el canal de comandos
-            // desincronizado (B.26), y esa última se arregla con "Re-vincular".
+            // El texto nombra las causas reales, como pide B.42. Desde el 22/9 además
+            // dice que el comando NO se perdió: quedó en el buzón del equipo
+            // (devices/<id>/pendingCommands) y se aplica solo cuando vuelva a tener red.
             reason: "El celular no confirmó en " + Math.round(timeoutMs / 1000) +
-              " s. Puede estar dormido, sin red, o con el canal de comandos desincronizado (probá \"Re-vincular\")."
+              " s (dormido o sin red). El comando quedó en cola y se aplica solo cuando el equipo se conecte (hasta 15 min)." +
+              (ultimo === "queued" ? " FCM no lo pudo entregar ahora." : "") +
+              " Si nunca se aplica, revisá el canal de comandos (\"Re-vincular\")."
           });
         }, timeoutMs);
         ref.on("value", (snap) => {
           if (!snap.exists()) return;
           const v = snap.val() || {};
+          // ⚠️ 22/9/2026 — "sent" y "queued" NO son un desenlace: los escribe la Cloud
+          // Function ANTES de responder, así que casi siempre son lo PRIMERO que se ve.
+          // Hasta hoy este listener resolvía con el primer valor, o sea que la ficha
+          // mostraba "No se pudo: sent" y revertía el interruptor en casi TODOS los
+          // comandos, aunque el celular los aplicara un segundo después.
+          if (v.status === "sent" || v.status === "queued") { ultimo = v.status; return; }
           clearTimeout(t);
           ref.off();
           if (v.status === "applied") resolve({ ok: true, status: "applied", reason: "" });

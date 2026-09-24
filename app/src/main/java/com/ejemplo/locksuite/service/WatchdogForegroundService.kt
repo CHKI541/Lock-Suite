@@ -298,9 +298,16 @@ class WatchdogForegroundService : Service() {
                 }
             }
 
-            // Sincronizar periódicamente cada 90 segundos para mantener el estado "En línea" en la web sin abrir la app
+            // Latido para el estado "En línea" del panel.
+            //
+            // 22/9/2026 (batería): cada 3 min en vez de 90 s. El SDK de Realtime Database
+            // cierra la conexión tras ~60 s sin actividad, así que cada latido es una
+            // reconexión TLS completa con la radio encendida. El panel llama "en línea"
+            // a menos de 5 min (ficha) y de 20 min (lista), así que 3 min alcanza con
+            // margen, y la mitad de reconexiones. Un comando del panel igual despierta al
+            // equipo y lo marca en línea en el acto (CommandProcessor).
             val now = android.os.SystemClock.elapsedRealtime()
-            if (now - lastSyncTime > 90000) {
+            if (now - lastSyncTime > 180_000L) {
                 lastSyncTime = now
                 try {
                     com.ejemplo.locksuite.util.FirebaseDeviceSync.syncLastSeenOnly(applicationContext)

@@ -146,6 +146,7 @@ class LockSuiteApplication : Application() {
      * hizo su trabajo.
      */
     private var unlockReceiver: BroadcastReceiver? = null
+    private var packageReceiverRegistered = false
 
     override fun onCreate() {
         super.onCreate()
@@ -299,11 +300,71 @@ class LockSuiteApplication : Application() {
             e.printStackTrace()
         }
 
-        // 5. Sincronizar información completa del dispositivo de forma proactiva
+        // 5. Sincronizar información completa del dispositivo de forma proactiva.
+        //    22/9/2026: por la vía coalescida y fuera del hilo principal. Antes corría
+        //    acá mismo, en el hilo principal, en CADA arranque del proceso (incluido el
+        //    que dispara un FCM con el equipo dormido): enumerar todas las apps y armar
+        //    ~80 campos en un CAT S22 Flip es tiempo de pantalla trabada al arrancar.
         try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(this)
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(this)
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+
+        // 6. Receptor de instalaciones REGISTRADO EN TIEMPO DE EJECUCIÓN (22/9/2026).
+        registerPackageReceiver()
+
+        // 7. Buzón de comandos: lo que el panel mandó mientras el proceso no estaba
+        //    (FCM perdido, equipo apagado). Ver util/CommandMailbox.kt.
+        try {
+            com.ejemplo.locksuite.util.CommandMailbox.drainAsync(this, "arranque del proceso")
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * ⚠️ 22/9/2026 — EL RECEPTOR DE INSTALACIONES NO RECIBÍA NADA DESDE ANDROID 8.
+     *
+     * `PackageReceiver` estaba declarado SOLO en el Manifest. Desde Android 8 (API 26),
+     * un receptor de Manifest de una app con targetSdk ≥ 26 **no recibe** los broadcasts
+     * implícitos `PACKAGE_ADDED` / `PACKAGE_REMOVED` / `PACKAGE_REPLACED` de otras apps
+     * (no están en la lista de excepciones). Toda la flota es Android 11, 13 y 16, así que
+     * en la práctica ese receptor estaba muerto, y con él:
+     *
+     *  • el "bloqueo programático" de instalación (con apps permitidas, se levanta
+     *    `DISALLOW_INSTALL_APPS` y se confía en este receptor para desinstalar lo no
+     *    autorizado) quedaba ABIERTO;
+     *  • un navegador recién instalado no se suspendía hasta el Worker (≤ 15 min);
+     *  • `launcher_packages_version` no cambiaba y la lista del launcher kosher quedaba
+     *    congelada (B.40 punto 10);
+     *  • el panel no se enteraba de una instalación hasta la sincronización horaria.
+     *
+     * Registrado acá vive lo que vive el proceso, que los servicios de primer plano
+     * mantienen arriba. En Android 7 NO se registra: ahí el del Manifest sí funciona, y
+     * registrarlo dos veces duplicaría cada evento.
+     */
+    private fun registerPackageReceiver() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (packageReceiverRegistered) return
+        try {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addDataScheme("package")
+            }
+            val receiver = com.ejemplo.locksuite.receiver.PackageReceiver()
+            // Son broadcasts protegidos del sistema: llegan igual con NOT_EXPORTED, y en
+            // Android 14 declarar la bandera evita la excepción de registro.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(receiver, filter)
+            }
+            packageReceiverRegistered = true
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "No se pudo registrar el receptor de instalaciones: ${e.message}")
         }
     }
 }

@@ -10,9 +10,43 @@ import com.ejemplo.locksuite.util.PrefsHelper
 import com.ejemplo.locksuite.util.UpdateFlowManager
 
 class PackageReceiver : BroadcastReceiver() {
+
+    companion object {
+        /**
+         * Paquete que la TIENDA ADMINISTRADA está instalando ahora (22/9/2026).
+         *
+         * `SelfUpdater.downloadAndInstallApk()` lo anota justo antes del commit. Sin esto,
+         * con la instalación bloqueada, el bloque de "instalación no autorizada" de acá
+         * abajo DESINSTALABA la app recién bajada de la Tienda: la Tienda instala paquetes
+         * que están en `globalSettings/allowedPackages`, no en la lista local
+         * `allowed_packages`, que es lo único que este receptor miraba.
+         */
+        const val KEY_STORE_INSTALL_PKG = "store_install_pkg"
+        const val KEY_STORE_INSTALL_AT = "store_install_at"
+        private const val STORE_INSTALL_WINDOW_MS = 15 * 60 * 1000L
+
+        /** Antirrebote: en algunos equipos el mismo evento llega dos veces seguidas. */
+        @Volatile private var lastEventKey: String = ""
+        @Volatile private var lastEventAt: Long = 0L
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
         Log.i("PackageReceiver", "Acción de paquete recibida: $action")
+
+        // Mismo evento repetido en menos de 2 s (receptor de Manifest + el registrado en
+        // tiempo de ejecución, o un fabricante que duplica el broadcast): se atiende una
+        // sola vez. Desinstalar dos veces, o sincronizar dos veces, no suma nada.
+        if (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REMOVED ||
+            action == Intent.ACTION_PACKAGE_REPLACED) {
+            val key = "$action|${intent.data?.schemeSpecificPart}|${intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)}"
+            val now = android.os.SystemClock.elapsedRealtime()
+            synchronized(PackageReceiver::class.java) {
+                if (key == lastEventKey && now - lastEventAt < 2_000L) return
+                lastEventKey = key
+                lastEventAt = now
+            }
+        }
         
         val prefs = PrefsHelper.getMdmPrefs(context)
 
@@ -46,7 +80,7 @@ class PackageReceiver : BroadcastReceiver() {
                 action == Intent.ACTION_PACKAGE_REMOVED ||
                 action == Intent.ACTION_PACKAGE_REPLACED) {
                 try {
-                    FirebaseDeviceSync.syncDeviceInfo(context)
+                    FirebaseDeviceSync.requestSync(context)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -88,8 +122,12 @@ class PackageReceiver : BroadcastReceiver() {
                 // updatingPkg también queda exento: si el paquete es justamente el
                 // que el administrador mandó actualizar, desinstalarlo acá sería
                 // deshacer la actualización que se acaba de pedir.
+                val storePkg = prefs.getString(KEY_STORE_INSTALL_PKG, null)
+                val storeAt = prefs.getLong(KEY_STORE_INSTALL_AT, 0L)
+                val storeInstalling = storePkg == packageName &&
+                    Math.abs(System.currentTimeMillis() - storeAt) < STORE_INSTALL_WINDOW_MS
                 val isAllowed = allowed.contains(packageName) || packageName == context.packageName ||
-                    packageName == updatingPkg ||
+                    packageName == updatingPkg || storeInstalling ||
                     appController.isCritical(packageName) || appController.isPartialBlockOnly(packageName)
                 if (!isAllowed) {
                     Log.w("PackageReceiver", "🚫 Intento de instalación no autorizado: $packageName. Desinstalando...")
@@ -158,7 +196,9 @@ class PackageReceiver : BroadcastReceiver() {
 
             try {
                 Log.i("PackageReceiver", "Sincronizando información de apps tras cambio en los paquetes.")
-                FirebaseDeviceSync.syncDeviceInfo(context)
+                // Coalescida: una actualización de Play Store o una restauración dispara
+                // decenas de eventos seguidos, y cada syncDeviceInfo enumera TODAS las apps.
+                FirebaseDeviceSync.requestSync(context)
             } catch (e: Exception) {
                 e.printStackTrace()
             }

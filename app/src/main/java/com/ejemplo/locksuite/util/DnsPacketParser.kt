@@ -22,9 +22,15 @@ object DnsPacketParser {
                     break // Fin del nombre de dominio (byte nulo)
                 }
                 
-                // Si es un puntero de compresión DNS (no debería ocurrir en la pregunta de consulta de origen, pero por seguridad)
-                if ((len and 0xC0) == 0xC0) {
-                    break
+                // Puntero de compresión DNS (o tipo de etiqueta reservado) en la PREGUNTA de
+                // una consulta. El resolutor del sistema nunca lo manda. 22/9/2026: antes
+                // se cortaba acá y se devolvía lo leído hasta el momento — un nombre
+                // PARCIAL ("youtube" en vez de "youtube.com") que no matchea ninguna regla
+                // y que el servidor de arriba igual resuelve completo. Era una forma de
+                // esquivar el filtro armando el paquete a mano. Ahora es "no parseable",
+                // y KosherVpnService contesta bloqueado.
+                if ((len and 0xC0) != 0) {
+                    return null
                 }
                 
                 pos++

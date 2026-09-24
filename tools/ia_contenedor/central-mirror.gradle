@@ -1,0 +1,12 @@
+// Solo contenedor de Claude: Maven Central devuelve 429 desde esta IP de salida.
+// Se usa el espejo oficial de Google Cloud Storage de Maven Central, primero en la lista.
+def MIRROR = "https://maven-central.storage-download.googleapis.com/maven2/"
+beforeSettings { s ->
+  s.pluginManagement.repositories.maven { url MIRROR; name "centralMirrorPlugins" }
+  s.dependencyResolutionManagement.repositories.maven { url MIRROR; name "centralMirrorDeps" }
+}
+settingsEvaluated { s ->
+  [s.pluginManagement.repositories, s.dependencyResolutionManagement.repositories].each { repos ->
+    repos.removeAll { it instanceof MavenArtifactRepository && it.url.toString().contains("repo.maven.apache.org") }
+  }
+}

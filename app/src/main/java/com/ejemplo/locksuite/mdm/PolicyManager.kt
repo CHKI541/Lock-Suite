@@ -1413,7 +1413,14 @@ class PolicyManager(private val context: Context) {
             UserManager.DISALLOW_CONFIG_DATE_TIME
         )
         for (r in allRestrictions) {
-            restrictionsObj.put(r, isRestrictionEnabled(r))
+            // DISALLOW_INSTALL_APPS se exporta desde el interruptor, que es la fuente de
+            // verdad (ver importPolicyPresetJson): en modo "programático" la preferencia
+            // `no_install_apps` queda en false aunque la instalación esté bloqueada, y el
+            // perfil exportado DESBLOQUEABA la instalación en el equipo de destino.
+            restrictionsObj.put(
+                r,
+                if (r == UserManager.DISALLOW_INSTALL_APPS) isInstallAppsBlocked() else isRestrictionEnabled(r)
+            )
         }
         // Las del registro declarativo se suman con su clave real de UserManager, igual que
         // el resto: la importación recorre las claves del objeto, así que no hace falta
@@ -1593,7 +1600,20 @@ class PolicyManager(private val context: Context) {
                 // normalizeRestrictionKey(): el panel venía escribiendo "no_apps_control",
                 // que NO es la constante de Android (es "no_control_apps"). Ese bloqueo
                 // simplemente no se aplicaba nunca al importar un perfil hecho en el panel.
-                setRestriction(normalizeRestrictionKey(key), enabled)
+                val restriccion = normalizeRestrictionKey(key)
+                if (restriccion == UserManager.DISALLOW_INSTALL_APPS) {
+                    // ⚠️ 22/9/2026 — "bloquear instalación" tenía DOS fuentes de verdad:
+                    // `install_apps_blocked_admin` (el interruptor y el comando) y la
+                    // preferencia `no_install_apps` (lo que escribe setRestriction). Un
+                    // perfil —Nivel 1/2, el alta por QR, un preset del panel— escribía solo
+                    // la segunda, y el siguiente reapplyAllRestrictions() (≤ 15 min) pasaba
+                    // por refreshInstallRestriction(), que lee solo la primera, y SACABA el
+                    // bloqueo. Además el panel mostraba el interruptor apagado. Ahora el
+                    // perfil entra por el mismo camino que el interruptor.
+                    setInstallAppsBlocked(enabled)
+                } else {
+                    setRestriction(restriccion, enabled)
+                }
             }
 
             setCameraDisabled(dataObj.optBoolean("cameraDisabled", false))
@@ -2258,8 +2278,27 @@ class PolicyManager(private val context: Context) {
         val todas = restrictions + PolicySpec.EXTRA_RESTRICTIONS.map { it.restriction }
 
         val isInstallInProgress = PrefsHelper.getMdmPrefs(context).getBoolean("mdm_install_in_progress", false)
+
+        // 22/9/2026 — migración de la doble fuente de verdad de "bloquear instalación"
+        // (ver importPolicyPresetJson): un equipo al que un perfil le dejó
+        // `no_install_apps = true` sin haber tocado nunca el interruptor, adopta ese
+        // bloqueo como del interruptor. Si no, refreshInstallRestriction() de abajo lo
+        // sacaría, que es justo el bug.
+        run {
+            val p = PrefsHelper.getMdmPrefs(context)
+            if (!p.contains("install_apps_blocked_admin") &&
+                p.getBoolean(UserManager.DISALLOW_INSTALL_APPS, false)
+            ) {
+                p.edit().putBoolean("install_apps_blocked_admin", true).apply()
+            }
+        }
+
         todas.forEach { restriction ->
-            if (isInstallInProgress && (restriction == UserManager.DISALLOW_INSTALL_APPS || restriction == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)) {
+            // La de instalación la decide refreshInstallRestriction() al final de esta
+            // función (nativa o "programática" según haya apps permitidas). Aplicarla acá
+            // también la ponía y la sacaba en la misma vuelta.
+            if (restriction == UserManager.DISALLOW_INSTALL_APPS) return@forEach
+            if (isInstallInProgress && restriction == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES) {
                 return@forEach
             }
             if (isRestrictionEnabled(restriction)) {

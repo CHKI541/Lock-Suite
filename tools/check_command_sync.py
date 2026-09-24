@@ -12,7 +12,8 @@ cuando falta en otro:
 
     manda:    admin-backend/public/app.js         runCommandOnDevice(id, "X", …)
     permite:  admin-backend/functions/index.js    ALLOWED_COMMANDS
-    ejecuta:  app/…/service/LockSuiteFirebaseService.kt   el `when (command)`
+    ejecuta:  app/…/service/CommandProcessor.kt           el `when (command)`
+              (hasta el 22/9/2026 vivía en LockSuiteFirebaseService.kt; se leen los dos)
               app/…/mdm/PolicySpec.kt             blockCommand / unblockCommand
 
 El celular tiene DOS caminos para ejecutar, y hay que mirar los dos o este chequeo
@@ -67,6 +68,10 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 KT = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
                   "locksuite", "service", "LockSuiteFirebaseService.kt")
+# 22/9/2026: el `when` se mudó a CommandProcessor.kt para que el buzón de comandos
+# (util/CommandMailbox.kt) aplique exactamente la misma lógica que FCM.
+KT_PROC = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
+                       "locksuite", "service", "CommandProcessor.kt")
 SPEC = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
                     "locksuite", "mdm", "PolicySpec.kt")
 FUNCS = os.path.join(RAIZ, "admin-backend", "functions", "index.js")
@@ -128,7 +133,7 @@ def comandos_del_panel(txt):
 
 
 def main():
-    kt = leer(KT)
+    kt = leer(KT_PROC) + "\n" + leer(KT)
     spec = leer(SPEC)
     funcs = leer(FUNCS)
     panel = leer(PANEL)
@@ -174,7 +179,7 @@ def main():
             "   ⚠️ Este es el modo de falla MUDO: el mensaje sale, llega, el `when` no\n"
             "   matchea, y el panel muestra el tilde verde igual. Es la forma exacta del\n"
             "   bug de `no_apps_control` (B.28) y del «✓ al silencio» de B.42.\n"
-            "   Agregá el caso en LockSuiteFirebaseService.kt, o sacá el comando de\n"
+            "   Agregá el caso en CommandProcessor.kt, o sacá el comando de\n"
             "   ALLOWED_COMMANDS, o anotalo en EXCEPCIONES_SIN_WHEN con su motivo.\n"
         )
 

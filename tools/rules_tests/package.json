@@ -1,0 +1,14 @@
+{
+  "name": "locksuite-rules-tests",
+  "private": true,
+  "description": "Pruebas de admin-backend/database.rules.json contra el emulador de Realtime Database",
+  "type": "module",
+  "scripts": {
+    "test": "firebase emulators:exec --only database --project demo-locksuite \"node test_rules.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.19.0",
+    "firebase-tools": "13.35.1"
+  }
+}

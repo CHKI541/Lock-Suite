@@ -3,16 +3,29 @@
     "devices": {
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
-        ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
-        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || !data.exists() || data.child('ownerUid').val() === auth.uid || newData.child('ownerUid').val() === auth.uid)"
+        ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || data.child('ownerUid').val() === auth.uid)",
+        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || (data.child('ownerUid').val() === auth.uid && newData.child('ownerUid').val() === auth.uid) || (!data.exists() && newData.child('ownerUid').val() === auth.uid))"
       }
     },
     "deviceSecrets": {
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
-        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || !data.exists() || data.child('ownerUid').val() === auth.uid || newData.child('ownerUid').val() === auth.uid || root.child('devices').child($device_id).child('ownerUid').val() === auth.uid)",
+        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || root.child('devices').child($device_id).child('ownerUid').val() === auth.uid || (!root.child('devices').child($device_id).exists() && (!data.exists() || data.child('ownerUid').val() === auth.uid) && newData.child('ownerUid').val() === auth.uid))",
         "commandSecret": {
           ".write": "auth != null && (!data.exists() || newData.val() === data.val() || auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())"
+        }
+      }
+    },
+    "deviceClaims": {
+      ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
+      "$device_id": {
+        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
+        "$uid": {
+          ".write": "auth != null && $uid === auth.uid && root.child('devices').child($device_id).exists()",
+          ".validate": "newData.hasChildren(['at']) && newData.child('at').isNumber() && (!newData.child('model').exists() || (newData.child('model').isString() && newData.child('model').val().length <= 120)) && (!newData.child('versionName').exists() || (newData.child('versionName').isString() && newData.child('versionName').val().length <= 40)) && (!newData.child('deviceName').exists() || (newData.child('deviceName').isString() && newData.child('deviceName').val().length <= 120))",
+          "$other": {
+            ".validate": "$other === 'at' || $other === 'model' || $other === 'versionName' || $other === 'deviceName'"
+          }
         }
       }
     },

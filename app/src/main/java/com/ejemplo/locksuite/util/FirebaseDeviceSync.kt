@@ -85,7 +85,89 @@ object FirebaseDeviceSync {
                 payload["ownerUid"] = authUid
                 payload["info/ownerUid"] = authUid
             }
-            ref.updateChildren(payload).addOnFailureListener { it.printStackTrace() }
+            ref.updateChildren(payload)
+                .addOnSuccessListener {
+                    // 22/9/2026: si este equipo había pedido re-vinculación y el latido
+                    // vuelve a pasar, es que un administrador lo aprobó. Se sincroniza YA
+                    // —eso publica el secreto de comandos nuevo— en vez de esperar la
+                    // vuelta horaria del Worker: sin secreto, la Function rechaza todo
+                    // comando (412) y el panel no podía mandarle nada durante hasta una hora.
+                    try {
+                        val p = PrefsHelper.getMdmPrefs(context)
+                        if (p.getLong("rebind_requested_at", 0L) > 0L) {
+                            p.edit().remove("rebind_requested_at").apply()
+                            requestSync(context)
+                        }
+                    } catch (ex: Exception) {
+                        ex.printStackTrace()
+                    }
+                }
+                .addOnFailureListener { e ->
+                    e.printStackTrace()
+                    // 22/9/2026: con las reglas nuevas, un equipo cuyo uid anónimo cambió
+                    // (reinstalar la app, borrar datos) ya NO puede escribir su nodo — antes
+                    // cualquiera podía, y eso era el agujero. Acá se detecta y se le pide al
+                    // panel que lo re-vincule. Ver requestRebind().
+                    if (isPermissionDenied(e)) requestRebind(context)
+                }
+        }
+    }
+
+    /** ¿La escritura la rechazaron las reglas de seguridad? */
+    private fun isPermissionDenied(e: Exception): Boolean {
+        val msg = (e.message ?: "") + " " + (e.cause?.message ?: "")
+        return msg.contains("permission", ignoreCase = true) &&
+            (msg.contains("denied", ignoreCase = true) || msg.contains("denegad", ignoreCase = true))
+    }
+
+    /**
+     * PEDIDO DE RE-VINCULACIÓN  (22/9/2026)
+     *
+     * Las reglas nuevas atan el nodo `devices/<id>` al uid anónimo que lo creó
+     * (`ownerUid`). Antes cualquier sesión anónima podía reescribir ese campo con su
+     * propio uid y adueñarse del nodo de CUALQUIER equipo —cambiarle el token de FCM,
+     * el PIN, el secreto de comandos—; ahora no. La contracara: si el propio equipo
+     * cambia de uid (reinstalar LockSuite o borrarle los datos), deja de poder escribir.
+     *
+     * Para eso existe `deviceClaims/<id>/<uid>`: lo único que un uid nuevo puede
+     * escribir es un pedido A SU NOMBRE para un equipo que ya existe. El panel lo
+     * muestra ("este celular se reinstaló y pide volver a vincularse") y un
+     * administrador lo aprueba de un toque, que pasa el `ownerUid` al uid nuevo y borra
+     * el secreto de comandos viejo para que el equipo publique el suyo.
+     *
+     * Se pide como mucho una vez cada 30 minutos: el latido falla cada pocos minutos
+     * mientras nadie apruebe, y no tiene sentido reescribir el mismo pedido cada vez.
+     */
+    fun requestRebind(context: Context) {
+        try {
+            val ctx = context.applicationContext
+            val prefs = PrefsHelper.getMdmPrefs(ctx)
+            val now = System.currentTimeMillis()
+            val last = prefs.getLong("rebind_requested_at", 0L)
+            if (last > 0L && now - last in 0..(30 * 60 * 1000L)) return
+            prefs.edit().putLong("rebind_requested_at", now).apply()
+            withAuth {
+                val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return@withAuth
+                val versionName = try {
+                    ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: ""
+                } catch (e: Exception) { "" }
+                val claim = mutableMapOf<String, Any>(
+                    "at" to ServerValue.TIMESTAMP,
+                    "model" to "${Build.MANUFACTURER} ${Build.MODEL}".take(120),
+                    "versionName" to versionName.take(40)
+                )
+                val localName = prefs.getString("device_name", "") ?: ""
+                if (localName.isNotBlank()) claim["deviceName"] = localName.take(120)
+                FirebaseDatabase.getInstance()
+                    .getReference("deviceClaims/${deviceId(ctx)}/$uid")
+                    .setValue(claim)
+                    .addOnSuccessListener {
+                        android.util.Log.w("FirebaseDeviceSync", "Equipo sin permiso sobre su nodo: pedido de re-vinculación enviado al panel.")
+                    }
+                    .addOnFailureListener { it.printStackTrace() }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -1352,6 +1434,57 @@ object FirebaseDeviceSync {
             android.util.Log.e("FirebaseDeviceSync", "pullAndApplyProfile falló: ${e.message}", e)
             false
         }
+    }
+
+    /** `withAuth` para otros archivos del paquete (el buzón de comandos). */
+    fun runAuthenticated(action: () -> Unit) = withAuth(action)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SINCRONIZACIÓN COALESCIDA  (22/9/2026)
+    //
+    // `syncDeviceInfo()` es la operación más cara del archivo: pide el token de FCM,
+    // arma ~80 campos (cada uno escrito dos veces, arriba y en `info/`), consulta
+    // `getUserRestrictions()` y enumera TODAS las apps del equipo para el mapa `apps`.
+    // Hasta hoy se llamaba entera después de CADA comando del panel, y la ficha nueva
+    // (celular.html) manda los cambios del carrito uno detrás de otro: 20 interruptores
+    // eran 20 sincronizaciones completas seguidas, en un CAT S22 Flip de 2 GB.
+    //
+    // `requestSync()` junta todos los pedidos que caen dentro de SYNC_COALESCE_MS en UNA
+    // sola sincronización, que lee el estado AL CORRER — así no se pierde ningún cambio:
+    // lo que pase después de que arranca, dispara la siguiente.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private const val SYNC_COALESCE_MS = 2_500L
+    private val syncPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val syncHandler: android.os.Handler by lazy {
+        val t = android.os.HandlerThread("LockSuiteSync")
+        t.start()
+        android.os.Handler(t.looper)
+    }
+
+    fun requestSync(context: Context) {
+        val ctx = context.applicationContext
+        if (!syncPending.compareAndSet(false, true)) return
+        syncHandler.postDelayed({
+            syncPending.set(false)
+            try {
+                syncDeviceInfo(ctx)
+            } catch (e: Exception) {
+                android.util.Log.w("FirebaseDeviceSync", "requestSync: ${e.message}")
+            }
+        }, SYNC_COALESCE_MS)
+    }
+
+    /** Relee la lista blanca y la política de apps del equipo, en un hilo propio. */
+    fun pullWhitelistConfigAsync(context: Context) {
+        val ctx = context.applicationContext
+        Thread({
+            try {
+                pullWhitelistConfig(ctx)
+            } catch (e: Exception) {
+                android.util.Log.w("FirebaseDeviceSync", "pullWhitelistConfigAsync: ${e.message}")
+            }
+        }, "LockSuiteWhitelistPull").start()
     }
 
     private fun writeFields(context: Context, fields: Map<String, Any>) {

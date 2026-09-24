@@ -63,9 +63,9 @@ CAPA 3 — VISUAL (service/LockSuiteAccessibilityService.kt)
 | `util/NetworkForwarder.kt`, `util/DnsPacketParser.kt`, `util/IpPacketParser.kt` | Parseo/reenvío de paquetes IP/UDP/DNS de bajo nivel. |
 | `util/AdBlocker.kt` | Blacklist de anuncios, HashSet O(1). |
 | `service/WatchdogForegroundService.kt` | Foreground, sondea cada **20s** (subido de 3s en v0.4.9.1 por batería — no bajar sin revisar ese historial). Reimpone DNS privado desactivado, `BootReceiver.ensureVpnRunning()`, chequea Accesibilidad, sincroniza a Firebase. |
-| `worker/WatchdogWorker.kt` | WorkManager, cada **15 min**, sobrevive a que muera el proceso. **Por eso mismo es la red de seguridad de último recurso**: desde el 21/8 también libera el proxy del arranque protegido si quedó clavado (ver B.20). Es el único mecanismo del proyecto que sigue funcionando con el servicio de primer plano caído — pensarlo así antes de agregarle o sacarle cosas. |
+| `worker/WatchdogWorker.kt` | WorkManager, cada **15 min**, sobrevive a que muera el proceso. **Por eso mismo es la red de seguridad de último recurso**: desde el 21/8 también libera el proxy del arranque protegido si quedó clavado (ver B.20). Es el único mecanismo del proyecto que sigue funcionando con el servicio de primer plano caído — pensarlo así antes de agregarle o sacarle cosas. **(22/9)** También drena el buzón de comandos (B.74), relee la lista blanca/negra una vez por hora (B.77) y cierra instalaciones que quedaron colgadas por un reinicio (B.81). |
 | `receiver/BootReceiver.kt` | Al bootear: reaplica restricciones, arranca Watchdog y VPN. Acá viven `shouldVpnBeRunning()` y `ensureVpnRunning()`. |
-| `receiver/PackageReceiver.kt` | Detecta fin real de instalación (`ACTION_PACKAGE_REPLACED`) durante auto-actualización de Play Store; timeout watchdog de 10 min. |
+| `receiver/PackageReceiver.kt` | Eventos de paquetes: fin real de una actualización de Play Store (`ACTION_PACKAGE_REPLACED`) y su timeout de 10 min, re-suspensión de lo que se instala o actualiza, bloqueo de instalaciones no autorizadas. **(22/9) En Android 8+ el sistema no le entrega esos eventos por el Manifest: lo registra `LockSuiteApplication` en tiempo de ejecución** (antes no corría en casi ningún equipo). Ver B.75. |
 | `service/LockSuiteAccessibilityService.kt` | Capa 3. Detección por texto/IDs de vista (incluye ídish). Automatiza clicks en el flujo de actualización de Play Store (`handlePlayStoreAutoUpdate`). |
 | `service/BlockOverlayManager.kt` | Dos cosas distintas en un archivo: (a) **la capa de tapado de imágenes** — desde el 17/8 es UNA sola ventana transparente a pantalla completa que pinta los recuadros en canvas, no N ventanas del WindowManager (ver B.17); (b) el overlay negro opaco que absorbe el 100% de los toques durante una actualización forzada de app, con título + estado en vivo + botón Cancelar. |
 | `util/AccessibilityEnforcer.kt` | **(18/8, NUEVO — sin compilar/probar)** Única fuente de verdad sobre "¿está funcionando la accesibilidad?" (vía `AccessibilityManager`, con antirrebote de 1,2 s) y reconciliador de la suspensión de emergencia: compara contra el estado real de cada app y corrige solo lo que difiere. Resuelve el vaivén de "se suspenden y vuelven a aparecer". Ver B.15. |
@@ -73,8 +73,10 @@ CAPA 3 — VISUAL (service/LockSuiteAccessibilityService.kt)
 | `LockSuiteApplication.kt` | Punto de entrada del proceso. **(21/8)** Reestructurado para sobrevivir al Arranque Directo: los objetos del motor DNS se construyen siempre, pero leer preferencias se difiere hasta `ACTION_USER_UNLOCKED`. Antes crasheaba antes del primer desbloqueo y se llevaba puesto el arranque entero. **Nada acá puede lanzar hacia afuera.** Ver B.20. |
 | `util/PlayUpdateSessionWatcher.kt` | **(16/8, CABLEADO — falta compilar/probar)** Progreso y finalización de la actualización leídos de `PackageInstaller.SessionCallback` — números, no texto: anda en cualquier idioma. Lo llama `UpdateFlowManager.start()/finish()`. Ver B.14. |
 | `util/PlayButtonFinder.kt` | **(16/8, CABLEADO — falta compilar/probar)** Encuentra el botón "Actualizar" de Play Store por ID de vista, por palabra completa en 10 idiomas y por posición; devuelve candidatos ordenados en vez de una adivinanza. Lo llama `scanAndAct()`. Ver B.14. |
-| `util/UpdateFlowManager.kt` | **(16/8)** Punto único de control del flujo "actualizar una app por Play Store con la pantalla tapada": arranque, etapas, cancelación y cierre. Todo arranque pasa por `start()` y toda salida por `finish()`. Nada más en el proyecto debe escribir `mdm_install_in_progress`. |
-| `service/LockSuiteFirebaseService.kt` | Recibe comandos FCM (BLOCK_VPN, UPDATE_APP, CHANGE_PIN, etc.), despacha, responde ACK. |
+| `util/UpdateFlowManager.kt` | **(16/8)** Punto único de control del flujo "actualizar una app por Play Store con la pantalla tapada": arranque, etapas, cancelación y cierre. Todo arranque pasa por `start()` y toda salida por `finish()`. Nada más en el proyecto debe escribir `mdm_install_in_progress`. (La otra que escribe esa marca es `SelfUpdater`, para la Tienda/OTA.) **(22/9)** `healStaleInstall()` cierra un flujo que quedó "en curso" tras un reinicio. Ver B.81. |
+| `service/LockSuiteFirebaseService.kt` | Solo la puerta de FCM (`onMessageReceived`, `onNewToken`, `onDeletedMessages`). **Desde el 22/9 la lógica de los comandos vive en `service/CommandProcessor.kt`.** |
+| `service/CommandProcessor.kt` | **(22/9, NUEVO)** Ejecuta UN comando del panel, venga por FCM o por el buzón: firma HMAC, registro de ids ya aplicados, el `when (command)` con todos los comandos y el ack. Los chequeos de `tools/` leen el `when` de acá. Ver B.74. |
+| `util/CommandMailbox.kt` | **(22/9, NUEVO)** Buzón de comandos (`devices/<id>/pendingCommands`): se drena al arrancar el proceso y en cada vuelta de `WatchdogWorker`. Ver B.74. |
 | `util/FirebaseDeviceSync.kt` | Sincroniza estado al panel (Firebase Auth anónima — ver Pendientes B.3, esto no es una identidad segura). |
 | `security/PinManager.kt`, `security/SessionManager.kt` | PIN de admin (comparación en tiempo constante), sesión activa. |
 | `security/KnoxHardening.kt` | Solo Samsung + licencia KPE Standard: bloquea Odin/Download Mode y reset de fábrica por hardware. No interrumpe nada en otros equipos. |
@@ -84,7 +86,7 @@ CAPA 3 — VISUAL (service/LockSuiteAccessibilityService.kt)
 
 ### Backend (`admin-backend/`)
 
-Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: **`looksuite-41866`**, cuenta dueña `imc112818@gmail.com`. `functions/index.js` (`sendCommandV8`, whitelist `ALLOWED_COMMANDS`), `database.rules.json`, `public/` (panel HTML/CSS/JS + instalador WebADB). Repo de código: **`github.com/CHKI541/Lock-Suite`, público** (ver Pendientes B.2 — es la recomendación de mayor impacto y menor esfuerzo de toda la lista).
+Firebase (Hosting + Cloud Functions v2 Node.js + Realtime Database). Proyecto: **`locksuite-nueva`** (verificado el 22/9 en `admin-backend/.firebaserc` y `public/firebase-config.js`; este documento decía `looksuite-41866`, que ya no es el que usa el repo). Cuenta dueña según los documentos anteriores: `imc112818@gmail.com` (sin verificar para el proyecto nuevo). `functions/index.js` (`sendCommandV8`, whitelist `ALLOWED_COMMANDS`), `database.rules.json`, `public/` (panel HTML/CSS/JS + instalador WebADB). Repo de código: **`github.com/CHKI541/Lock-Suite`, público** (ver Pendientes B.2 — es la recomendación de mayor impacto y menor esfuerzo de toda la lista).
 
 ### App de administración para celular (`admin-app/`)
 
@@ -167,7 +169,7 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 
 ### Limitaciones del entorno de IA en la nube (puente `mcp__remote-devices__*`)
 
-- No hay Android SDK, Gradle ni acceso a Firebase — ninguna sesión de IA que trabaje por este puente puede compilar, probar en equipo real ni desplegar. Todo cambio de código lo tenés que compilar y probar vos, o Antigravity con terminal real.
+- ~~No hay Android SDK, Gradle ni acceso a Firebase — ninguna sesión de IA que trabaje por este puente puede compilar, probar en equipo real ni desplegar.~~ **(22/9) Compilar, correr las pruebas unitarias, el lint y las pruebas de reglas SÍ se puede en el contenedor** (ver `tools/ia_contenedor/` y la nota del 22/9 más abajo). Lo que sigue sin poderse desde acá: probar en un equipo real (no hay ADB) y desplegar (no hay credenciales de Firebase). Eso lo hacés vos, o Antigravity con terminal real.
 - `device_stage_files` falla (HTTP 400) para archivos bajo `app/src/main/java/...` puntualmente (parece un problema de sincronización/placeholder de OneDrive ahí). Para leer/escribir código Kotlin real, usar `device_bash` con `cat`/`grep`/`nl` para leer, y un script Python vía heredoc para escribir con reemplazo de texto exacto verificando **una sola coincidencia** antes de escribir (cuidado con CRLF vs LF). Los cambios por `device_bash` quedan directo en el disco del usuario, sin paso de "commit" al puente.
 - La VM de `device_bash` a veces tarda bastante más de lo que dice "Workspace still starting" (se vio más de 3 minutos) — no conviene reintentar en loop.
 - **(21/8) `device_bash` puede directamente NO montar la carpeta** ("failed to mount", con `$HOME/mnt/` vacío). No se recupera reintentando. En ese caso el único camino es `device_stage_files` / `device_commit_files`.
@@ -195,6 +197,9 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - **(17/9) EL REPO DEL DUEÑO TIENE `core.autocrlf` PRENDIDO: git convierte solo a CRLF, así que pelearse con los finales de línea al escribir es trabajo perdido.** Medido: los cuatro `.kt` que esta sesión escribió en LF aparecieron después en el disco con **exactamente `tamaño + cantidad de líneas`** bytes (`Layer3Audit` 9.884→10.088 con 204 líneas, `MercadoPagoOffersPolicy` 15.682→15.991 con 309, `PhotoPickerPolicy` 12.404→12.627 con 223, `CaptivePortalPolicy` 12.118→12.316 con 198), con el contenido **idéntico** y solo el `mtime` cambiado. O sea que una operación de git en la PC los normalizó. **Consecuencias prácticas:** (a) escribir en LF o en CRLF da igual, git lo arregla; (b) por eso `git status` aparece sucio todo el tiempo y por eso B.10 pide un `.gitattributes` — ese es el arreglo de fondo; (c) ⚠️ **ese toque de git actualiza el `mtime` y hace que `device_commit_files` rechace la escritura por `expectedMtimeMs`**. Cuando eso pase, **no usar `force`**: re-stagear y comparar contra el último commit propio. Esta sesión lo hizo y los cinco archivos resultaron byte por byte iguales a lo que había dejado — o sea una falsa alarma, pero la única forma de saberlo es mirando.
 - **(16/9) Chromium está en `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`** — la ruta que figuraba antes (`/opt/pw-browsers/chromium`) es un enlace y la de `chromium-1148` ya no existe. Hay que pasarla con `executable_path=` y `args=["--no-sandbox"]`. Con eso la receta de renderizado de B.65 anda igual.
 - **Sí se puede type-checkear sin Gradle, y conviene hacerlo.** `kotlinc` 2.0.21 se baja de `github.com/JetBrains/kotlin/releases` (Maven Central da 404 para ese artefacto) y corre en el contenedor. Contra stubs mínimos de la API de Android + de las clases del proyecto que toque el archivo, agarra errores reales de tipos y de referencias. **Siempre con control negativo** (romper a propósito una referencia y confirmar que la detecta): sin eso, un "0 errores" puede ser simplemente que no compiló nada.
+- **(22/9) GRADLE COMPILA DE VERDAD EN EL CONTENEDOR — y corren las pruebas unitarias y el lint.** La receta quedó en el repo: `tools/ia_contenedor/` (README con los pasos). En corto: SDK en `/opt/android-sdk`; espejo de Maven Central en `~/.gradle/init.d/` (Central da 429 desde el contenedor); compilar en una COPIA del clon (el `gradle.properties` del repo fija `trustStoreType=WINDOWS-ROOT`, que en Linux rompe el wrapper; la copia además lleva un `google-services.json` y un keystore de mentira, nunca los reales); `bash ./gradlew`. Con eso ya no hace falta type-checkear Kotlin a mano con stubs. **Ojo con la memoria (8 GB):** los daemons de Gradle y de Kotlin se comen 5 GB; matarlos (`pkill -f "[G]radleDaemon"; pkill -f "[K]otlinCompileDaemon"`) antes de correr Node o el emulador de Firebase.
+- **(22/9) Las reglas de la base se prueban contra el emulador real:** `tools/rules_tests/` (`npm install && npm test`, necesita Java). Ver B.73. Antes de este día, lo que se decía de las reglas era razonado, no medido — y estaba mal en dos puntos graves.
+- **(22/9) DECIMOTERCERA vez que `device_bash` no monta**, esta vez con las tres carpetas conectadas (la raíz, `app\src\main\java` y `admin-app\src\main\java`). La receta de siempre funcionó: clonar, trabajar en el clon, validar tamaños contra `device_list_dir` (esta vez los 24 archivos a tocar coincidían byte por byte con `HEAD`, en LF o CRLF), y escribir con `device_commit_files` + `expectedMtimeMs`.
 
 ---
 
@@ -206,7 +211,7 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 
 **B.2 — Crítico, bajo esfuerzo: el repo de GitHub es público.** `github.com/CHKI541/Lock-Suite` se puede leer sin credenciales (`raw.githubusercontent.com/CHKI541/Lock-Suite/main/...`), incluyendo el código fuente completo, las reglas de Firebase y la clave HMAC de los presets. Quien quiera evadir el bloqueo no necesita decompilar nada. Recomendación: pasar el repo a privado y mover el APK + `version.json` a Firebase Hosting (que ya se usa y sirve archivos públicos sin publicar el código). Si se decide dejarlo público, entonces B.3 y B.5 pasan de "conveniente" a obligatorio.
 
-**B.3 — Aislamiento real de escritura por dispositivo en Firebase (abierto, a pesar de que un documento anterior lo daba por resuelto).** La regla actual de `devices/$device_id` exige `newData.child('ownerUid').val() === auth.uid` — pero `newData` es el dato que el propio cliente está escribiendo, así que cualquiera puede declararse dueño de cualquier nodo con solo incluir ese campo en su escritura. Un uid de sesión anónima no es una identidad estable de dispositivo, así que no alcanza como base de una regla de propiedad. Hace falta conocer el `deviceId` (el `ANDROID_ID` del equipo) para explotarlo — no se puede listar, pero en Android 7 es el mismo para todas las apps del celular, y el panel lo muestra en pantalla, así que no es un secreto fuerte. Con eso, alguien podría: escribir basura en `fcmToken` para sacar un equipo del control del panel para siempre, sobrescribir `pinHash`/`pinSalt` para inutilizar el PIN de un equipo ajeno, o escribir `trustedAdmins/{miUid}=true` para saltear el PIN por completo si además tiene una cuenta de admin. Relacionado y agravante: el panel ya escribe `trustedAdmins` directo desde el navegador (`app.js`, cerca de la línea 181) sin pasar por la Cloud Function, y las reglas se lo permiten — cualquier admin autorizado puede marcarse "de confianza" para cualquier equipo sin nunca ingresar su PIN; el PIN protege de externos, no de un operador del panel. Dos caminos para cerrarlo de raíz (elegir uno, detalle completo en `INSTRUCCIONES_ANTIGRAVITY_DE_CLAUDE.md` §2.2): (a) Custom Token por dispositivo vía Cloud Function — preferido; (b) mover todas las escrituras (incluida `trustedAdmins`) detrás de una Cloud Function con Admin SDK y dejar `.write: false` para clientes. Cualquiera de los dos necesita convivencia/migración para los equipos ya en producción sin `ownerUid` o con uno viejo.
+**B.3 — Aislamiento real de escritura por dispositivo en Firebase (abierto, a pesar de que un documento anterior lo daba por resuelto).** *(22/9: el agujero de escritura que describe este punto quedó **confirmado con el emulador real y cerrado EN CÓDIGO** por B.73 — falta desplegar y probar en equipo. Lo de fondo, que la identidad del equipo sea un uid anónimo, sigue abierto.)* La regla actual de `devices/$device_id` exige `newData.child('ownerUid').val() === auth.uid` — pero `newData` es el dato que el propio cliente está escribiendo, así que cualquiera puede declararse dueño de cualquier nodo con solo incluir ese campo en su escritura. Un uid de sesión anónima no es una identidad estable de dispositivo, así que no alcanza como base de una regla de propiedad. Hace falta conocer el `deviceId` (el `ANDROID_ID` del equipo) para explotarlo — no se puede listar, pero en Android 7 es el mismo para todas las apps del celular, y el panel lo muestra en pantalla, así que no es un secreto fuerte. Con eso, alguien podría: escribir basura en `fcmToken` para sacar un equipo del control del panel para siempre, sobrescribir `pinHash`/`pinSalt` para inutilizar el PIN de un equipo ajeno, o escribir `trustedAdmins/{miUid}=true` para saltear el PIN por completo si además tiene una cuenta de admin. Relacionado y agravante: el panel ya escribe `trustedAdmins` directo desde el navegador (`app.js`, cerca de la línea 181) sin pasar por la Cloud Function, y las reglas se lo permiten — cualquier admin autorizado puede marcarse "de confianza" para cualquier equipo sin nunca ingresar su PIN; el PIN protege de externos, no de un operador del panel. Dos caminos para cerrarlo de raíz (elegir uno, detalle completo en `INSTRUCCIONES_ANTIGRAVITY_DE_CLAUDE.md` §2.2): (a) Custom Token por dispositivo vía Cloud Function — preferido; (b) mover todas las escrituras (incluida `trustedAdmins`) detrás de una Cloud Function con Admin SDK y dejar `.write: false` para clientes. Cualquiera de los dos necesita convivencia/migración para los equipos ya en producción sin `ownerUid` o con uno viejo.
 
 **B.3-b — El hash del PIN usa SHA-256 (rápido), no una función lenta pensada para contraseñas.** El esquema actual (salt aleatorio por dispositivo + SHA-256 + comparación en tiempo constante + `EncryptedSharedPreferences`) es correcto contra alguien que solo puede probar PINs en la pantalla del celular. El riesgo es si el hash+salt se filtran algún día (por ejemplo, a través del hueco de B.3): SHA-256 es rápido a propósito, y un PIN de 4-16 dígitos tiene poca entropía, así que probar todas las combinaciones contra un hash filtrado es cuestión de milisegundos. Migrar a PBKDF2 (ya disponible en Android) o Argon2 lo evitaría, pero el hash se calcula en tres lugares que tienen que coincidir exactamente (`PinManager.kt` en la app, `hashPin` en `functions/index.js`, `hashPinLocal` en `app.js`) — cambiar el algoritmo implica los tres a la vez, más migrar los PINs ya existentes en producción. No es urgente mientras B.3 sea el problema más grande; sube de prioridad en cuanto B.3 se cierre.
 
@@ -1057,7 +1062,7 @@ Detalle completo, transcripción del reporte, orden de prueba y mensaje de commi
 
 ---
 
-**B.51 — `tunnelHealth()` mide "¿alguna vez funcionó?", no "¿está funcionando?". [ENCONTRADO LEYENDO EL CÓDIGO EL 8/9; SIN TOCAR]**
+**B.51 — `tunnelHealth()` mide "¿alguna vez funcionó?", no "¿está funcionando?". [ENCONTRADO LEYENDO EL CÓDIGO EL 8/9; SIN TOCAR]** *(22/9: la auto-reparación ya mira una ventana de 2 min además de los acumulados — ver B.79; sin probar en equipo.)*
 
 B.49 agregó la medición de salud del túnel y la describió como *"ahora se mide si está SIRVIENDO"*. Releyendo el archivo, no es lo que hace. `tunnelPacketsIn` y `tunnelResponsesOut` son **contadores acumulados desde que se estableció el túnel actual**, y la decisión es:
 
@@ -1324,7 +1329,7 @@ Textual: *"hay que fijarse también que aunque hagamos modo lista negra, las app
 
 **Falta probar en equipo real:** (1) con el modo lista blanca APAGADO y sin tocar nada, que `ofertas.mercadopago.com` y `translate.google.com` dejen de resolver y que **Mercado Pago siga pagando** — es la regresión que importa, probarla con una transferencia real; (2) que el equipo siga recibiendo comandos del panel (o sea que la infraestructura no se pisó); (3) sacar un bloqueo de fábrica desde el editor de dominios y confirmar que ese host vuelve a resolver; (4) que un `FORCE_ALLOW` de la sección DNS le gane a un dominio de esta lista.
 
-**B.63 — LA CONFIGURACIÓN DE APPS ERA GLOBAL Y NO POR EQUIPO, Y DESDE EL CELULAR SE DESHACÍA SOLA. [ESCRITO Y TYPE-CHECKEADO EL 10/9 (noche); SIN COMPILAR NI PROBAR EN EQUIPO]**
+**B.63 — LA CONFIGURACIÓN DE APPS ERA GLOBAL Y NO POR EQUIPO, Y DESDE EL CELULAR SE DESHACÍA SOLA. [ESCRITO Y TYPE-CHECKEADO EL 10/9 (noche); SIN COMPILAR NI PROBAR EN EQUIPO]** *(22/9: **con las reglas del repo no funcionaba en ningún equipo**: no dejaban que el celular leyera su propia `appPolicy`. Medido con el emulador y arreglado en B.73. Si las reglas publicadas en la consola eran otras, eso lo dice la comparación que piden las instrucciones del 22/9.)*
 
 B.53 dejó anotado como pendiente: *"el catálogo se aplica igual a todos los equipos; si algún día hace falta una app permitida en un celular y no en otro, el lugar natural es un `devices/<id>/whitelistOverrides` que se lea después del global"*. Ese día llegó, porque **sin overrides no se puede tener una ficha por celular**: todo lo que el administrador tocara en la ficha de UN equipo se lo aplicaba a la flota entera, que es la sorpresa más cara que puede dar un panel de MDM.
 
@@ -1587,75 +1592,180 @@ Además se encontraron dos fuentes de sobrebloqueo adicionales:
 
 **El marketplace sigue cerrado:** `listado.mercadolibre.com*` (búsquedas y catálogos), `click1.*` (redirecciones) y `snoopy.*` (telemetría) siguen bloqueados por DNS, y la navegación de compras queda cubierta estructuralmente por la Capa 3 (`MercadoPagoOffersPolicy`).
 
+**B.73 — REGLAS DE LA BASE: EL CELULAR NO PODÍA LEER SU PROPIA CONFIGURACIÓN, Y CUALQUIER SESIÓN ANÓNIMA PODÍA ADUEÑARSE DE UN EQUIPO AJENO. [ESCRITO Y PROBADO CONTRA EL EMULADOR REAL EL 22/9 — 44/44 en verde, 17 en rojo con las reglas viejas; SIN DESPLEGAR NI PROBAR EN EQUIPO]**
+
+Medido con el emulador real de Realtime Database (`firebase-tools` 13 + emulador 4.11.2), no razonado:
+
+- **`devices/$id/.read` era solo para admins.** El celular NO podía leer su propio nodo: ni `appPolicy` (con estas reglas, la ficha por equipo de B.63 no funcionaba en ningún celular: el equipo recibía el `SYNC_WHITELIST`, intentaba leer, le negaban y seguía con la configuración vieja), ni `deviceName` (B.27), ni `appRequests` (B.59), ni `allowedPackages` (Tienda).
+- **La escritura dejaba pasar a cualquiera:** `... || !data.exists() || ... || newData.child('ownerUid').val() === auth.uid`. Como `newData` es lo que escribe el propio cliente, cualquier sesión anónima que conociera un `deviceId` podía reescribir el nodo entero (el `fcmToken` para sacarlo del panel para siempre, el `pinHash`, el `commandSecret`). Es exactamente el hueco de B.3, ahora confirmado con evidencia.
+
+Reglas nuevas (`admin-backend/database.rules.json`):
+
+- `devices/$id`: lectura para admins **y para el dueño** (`ownerUid === auth.uid`). Escritura para admins; para el dueño solo si el `ownerUid` sigue siendo el suyo; y alta solo de un nodo que no existe, a su nombre.
+- `deviceSecrets/$id`: escritura atada al `ownerUid` de `devices/$id` (o alta a su nombre si el equipo todavía no existe). Lectura: solo admins, como antes.
+- **Nodo nuevo `deviceClaims/$id/$uid`**: lo único que puede escribir un uid nuevo. Solo a su nombre, solo para un equipo que existe, con 4 campos cortos y validados (`at`, `model`, `versionName`, `deviceName`). Lo leen solo los admins.
+
+**La contracara, y por qué hay un flujo nuevo:** si un celular cambia de uid anónimo (reinstalar LockSuite, borrarle los datos), ya no puede escribir su nodo. La app lo detecta (el latido vuelve con PERMISSION_DENIED) y escribe un pedido en `deviceClaims` como mucho cada 30 min (`FirebaseDeviceSync.requestRebind()`). El panel muestra arriba un cartel **"Este celular pide re-vincularse"** con **Aprobar** (pasa `ownerUid` al uid nuevo en `devices/` y `deviceSecrets/`, borra el `commandSecret` viejo para que el equipo publique el suyo, borra el pedido) y **Descartar**. En cuanto el latido del equipo vuelve a pasar (≤ 3 min), la app sincroniza en el acto y publica su secreto nuevo; hasta ese momento la Function contesta 412 a los comandos para ese equipo, que es lo esperable.
+
+Pruebas: `tools/rules_tests/` (`npm install && npm test`, ver su README). **Cualquier cambio futuro a las reglas pasa por ahí antes de desplegar.**
+
+Queda abierto, a propósito:
+- La regla hija de `commandSecret` todavía deja que CUALQUIER sesión cree el secreto cuando no existe (por ejemplo, justo después de "Re-vincular canal"). Peor caso: un rato de comandos rechazados, hasta que el equipo —que es el dueño— lo reescribe en su próxima sincronización. No se cerró para no arriesgar el alta de equipos nuevos sin poder probarla en uno real.
+- B.3 de fondo sigue: la identidad del equipo es un uid anónimo. Ahora está atado y probado, pero un Custom Token por equipo sería más fuerte.
+- Cualquier admin ve y controla todos los equipos: ver B.85.1.
+
+**Cómo probar en equipo:** (1) después de desplegar, el panel tiene que seguir viendo todos los equipos "en línea" y los comandos tienen que llegar como siempre; (2) en un celular de prueba, cambiar la ficha de apps (permitir/prohibir una app SOLO en ese equipo) y confirmar que se aplica — antes no se aplicaba nunca; (3) borrar los datos de LockSuite en un celular de prueba (o reinstalarla), esperar unos minutos, y ver en el panel el cartel de re-vinculación; aprobar y confirmar que el equipo vuelve a quedar en línea y recibe comandos.
+
+**B.74 — BUZÓN DE COMANDOS: EL PANEL MANDA AUNQUE EL FCM NO LLEGUE. [ESCRITO, COMPILADO Y CON PRUEBAS UNITARIAS EL 22/9; SIN DESPLEGAR NI PROBAR EN EQUIPO]**
+
+Hasta hoy un comando del panel viajaba SOLO por FCM. Si se perdía (equipo apagado más de un día → rechazado por la ventana de 24 h; FCM que reordena → rechazado por el piso monotónico; más de 100 mensajes pendientes → FCM los descarta; token viejo; Play Services restringido), se perdía para siempre y el panel mostraba un estado que el celular no tenía.
+
+- **Cloud Function (`sendCommandV8`)**: además del FCM, deja una copia FIRMADA en `devices/<id>/pendingCommands/<commandId>` con `family`, `queuedAt` y `expiresAt`. Un comando nuevo **reemplaza** al anterior de su familia (`BLOCK_X`/`UNBLOCK_X`, `ENABLE_X`/`DISABLE_X`, perfiles, reglas DNS, `UPDATE_APP`/`CANCEL_UPDATE_APP`), así que el buzón nunca crece ni aplica cosas viejas en desorden. Vencimiento: **24 h** los de acción (`LOCK_DEVICE`, `UPDATE_APP`, `UPDATE_LOCKSUITE`, `SYNC_*`, `CLEAR_*`), **30 días** los de estado. El ack `sent` se escribe ANTES del FCM (antes podía llegar el `applied` antes que el `sent`). Si el FCM falla pero el comando quedó encolado, la Function contesta 200 con `queued: true` y el ack queda en `queued` en vez de un error 500.
+- **App**: la lógica de comandos salió de `LockSuiteFirebaseService` a **`service/CommandProcessor.kt`**, que usan las dos vías con la MISMA verificación de firma y el MISMO registro de ids ya aplicados (35 días / 600 ids): un comando nunca se aplica dos veces aunque llegue por las dos. **`util/CommandMailbox.kt`** drena el buzón al arrancar el proceso y en cada vuelta de `WatchdogWorker` (15 min); aplica en el orden en que el panel los mandó, descarta lo vencido (solo si el reloj del equipo es creíble), lo que no tiene firma y lo que ya llegó por FCM. La ventana de 24 h y el piso monotónico rigen solo para FCM; el buzón se protege con la firma, el vencimiento y el registro de ids.
+- **Panel**: `comun.js` y `app.js` ignoran los acks `sent`/`queued` al esperar el resultado, y si se vence la espera dicen que el comando **quedó en cola y se aplica cuando el equipo se conecte**, en vez de "falló". **Bug que había de antes y se arregla con esto:** la ficha del celular (`celular.html`) se quedaba con el PRIMER ack que veía, que casi siempre es `sent` (lo escribe la Function antes de contestar): mostraba "No se pudo: sent" y **revertía el interruptor en casi todos los comandos**, aunque el celular los aplicara un segundo después.
+- Costo: con el buzón vacío (el caso normal), una lectura chica cada 15 min por equipo.
+
+**Cómo probar en equipo:** poner un celular en modo avión; desde el panel, mandarle un cambio (por ejemplo bloquear Wi-Fi) → el panel tiene que decir que quedó en cola; sacar el modo avión → tiene que aplicarse (al instante si llega el FCM, o como mucho en 15 min por el buzón). Mandar DOS cambios opuestos con el equipo en avión (bloquear y desbloquear) → al volver tiene que quedar el último.
+
+**B.75 — `PackageReceiver` NO FUNCIONABA EN ANDROID 8+, Y ARREGLARLO SIN MÁS HABRÍA DESINSTALADO LAS APPS DE LA TIENDA. [ESCRITO Y COMPILADO EL 22/9; SIN PROBAR EN EQUIPO]**
+
+Desde Android 8 el sistema **no entrega** `PACKAGE_ADDED`/`PACKAGE_REMOVED`/`PACKAGE_REPLACED` a receptores declarados en el Manifest. O sea que en casi toda la flota nunca corrían: la re-suspensión de una app recién actualizada (Play Store, navegadores, WebView, apps suspendidas u ocultas a mano), el aviso al launcher, el bloqueo de "instalación no autorizada" y la sincronización de la lista de apps después de instalar. Ahora `LockSuiteApplication` lo registra en tiempo de ejecución (`RECEIVER_NOT_EXPORTED` en 33+), con antirrebote de 2 s para eventos duplicados. El proceso vive siempre (servicio de primer plano), así que el receptor también.
+
+Lo que había que cerrar ANTES de despertarlo: con la instalación bloqueada, el bloque de "instalación no autorizada" solo miraba la lista local `allowed_packages`, pero la Tienda instala lo que está en `globalSettings/allowedPackages`. Despertado tal cual, **desinstalaba cada app recién bajada de la Tienda**. Ahora `SelfUpdater` anota el paquete que la Tienda está instalando (`store_install_pkg`/`store_install_at`) y el receptor lo deja pasar durante 15 minutos.
+
+**Cómo probar en equipo:** (1) con la instalación bloqueada, instalar una app DESDE LA TIENDA → tiene que quedar instalada; (2) actualizar Play Store o una app suspendida → tiene que volver a quedar suspendida sola; (3) `adb logcat -s PackageReceiver` tiene que mostrar "Acción de paquete recibida" al instalar algo (antes, en Android 8+, no aparecía nunca).
+
+**B.76 — "BLOQUEAR INSTALACIÓN" TENÍA DOS FUENTES DE VERDAD QUE SE PISABAN. [ESCRITO Y COMPILADO EL 22/9; SIN PROBAR EN EQUIPO]**
+
+Los perfiles e importaciones escribían `no_install_apps` (la restricción nativa) mientras el interruptor usa `install_apps_blocked_admin`. `reapplyAllRestrictions()` aplicaba la nativa y en la misma vuelta `refreshInstallRestriction()` la sacaba (o al revés): un perfil que bloqueaba la instalación quedaba sin efecto en la siguiente vuelta del Watchdog. Unificado en `PolicyManager`: importar mapea `no_install_apps` → `install_apps_blocked_admin`, exportar lee de ahí, el bucle de re-aplicar ya no toca `DISALLOW_INSTALL_APPS` (lo decide `refreshInstallRestriction()`), y una migración adopta el bloqueo de los equipos que ya tenían `no_install_apps = true` sin haber tocado nunca el interruptor.
+
+**B.77 — LISTA BLANCA/NEGRA: SI SE PERDÍA EL `SYNC_WHITELIST`, EL EQUIPO QUEDABA CON LA CONFIGURACIÓN VIEJA PARA SIEMPRE. [ESCRITO Y COMPILADO EL 22/9; SIN PROBAR EN EQUIPO]**
+
+El catálogo global y la ficha del equipo solo se releían al llegar ese FCM. Ahora `WatchdogWorker` los relee ~1 vez por hora (idempotente: reemplaza los mapas y reconcilia solo lo que difiere), y además el comando viaja por el buzón (B.74). Junto con B.73 (el equipo ahora SÍ puede leer su `appPolicy`), la ficha por equipo pasa a funcionar de verdad.
+
+**B.78 — DNS: LA ÚNICA RENDIJA DEL FILTRO QUE FALLABA ABIERTA. [ESCRITO Y CON PRUEBAS UNITARIAS EL 22/9; SIN PROBAR EN EQUIPO]**
+
+`DnsPacketParser` devolvía un nombre PARCIAL cuando la pregunta traía un puntero de compresión (`youtube` en vez de `youtube.com`): no matcheaba ninguna regla y el servidor de arriba resolvía el nombre completo. Un resolutor legítimo nunca arma eso; solo una app que arma el paquete a mano para esquivar el filtro. Ahora un nombre que no se puede leer entero (puntero, etiqueta reservada, truncado, raíz) devuelve `null`, y `KosherVpnService` contesta **bloqueado** al instante (sin timeout para nadie). Pruebas: `DnsPacketParserTest` (5).
+
+**B.79 — "SE TRABA EL INTERNET": DOS CASOS QUE LA AUTO-REPARACIÓN NO VEÍA. [ESCRITO Y COMPILADO EL 22/9; SIN PROBAR EN EQUIPO]** *(cierra la mitad de B.51)*
+
+1. **Un túnel que anduvo y DESPUÉS se rompió no se reparaba nunca.** `tunnelHealth()` mira contadores acumulados: con UNA respuesta ya queda en OK para siempre. Ahora hay además una **ventana deslizante de 2 min**: si entraron ≥ 8 consultas y no salió NINGUNA respuesta (ni siquiera de bloqueo), se marca `NO_UPSTREAM` y se repara con el mismo enfriamiento de 5 min de siempre. Solo se evalúa con pantalla encendida y red física validada, así que un equipo que de verdad no tiene internet no dispara nada.
+2. **Cada arranque del servicio reestablecía el túnel sin motivo en equipos lentos.** El primer `onAvailable` después de registrar el callback de red no es un cambio de red (Android lo manda siempre); si llegaba con el túnel ya arriba, disparaba un reestablecimiento: 2-3 s de DNS sin filtrar más el riesgo de la carrera de rutas de B.49. Ahora se anota y se ignora.
+
+**Cómo probar en equipo:** (1) `adb logcat -s KosherVPN` al arrancar el servicio ya no tiene que mostrar un reestablecimiento inmediato; (2) durante un día de uso normal no tienen que aparecer reparaciones sin motivo (en la ficha del panel, «Auto-reparaciones» no tiene que subir mientras el internet anda bien).
+
+**B.80 — CPU Y BATERÍA. [ESCRITO Y COMPILADO EL 22/9; SIN PROBAR EN EQUIPO]**
+
+- **Sincronización coalescida** (`FirebaseDeviceSync.requestSync()`, 2,5 s de antirrebote en un hilo propio): una actualización de Play Store o una restauración disparan decenas de eventos de paquete seguidos, y cada uno hacía un `syncDeviceInfo()` completo (enumerar TODAS las apps y escribir un nodo grande). Ahora sale una sola. La usan `PackageReceiver`, `CommandProcessor` y `LockSuiteApplication`.
+- **Latido del servicio de primer plano: 90 → 180 s.** El panel considera "en línea" los últimos 5 minutos, así que no cambia nada visible y son la mitad de despertares de radio.
+- **Panel:** la barra lateral y la lista de apps se redibujaban enteras con CADA latido de CADA equipo. Ahora solo si cambió lo que muestran (firma de contenido).
+
+**B.81 — ACTUALIZACIÓN DE APPS: UNA INSTALACIÓN "EN CURSO" PODÍA QUEDAR ABIERTA PARA SIEMPRE. [ESCRITO Y COMPILADO EL 22/9; SIN PROBAR EN EQUIPO]**
+
+- **El hueco:** mientras `mdm_install_in_progress` está en true, nadie re-impone el bloqueo de instalación (es lo que deja instalar a Play Store o a la Tienda). Los dos cierres normales son alarmas (10 min el flujo de Play Store, 2 min el de `SelfUpdater`) y **las alarmas no sobreviven a un reinicio**. Un celular que se reiniciaba o se quedaba sin batería en el medio quedaba con la marca puesta; en el caso de la Tienda/OTA, además con `DISALLOW_INSTALL_APPS` y `DISALLOW_INSTALL_UNKNOWN_SOURCES` levantadas, sin fecha de fin. El flujo de Play Store lo rescataba la Accesibilidad al reconectar; el de la Tienda, nadie.
+- **El arreglo:** `UpdateFlowManager.healStaleInstall()`, llamado en cada vuelta de `WatchdogWorker` (que sí sobrevive a reinicios). No compara relojes contra el inicio: guarda qué flujo vio y desde cuándo; si el MISMO flujo sigue "en curso" 25 min después, lo cierra por el camino normal (`forceCleanup` o `restoreInstallRestrictions`). Un flujo nuevo reinicia la cuenta, así que nunca corta una actualización recién empezada.
+- **Cancelar sin conexión:** "Cancelar actualización" va sin paquete, así que su familia en el buzón no coincidía con la de "actualizar <paquete>" y los dos quedaban: al volver, el equipo arrancaba la actualización y la cancelaba en el mismo segundo. La Function ahora saca del buzón los "actualizar" pendientes al encolar un cancelar.
+- **Decisión para el dueño:** un `UPDATE_APP` que llega por el buzón puede aplicarse hasta 24 h después, con la pantalla negra de "Actualizando…" en el momento en que el equipo vuelve. Si se prefiere que venza antes (por ejemplo 6 h), es una constante en `functions/index.js` (`MAILBOX_TTL_ACTION_MS`, o sacarlo a un vencimiento propio).
+
+**Cómo probar en equipo:** mandar `UPDATE_APP` de una app con actualización pendiente y, con la pantalla negra puesta, reiniciar el celular → a más tardar ~45 min después (tres vueltas del Worker) Play Store tiene que volver a quedar suspendida y la instalación bloqueada, y el panel tiene que mostrar el resultado `TIMEOUT` si el flujo no terminó solo.
+
+**B.82 — PANEL: DATOS DEL CELULAR SE INSERTABAN COMO HTML SIN ESCAPAR. [ESCRITO Y VERIFICADO CON `node --check` EL 22/9; SIN DESPLEGAR]**
+
+El caso serio: el **nombre de cada app instalada** (y su paquete y el ícono) lo publica el celular, y `app.js` lo metía en el HTML tal cual. Una app instalada en CUALQUIER equipo administrado con un nombre armado (`<img src=x onerror=…>`) ejecutaba código en la sesión del administrador al abrir ese equipo en el panel — y desde ahí, control de toda la flota. Escapado con `escapeHtml()` en la lista de apps, la Tienda (`label`, `packageName`, `apkUrl`, `sha256`), los perfiles, el aviso de gracia y los mensajes de error; en `celular.js`, la batería y los intentos de la auditoría DNS. Otros arreglos en `app.js`: `renderAppsList` ya no se cae con un equipo sin lista de apps, un `catch` que tapaba una variable y el texto de "comando vencido".
+
+**Cache-busters:** `app.js?v=40`, `comun.js?v=2` (en `celular.html` y `dominios.html`), `celular.js?v=3`.
+
+**B.83 — HERRAMIENTAS Y PRUEBAS NUEVAS. [22/9]**
+
+- `tools/check_command_sync.py` y `tools/check_panel_commands.py` ahora leen `CommandProcessor.kt` (el `when` de comandos se mudó ahí). Sin esto habrían dado 148 comandos "que el celular no sabe ejecutar" — falsa alarma.
+- `tools/rules_tests/`: prueba de reglas contra el emulador (B.73).
+- Pruebas unitarias nuevas: `CommandMailboxTest` (6) y `DnsPacketParserTest` (5), más la que ya había (`NetworkForwarderTest`, 2). Todas verdes con `./gradlew :app:testDebugUnitTest`.
+- Lint: un error menos (`UnsafeImplicitIntentLaunch` en `UninstallReceiver`, arreglado con `setPackage`); ningún error nuevo.
+
+**B.84 — PORTAL CAUTIVO: DESPLAZAR LA PANTALLA NO CONTABA COMO ACTIVIDAD. [ESCRITO Y COMPILADO EL 22/9; SIN PROBAR EN EQUIPO]** *(sigue a B.70)*
+
+El guard cerraba la ventana del portal "por inactividad" mientras el usuario leía y desplazaba la página (los portales de avión son largos). Ahora un desplazamiento en el portal cuenta como actividad.
+
+**B.85 — PARA PRODUCCIÓN CON VARIOS USUARIOS: LO QUE NO TOQUÉ Y RECOMIENDO. [22/9 — decisiones del dueño]**
+
+1. **Multi-administrador.** Hoy cualquier cuenta de `authorizedAdminsUids` ve y controla TODOS los equipos. Si otras familias/clientes van a administrar sus propios celulares, hace falta dueño por equipo (por ejemplo `devices/<id>/adminUid` o `tenants/<t>/devices`) en las reglas y en la Function **antes** de dar de alta al segundo administrador. Se suma a B.7 (`UPDATE_*` sin PIN).
+2. **B.2 sigue siendo lo primero en seguridad:** el repo público publica el código, las reglas y la clave de B.5.
+3. **Escala del panel:** escucha el árbol `devices` entero, con campos pesados (`appsList`, auditorías). La base manda solo diferencias después de la primera carga, así que el tráfico está bien, pero la primera carga crece con cada equipo. Pasados ~100 equipos conviene mover lo pesado a nodos aparte (`deviceApps/<id>`) y leerlo solo al abrir la ficha.
+4. **Visibilidad de fallas:** no hay reporte de cierres inesperados. Firebase Crashlytics es gratis y es lo que avisa de un crash en un equipo antes de que el usuario lo cuente.
+5. **Integración continua:** los seis chequeos de `tools/`, las pruebas unitarias y las de reglas se pueden correr solos en cada push (GitHub Actions). Hoy dependen de que alguien se acuerde.
+6. **Despliegue escalonado:** publicar primero a 1-2 equipos de prueba (canario) y recién después a la flota.
+7. **Copias de seguridad de la base:** el plan Blaze permite respaldos diarios automáticos de Realtime Database; no están configurados (o no hay evidencia en el repo).
+8. **B.3-b (hash del PIN):** sigue igual.
+
+**B.86 — `UPDATE_APP` y el desbloqueo de desinstalación si el proceso muere a mitad de cierre. [VISTO EL 22/9; NO TOCADO]** `UpdateFlowManager.finish()` restaura `setUninstallBlocked` del paquete en un `postDelayed`; si el proceso muere justo en ese intervalo, esa app puede quedar desinstalable hasta que algo vuelva a aplicar su bloqueo. Caso borde; anotado para cuando se toque ese archivo.
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**17/9 (tarde) — Antigravity: el Captcha de login de Mercado Pago corre en `www.mercadolibre.com/mla/lgz/captcha`. Medido sobre video del equipo real. Ver B.72.**
+**22/9 — Claude (Cowork, contenedor en la nube): revisión completa para producción con varios usuarios. Ver B.73 a B.86.**
 
-1. **★ El video (`screen-20260917-012708.mp4`) mostró el fallo exacto en 00:02:** `https://www.mercadolibre.com/mla/lgz/captcha?site_key=...` arrojando `net::ERR_CONNECTION_REFUSED`. Mercado Pago delega el captcha anti-bot a `www.mercadolibre.com`. Bloquear `www` por DNS rompía el login incondicionalmente.
-2. **`www.mercadolibre.com*` pasa a `allow` en el catálogo y sale de `MERCADO_LIBRE_MP_DOMAINS`.** El marketplace sigue cerrado por `listado.*` (catálogos de productos) y por Capa 3.
-3. **Limpieza de `WebViewPolicy.kt`:** se eliminó el match ciego `lower.contains("mercadolibre.")` que bloqueaba toda la app si el filtro de ofertas por VPN estaba activo.
-4. **Saneamiento automático en disco (`DomainRuleManager.kt`):** al cargar reglas, purga automáticamente hosts de auth y captcha de `dns_custom_blocked_domains` en equipos actualizados.
-5. **Verificación:** 6 chequeos de sincronización en verde (`check_whitelist_sync.py`, `check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`). Compilación completa en Gradle y despliegue a Firebase.
+El pedido del dueño: revisar toda la app y el panel, función por función, para empezar a usarla con varios usuarios. Que el internet no se trabe nunca, que funcionen todas las restricciones y la lista blanca/negra, que la actualización de apps funcione siempre, que el panel mande sin importar cómo esté el celular, y que no gaste CPU.
 
-**17/9 (mañana) — Claude + Antigravity: no se podía iniciar sesión en Mercado Pago (`mobile.mercadolibre.*` era el host de autenticación). Ver B.71.**
-- `mobile.mercadolibre.com*` era el endpoint de `/mobile_authentications`. Medido sobre APK de 203 MB con 17 dex.
+Lo que salió, de más grave a menos:
 
-**16/9 — Claude: la Capa 3 bloqueaba de más (Tefilon B.68, Asistente Mago y ANSES B.67, Layer3Audit B.69). Ver B.67 a B.69.**
+1. **B.73 — reglas de la base.** Con las reglas del repo, el celular no podía leer su propia configuración (la ficha por equipo de B.63 no funcionaba en ninguno) y cualquier sesión anónima podía adueñarse de un equipo ajeno. Reglas nuevas, flujo de re-vinculación para equipos reinstalados (`deviceClaims` + cartel con Aprobar en el panel) y 44 pruebas contra el emulador real.
+2. **B.82 — el panel ejecutaba HTML que manda el celular.** El nombre de una app instalada en cualquier equipo podía correr código en la sesión del administrador.
+3. **B.75 — `PackageReceiver` no funcionaba en Android 8+.** Nada de lo que hace al instalar o actualizar corría. Despertarlo tal cual habría desinstalado las apps de la Tienda: se cerró eso antes.
+4. **B.74 — buzón de comandos.** Un comando del panel ya no se pierde si el FCM no llega; se aplica cuando el equipo vuelve.
+5. **B.81 — actualización de apps.** Un reinicio en medio de una instalación dejaba la instalación abierta para siempre.
+6. **B.78 — la única rendija del filtro DNS que fallaba abierta.**
+7. **B.79 / B.80 / B.76 / B.77 / B.84** — internet que se trababa en dos casos, CPU y batería, "bloquear instalación" con dos fuentes de verdad, lista blanca que no se releía, portal cautivo.
+
+Cómo se verificó:
+
+- **Gradle de verdad en el contenedor** (receta nueva en `tools/ia_contenedor/`): `compileDebugKotlin` OK; `testDebugUnitTest` 13/13 (`CommandMailboxTest` 6, `DnsPacketParserTest` 5, `NetworkForwarderTest` 2); `lintDebug` sin errores nuevos y uno menos.
+- **Reglas:** 44/44 contra el emulador real (`tools/rules_tests/`); control negativo: 17 en rojo con las reglas anteriores.
+- Los seis chequeos de `tools/` en verde, después de adaptar dos al archivo nuevo `CommandProcessor.kt`. `node --check` en todo el JS del panel y de la Function.
+- **Nada probado en un equipo real ni desplegado.** Por eso no se tachó ningún punto de B.
+
+Lo que sigue: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-22_PRODUCCION.md`** (compilar, desplegar en orden, probar en equipo, commitear), y las decisiones del dueño de B.85.
 
 ---
 
 ## Estado del repo (git)
 
-### Estado de versiones y tandas recientes
+### Estado de versiones
 
-- **0.6.51 / código 114 (10/9):** versión previa en producción.
-- **0.6.52 / código 115 (`3d50643`):** integró B.70 (`285548a`), B.67, B.68, B.69 (`b5c1a41`).
-- **0.6.53 / código 116 (`6c726c6`):** integró B.71 (`07f0d0f`: `mobile.mercadolibre.*` allow).
-- **0.6.54 / código 117 (`2ead7d5`):** B.72 (`www.mercadolibre.com` allow para captcha, arreglo de `WebViewPolicy`, saneamiento de `DomainRuleManager`). Desplegado a producción.
+- **0.6.54 / código 117 (`2ead7d5`):** la última desplegada (B.72). Commit de documentación posterior: `fd76ccc`.
+- **Esta sesión (22/9):** sin subir versión (lo hace `deploy_all.ps1`). Todo quedó escrito en el disco del dueño **sin commitear ahí**, porque `device_bash` no montó y sin él no hay `git` sobre el disco. El commit está hecho en el clon de la sesión, con un parche de respaldo en `Claude outputs/`; el mensaje exacto para commitear en la PC está en las instrucciones.
 
-| Tanda | Qué | Estado |
-|---|---|---|
-| **B.70** | Portal cautivo en aviones (15/9) | Commiteada en `285548a`, empaquetada en 0.6.52 |
-| **B.67** | Mercado Pago dejaba de echar al usuario del asistente y de ANSES | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
-| **B.68** | Tefilon dejaba de cerrarse al abrirse | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
-| **B.69** | Registro unificado de rebotes de la Capa 3 | Commiteada en `b5c1a41`, empaquetada en 0.6.52 |
-| **B.71** | El login de Mercado Pago: host mobile.* | Commiteada en `07f0d0f`, empaquetada en 0.6.53 |
-| **B.72** | El captcha de Mercado Pago: host www.* | Commiteada en `1d2f806`, empaquetada y desplegada en 0.6.54 |
+### Archivos tocados el 22/9
 
-### Los commits de esta tanda
-
-- `285548a`: `fix(portal cautivo): que el guard no cierre la ventana en portales de avion` — B.70
-- `b5c1a41`: `fix(capa 3): dejar de cerrar apps por un marcador mal comparado…` — B.67, B.68, B.69
-- `3d50643`: `Actualizacion automatica a version 0.6.52 (Codigo 115)`
-- `07f0d0f`: `fix(mercado pago): mobile.mercadolibre.* es el host de autenticacion, no el marketplace` — B.71
-- `6c726c6`: `Actualizacion automatica a version 0.6.53 (Codigo 116)`
-- `1d2f806`: `fix(mercado pago): permitir www.mercadolibre.* para el captcha de inicio de sesion` — B.72
-- `2ead7d5`: `Actualizacion automatica a version 0.6.54 (Codigo 117)`
-
-### Archivos tocados el 16 y el 17/9
-
-Finales de línea respetados: **CRLF** en el servicio, `PolicyManager`, `FirebaseDeviceSync`, `app.js`, `catalog.js`, `celular.html`, `celular.js` y este documento; **LF** en `PhotoPickerPolicy`, `WhitelistCatalog` y los dos archivos nuevos.
+Finales de línea: se escribieron igual que estaban en el disco. **LF** en `database.rules.json`, `LockSuiteApplication.kt`, `UninstallReceiver.kt`, `DnsPacketParser.kt`, `UpdateFlowManager.kt` y los archivos nuevos; **CRLF** en todo lo demás, este documento incluido. Con `core.autocrlf` prendido, a git le da igual.
 
 ```
-app/src/main/java/com/ejemplo/locksuite/mdm/MercadoPagoOffersPolicy.kt   (NUEVO)
-app/src/main/java/com/ejemplo/locksuite/mdm/Layer3Audit.kt               (NUEVO)
-app/src/main/java/com/ejemplo/locksuite/mdm/PhotoPickerPolicy.kt
-app/src/main/java/com/ejemplo/locksuite/mdm/WhitelistCatalog.kt
+admin-backend/database.rules.json
+admin-backend/functions/index.js
+admin-backend/public/{app.js, comun.js, celular.js, index.html, celular.html, dominios.html}
+app/src/main/java/com/ejemplo/locksuite/LockSuiteApplication.kt
 app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt
-app/src/main/java/com/ejemplo/locksuite/mdm/WebViewPolicy.kt
-app/src/main/java/com/ejemplo/locksuite/dns/DomainRuleManager.kt
-app/src/main/java/com/ejemplo/locksuite/service/LockSuiteAccessibilityService.kt
-app/src/main/java/com/ejemplo/locksuite/util/FirebaseDeviceSync.kt
-admin-backend/public/{app.js, catalog.js, celular.html, celular.js}
+app/src/main/java/com/ejemplo/locksuite/receiver/{PackageReceiver.kt, UninstallReceiver.kt}
+app/src/main/java/com/ejemplo/locksuite/service/CommandProcessor.kt          (NUEVO)
+app/src/main/java/com/ejemplo/locksuite/service/{LockSuiteFirebaseService.kt, KosherVpnService.kt,
+        LockSuiteAccessibilityService.kt, WatchdogForegroundService.kt}
+app/src/main/java/com/ejemplo/locksuite/util/CommandMailbox.kt               (NUEVO)
+app/src/main/java/com/ejemplo/locksuite/util/{DnsPacketParser.kt, FirebaseDeviceSync.kt,
+        SelfUpdater.kt, UpdateFlowManager.kt}
+app/src/main/java/com/ejemplo/locksuite/worker/WatchdogWorker.kt
+app/src/test/java/com/ejemplo/locksuite/util/{CommandMailboxTest.kt, DnsPacketParserTest.kt}   (NUEVOS)
+tools/{check_command_sync.py, check_panel_commands.py}
+tools/rules_tests/     (NUEVA: pruebas de reglas contra el emulador)
+tools/ia_contenedor/   (NUEVA: receta para compilar en el contenedor de una IA)
+LOCKSUITE_CONTEXTO_PARA_IA.md
+INSTRUCCIONES_ANTIGRAVITY_2026-09-22_PRODUCCION.md                           (NUEVO)
 ```
 
 ### Antes de desplegar
 
-Los **seis** chequeos (esta sesión los corrió y dieron los seis en verde):
+Los seis chequeos de siempre, y ahora también las reglas:
 
 ```
 python tools/check_whitelist_sync.py
@@ -1664,8 +1774,7 @@ python tools/check_command_sync.py
 python tools/check_panel_commands.py
 python tools/gen_catalog_js.py --check
 python tools/gen_policies_js.py --check
+cd tools/rules_tests && npm install && npm test      # tiene que decir TODAS VERDES (44)
 ```
 
-**No hay comandos FCM nuevos**: alcanza con desplegar `hosting`, `functions` no cambió. **Cache-busters: `celular.js?v=2`** (`app.js` cambió pero solo en los conteos de `WHITELIST_BUILTIN`, que no afectan al navegador — subirlo igual a `v=40` si se quiere ser prolijo). **El versionCode no se subió a mano**: `deploy_all.ps1` hace `currentCode + 1`. Si se compila a mano, por encima de **114**.
-
-📌 **Todo el detalle operativo está en `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md`**, que cubre las cuatro tandas, los tres commits, qué mirar si Gradle se queja y el orden de prueba consolidado.
+**No hay comandos FCM nuevos, pero `functions` SÍ cambió** (buzón). **Cache-busters ya subidos:** `app.js?v=40`, `comun.js?v=2`, `celular.js?v=3`. **El orden de despliegue importa:** ver las instrucciones.

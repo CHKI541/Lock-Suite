@@ -197,6 +197,62 @@ object UpdateFlowManager {
         return p.getBoolean(KEY_IN_PROGRESS, false) && !p.getString(KEY_PKG, null).isNullOrBlank()
     }
 
+    /** Lo anota SelfUpdater al abrir su ventana de instalación (APK de la Tienda / OTA). */
+    const val KEY_INSTALL_STARTED_AT = "mdm_install_started_at"
+    private const val KEY_STALE_TOKEN = "install_stale_token"
+    private const val KEY_STALE_SEEN_AT = "install_stale_seen_at"
+    private const val STALE_AFTER_MS = 25 * 60 * 1000L
+
+    /**
+     * 22/9/2026 — RED DE SEGURIDAD PARA UNA INSTALACIÓN QUE QUEDÓ "EN CURSO" PARA SIEMPRE.
+     *
+     * Mientras `mdm_install_in_progress` está en true, `refreshInstallRestriction()` y
+     * `reapplyAllRestrictions()` NO tocan el bloqueo de instalación: es lo que permite que
+     * Play Store (o el instalador de la Tienda) instale. Los dos cierres normales son
+     * alarmas (10 min este flujo, 2 min el de SelfUpdater) y **las alarmas no sobreviven a
+     * un reinicio**. Un celular que se reiniciaba (o se quedaba sin batería) en el medio
+     * quedaba con la marca puesta y, en el caso de SelfUpdater, con `DISALLOW_INSTALL_APPS`
+     * y `DISALLOW_INSTALL_UNKNOWN_SOURCES` levantadas: instalación libre, sin fecha de fin.
+     * El flujo de Play Store lo rescataba la Accesibilidad al reconectar; el de la Tienda,
+     * nadie.
+     *
+     * La llama WatchdogWorker en cada vuelta (~15 min; sobrevive a reinicios y a que muera
+     * el proceso). No compara relojes contra el inicio del flujo: guarda qué flujo vio
+     * (sus marcas de inicio, como identidad) y desde cuándo. Si el MISMO flujo sigue "en
+     * curso" 25 minutos después, está muerto — ninguno legítimo dura eso — y se cierra por
+     * el camino normal. Un flujo nuevo cambia la identidad y reinicia la cuenta, así que
+     * nunca se corta una actualización que arrancó hace un minuto.
+     */
+    fun healStaleInstall(context: Context, source: String): Boolean {
+        val ctx = context.applicationContext
+        val p = PrefsHelper.getMdmPrefs(ctx)
+        if (!p.getBoolean(KEY_IN_PROGRESS, false)) {
+            if (p.contains(KEY_STALE_TOKEN)) {
+                p.edit().remove(KEY_STALE_TOKEN).remove(KEY_STALE_SEEN_AT).apply()
+            }
+            return false
+        }
+        val token = p.getLong(KEY_STARTED_AT, 0L).toString() + "|" +
+            p.getLong(KEY_INSTALL_STARTED_AT, 0L) + "|" + (p.getString(KEY_PKG, null) ?: "")
+        val now = System.currentTimeMillis()
+        val seenAt = p.getLong(KEY_STALE_SEEN_AT, 0L)
+        if (p.getString(KEY_STALE_TOKEN, null) != token || seenAt <= 0L || now < seenAt) {
+            // Primera vez que se ve este flujo (o el reloj fue para atrás): se empieza a contar.
+            p.edit().putString(KEY_STALE_TOKEN, token).putLong(KEY_STALE_SEEN_AT, now).apply()
+            return false
+        }
+        if (now - seenAt < STALE_AFTER_MS) return false
+
+        Log.w(TAG, "Instalación colgada desde hace ${(now - seenAt) / 60000} min ($token), vista desde $source: se cierra.")
+        p.edit().remove(KEY_STALE_TOKEN).remove(KEY_STALE_SEEN_AT).apply()
+        if (isRunning(ctx)) {
+            forceCleanup(ctx, RESULT_TIMEOUT)
+        } else {
+            PolicyManager(ctx).restoreInstallRestrictions()
+        }
+        return true
+    }
+
     fun currentPackage(context: Context): String? =
         PrefsHelper.getMdmPrefs(context).getString(KEY_PKG, null)
 

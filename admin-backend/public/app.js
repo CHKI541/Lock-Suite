@@ -75,7 +75,19 @@ let groupsListener = null;
 function startRealtimeSync() {
     devicesListener && database.ref("devices").off("value", devicesListener), devicesListener = database.ref("devices").on("value", e => {
         const t = e.val() || {};
-        currentDevicesData = t, renderDevicesList(t), selectedDeviceId && t[selectedDeviceId] && updateSidebarUI(selectedDeviceId, t[selectedDeviceId])
+        currentDevicesData = t, renderDevicesList(t);
+        // 22/9/2026 — antes la barra lateral se redibujaba con el latido de CUALQUIER
+        // celular de la flota (este listener mira `devices` entero): con varios equipos,
+        // cada pocos segundos se cerraba el panel ⚙️ de la app que se estaba mirando y se
+        // perdía lo elegido en un desplegable. Ahora solo si cambió el equipo abierto.
+        if (selectedDeviceId && t[selectedDeviceId]) {
+            const firma = JSON.stringify(t[selectedDeviceId]);
+            if (firma !== lastSidebarSignature) {
+                lastSidebarSignature = firma;
+                updateSidebarUI(selectedDeviceId, t[selectedDeviceId]);
+            }
+        }
+        renderDeviceClaims();
         // B.59 — los pedidos viven dentro de este mismo árbol, así que se refrescan
         // acá y no con un listener aparte sobre `devices` (sería bajarlo dos veces).
         // El número de la pestaña se actualiza siempre; la lista, solo si está abierta.
@@ -109,9 +121,106 @@ function startRealtimeSync() {
     }, e => {
         console.error("Error de sync de archivados:", e);
     });
+
+    claimsListener && database.ref("deviceClaims").off("value", claimsListener), claimsListener = database.ref("deviceClaims").on("value", e => {
+        currentDeviceClaims = e.val() || {};
+        renderDeviceClaims();
+    }, e => {
+        // Reglas viejas sin el nodo `deviceClaims`: no es un error del panel.
+        console.warn("Pedidos de re-vinculación no disponibles:", e && e.message);
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PEDIDOS DE RE-VINCULACIÓN (22/9/2026) — ver database.rules.json y
+// FirebaseDeviceSync.requestRebind() en la app.
+//
+// Las reglas nuevas atan el nodo de cada celular al uid anónimo que lo creó: ya nadie
+// puede adueñarse del nodo de otro equipo. Si el PROPIO equipo cambia de uid (se
+// reinstaló LockSuite o se le borraron los datos), deja de poder escribir y pide
+// volver a vincularse en `deviceClaims/<id>/<uid>`. Aprobar pasa el nodo al uid
+// nuevo y borra el secreto de comandos viejo para que el equipo publique el suyo.
+//
+// ⚠️ Solo aprobar si el equipo se reinstaló de verdad: un pedido que no se espera
+// puede ser alguien que conoce el id del equipo e intenta quedárselo.
+// ─────────────────────────────────────────────────────────────────────────────
+let claimsListener = null,
+    currentDeviceClaims = {},
+    lastSidebarSignature = "";
+
+function renderDeviceClaims() {
+    let box = document.getElementById("device-claims-banner");
+    if (!box && devicesContainer && devicesContainer.parentNode) {
+        box = document.createElement("div");
+        box.id = "device-claims-banner";
+        box.style.cssText = "display:none; margin:0 0 16px 0;";
+        devicesContainer.parentNode.insertBefore(box, devicesContainer);
+    }
+    if (!box) return;
+    box.innerHTML = "";
+    const filas = [];
+    Object.entries(currentDeviceClaims || {}).forEach(([deviceId, porUid]) => {
+        const dev = currentDevicesData[deviceId];
+        if (!dev || !porUid || typeof porUid !== "object") return;   // equipo inexistente: se ignora
+        Object.entries(porUid).forEach(([uid, c]) => filas.push({ deviceId, uid, c: c || {}, dev }));
+    });
+    if (!filas.length) { box.style.display = "none"; return; }
+    box.style.display = "block";
+    filas.slice(0, 20).forEach(({ deviceId, uid, c, dev }) => {
+        const card = document.createElement("div");
+        card.style.cssText = "background:rgba(255,159,10,0.12); border:1px solid rgba(255,159,10,0.5); border-radius:12px; padding:12px 14px; margin-bottom:8px;";
+        const titulo = document.createElement("div");
+        titulo.style.cssText = "font-weight:bold; color:var(--text-light);";
+        titulo.textContent = "🔗 " + (field(dev, "deviceName", "") || field(dev, "model", "") || deviceId) +
+            " pide volver a vincularse";
+        const detalle = document.createElement("div");
+        detalle.style.cssText = "font-size:12px; color:var(--text-gray); margin-top:4px;";
+        const cuando = c.at ? new Date(c.at).toLocaleString("es-AR") : "—";
+        detalle.textContent = "Pasa cuando se reinstala LockSuite o se le borran los datos. Modelo informado: " +
+            (c.model || "?") + " · versión " + (c.versionName || "?") + " · " + cuando + ". " +
+            "Hasta que lo apruebes, el panel no recibe nada de ese equipo.";
+        const acciones = document.createElement("div");
+        acciones.style.cssText = "display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;";
+        const ok = document.createElement("button");
+        ok.className = "action-btn";
+        ok.style.cssText = "background:var(--accent); color:var(--navy-dark); font-weight:bold; border:none; padding:6px 12px; border-radius:8px; cursor:pointer; font-size:12px;";
+        ok.textContent = "✔ Aprobar";
+        ok.addEventListener("click", async () => {
+            if (!confirm("¿Ese celular se reinstaló recién (o le borraste los datos)?\n\nSi NO lo reconocés, NO lo apruebes: podría ser alguien intentando quedarse con el equipo.")) return;
+            ok.disabled = true;
+            try {
+                const up = {};
+                up["devices/" + deviceId + "/ownerUid"] = uid;
+                up["devices/" + deviceId + "/info/ownerUid"] = uid;
+                up["devices/" + deviceId + "/commandSecretMismatch"] = false;
+                up["deviceSecrets/" + deviceId + "/ownerUid"] = uid;
+                up["deviceSecrets/" + deviceId + "/commandSecret"] = null;
+                up["deviceClaims/" + deviceId] = null;
+                await database.ref().update(up);
+                alert("✅ Vinculado. El equipo vuelve a sincronizar en su próximo latido (hasta 3 min) y publica su nueva credencial de comandos.");
+            } catch (err) {
+                ok.disabled = false;
+                alert("✗ No se pudo aprobar: " + err.message);
+            }
+        });
+        const no = document.createElement("button");
+        no.className = "action-btn";
+        no.style.cssText = "background:var(--navy-light); color:var(--text-light); border:none; padding:6px 12px; border-radius:8px; cursor:pointer; font-size:12px;";
+        no.textContent = "Descartar";
+        no.addEventListener("click", () => {
+            database.ref("deviceClaims/" + deviceId + "/" + uid).remove().catch(err => alert("✗ " + err.message));
+        });
+        acciones.appendChild(ok);
+        acciones.appendChild(no);
+        card.appendChild(titulo);
+        card.appendChild(detalle);
+        card.appendChild(acciones);
+        box.appendChild(card);
+    });
 }
 
 function stopRealtimeSync() {
+    claimsListener && (database.ref("deviceClaims").off("value", claimsListener), claimsListener = null)
     devicesListener && (database.ref("devices").off("value", devicesListener), devicesListener = null)
     groupsListener && (database.ref("groups").off("value", groupsListener), groupsListener = null)
     archivedListener && (database.ref("archivedDevices").off("value", archivedListener), archivedListener = null)
@@ -419,7 +528,7 @@ function updateSidebarUI(e, t) {
             resumen.innerHTML = wlOn
                 ? `Estado: <strong style="color:${wlSim ? "var(--accent)" : "#00E676"}">` +
                   `${wlSim ? "SIMULANDO (no bloquea)" : "BLOQUEANDO"}</strong> · ` +
-                  `${wlDom} dominios cargados · ${wlAud} dominios afuera`
+                  `${Number(wlDom) || 0} dominios cargados · ${Number(wlAud) || 0} dominios afuera`
                 : 'Estado: <strong style="color:var(--text-gray)">apagado</strong>';
         }
         const card = document.getElementById("whitelist-device-card");
@@ -572,7 +681,32 @@ function updateSidebarUI(e, t) {
     const i = apps.com_android_vending || null,
         d = field(t, "installAppsBlocked", false) === true;
     playstoreHidden.checked = i ? i.isHidden === true : d, playstoreSuspended.checked = i ? i.isSuspended === true : d;
-    renderAppsList(apps), document.activeElement !== sidebarAllowlistInput && (sidebarAllowlistInput.value = arrayOrCsv(field(t, "allowedPackages", "")));
+    // 22/9/2026: la lista de apps solo se rearma si cambió (o si es otro equipo). Antes
+    // se rearmaba con cada latido y cerraba el panel ⚙️ abierto.
+    const firmaApps = e + "|" + JSON.stringify(apps);
+    if (firmaApps !== lastAppsListSignature) {
+        lastAppsListSignature = firmaApps;
+        renderAppsList(apps);
+    }
+    document.activeElement !== sidebarAllowlistInput && (sidebarAllowlistInput.value = arrayOrCsv(field(t, "allowedPackages", "")));
+
+    // Comandos en el buzón del equipo (22/9/2026): lo que el panel mandó y el celular
+    // todavía no aplicó (dormido, sin red, FCM perdido). Se aplican solos al conectarse.
+    let pendHint = document.getElementById("pending-commands-hint");
+    if (!pendHint && sidebarTrustStatus && sidebarTrustStatus.parentNode) {
+        pendHint = document.createElement("p");
+        pendHint.id = "pending-commands-hint";
+        pendHint.style.cssText = "font-size:12px; color:var(--accent-orange, #ff9f0a); margin:6px 0 0 0;";
+        sidebarTrustStatus.parentNode.insertBefore(pendHint, sidebarTrustStatus.nextSibling);
+    }
+    if (pendHint) {
+        const pend = field(t, "pendingCommands", null);
+        const nPend = pend && typeof pend === "object" ? Object.keys(pend).length : 0;
+        pendHint.textContent = nPend > 0
+            ? "⏳ " + nPend + " comando(s) en cola: se aplican solos cuando el celular se conecte (hasta 15 min)."
+            : "";
+        pendHint.style.display = nPend > 0 ? "block" : "none";
+    }
     const s = !!(field(t, "hasPinConfigured") || field(t, "pinHash") && field(t, "pinSalt")),
         o = auth.currentUser ? auth.currentUser.uid : "",
         c = !!field(t, "trustedAdmins", {})[o];
@@ -619,7 +753,7 @@ function getAppIconUrl(packageName) {
     return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23a0aec0'><path d='M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z'/></svg>";
 }
 
-let currentSearchQuery = "", currentAppFilter = "all";
+let currentSearchQuery = "", currentAppFilter = "all", lastAppsListSignature = "";
 
 function renderAppsList(e) {
     sidebarAppsList.innerHTML = "";
@@ -643,7 +777,7 @@ function renderAppsList(e) {
         filtered = t.filter(app => app.appType === "Sistema" || app.appType === "Preinstalada");
     }
 
-    const n = filtered.filter(e => e.label.toLowerCase().includes(currentSearchQuery) || e.packageName.toLowerCase().includes(currentSearchQuery));
+    const n = filtered.filter(e => String(e.label || "").toLowerCase().includes(currentSearchQuery) || String(e.packageName || "").toLowerCase().includes(currentSearchQuery));
     0 !== n.length ? n.forEach(e => {
         const t = document.createElement("div");
         t.className = "app-item", e.isCritical && (t.style.borderLeft = "3px solid #7F8C8D");
@@ -1021,7 +1155,9 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                     // sin red, o con el canal de comandos desincronizado — y esa
                     // ultima causa (B.26) se arregla con el boton "Re-vincular",
                     // asi que hay que nombrarla donde el administrador la lee.
-                    setCommandStatus("⚠ El celular no confirmó en 10 s. Puede estar sin red o dormido. Si se repite, revisá el aviso de canal de comandos y probá \"Re-vincular\".");
+                    // 22/9/2026: el comando no se pierde — quedó en el buzón del equipo
+                    // (devices/<id>/pendingCommands) y se aplica solo cuando se conecte.
+                    setCommandStatus("⚠ El celular no confirmó en 10 s (dormido o sin red). El comando quedó en cola y se aplica solo cuando se conecte (hasta 15 min). Si nunca se aplica, revisá el aviso de canal de comandos y probá \"Re-vincular\".");
                 }
                 if (a) a.disabled = false;
                 if (i) i();
@@ -1064,12 +1200,16 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             }, 4000);
             return true;
         }
-    } catch (e) {
-        if ("PIN_REQUIRED" === e.message || "PIN_INCORRECT" === e.message) {
-            if ("PIN_INCORRECT" === e.message) {
+    } catch (err) {
+        // 22/9/2026: este catch se llamaba `e`, igual que el parámetro con el id del
+        // equipo. `verifiedDevicePins[e]` guardaba y borraba el PIN con la clave del
+        // ERROR ("Error: PIN_REQUIRED"), así que el PIN nunca quedaba recordado por
+        // equipo y un PIN equivocado no se olvidaba: se volvía a pedir de más.
+        if ("PIN_REQUIRED" === err.message || "PIN_INCORRECT" === err.message) {
+            if ("PIN_INCORRECT" === err.message) {
                 delete verifiedDevicePins[e];
             }
-            o = "PIN_INCORRECT" === e.message ? "PIN incorrecto. Intentá de nuevo." : "";
+            o = "PIN_INCORRECT" === err.message ? "PIN incorrecto. Intentá de nuevo." : "";
             const t = await showPinModal(r, o);
             if (!t) {
                 setCommandStatus("Cancelado — PIN requerido.");
@@ -1085,7 +1225,7 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             }
             continue;
         }
-        setCommandStatus("✗ Error: " + (e.message || "desconocido"));
+        setCommandStatus("✗ Error: " + (err.message || "desconocido"));
         if (a) a.disabled = false;
         if (i) i();
         return false;
@@ -1184,10 +1324,10 @@ function renderAppsUpdateModalList(apps) {
         
         item.innerHTML = `
             <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
-                <img src="${iconUrl}" style="width: 32px; height: 32px; border-radius: 6px; object-fit: contain; background-color: rgba(255, 255, 255, 0.05); padding: 2px;" />
+                <img src="${escapeHtml(iconUrl)}" style="width: 32px; height: 32px; border-radius: 6px; object-fit: contain; background-color: rgba(255, 255, 255, 0.05); padding: 2px;" />
                 <div style="min-width: 0; flex: 1;">
-                    <p style="margin: 0; font-weight: bold; color: var(--text-light); font-size: 13px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="${label}">${label}</p>
-                    <p style="margin: 0; color: var(--text-gray); font-size: 10px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="${pkg}">${pkg}</p>
+                    <p style="margin: 0; font-weight: bold; color: var(--text-light); font-size: 13px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="${escapeHtml(label)}">${escapeHtml(label)}</p>
+                    <p style="margin: 0; color: var(--text-gray); font-size: 10px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="${escapeHtml(pkg)}">${escapeHtml(pkg)}</p>
                 </div>
             </div>
         `;
@@ -2024,9 +2164,9 @@ function renderMasterProfiles() {
         if (graceActive) {
             const destino = masterProfileLabel(field(dev, "graceTargetProfile", "")) || "Nivel 1";
             aviso.innerHTML =
-                `⏳ <strong>${devName}</strong> está en período de gracia: ` +
-                `faltan <strong>${formatearRestante(graceRestante) || "menos de un minuto"}</strong> ` +
-                `y después se aplica solo <strong>${destino}</strong>. ` +
+                `⏳ <strong>${escapeHtml(devName)}</strong> está en período de gracia: ` +
+                `faltan <strong>${escapeHtml(formatearRestante(graceRestante) || "menos de un minuto")}</strong> ` +
+                `y después se aplica solo <strong>${escapeHtml(destino)}</strong>. ` +
                 `<button id="grace-cancel-btn" style="margin-left:8px; background:var(--navy-light); color:var(--text-light); border:none; padding:4px 10px; border-radius:6px; cursor:pointer; font-size:11px;">Cancelar el vencimiento</button>`;
             aviso.style.display = "block";
             const cancelBtn = document.getElementById("grace-cancel-btn");
@@ -2202,7 +2342,7 @@ function loadPresetsList() {
         const presets = snapshot.val() || {};
         renderPresetsList(presets);
     }).catch(err => {
-        presetsList.innerHTML = `<p class="error-text">Error al cargar perfiles: ${err.message}</p>`;
+        presetsList.innerHTML = `<p class="error-text">Error al cargar perfiles: ${escapeHtml(err.message)}</p>`;
     });
 }
 
@@ -3418,7 +3558,7 @@ function renderStoreApps(storeApps) {
         const tieneSha = typeof app.sha256 === "string" && /^[0-9a-f]{64}$/i.test(app.sha256);
         const shaFecha = app.sha256At ? new Date(app.sha256At).toLocaleDateString() : null;
         const shaHtml = tieneSha
-            ? `<p style="font-size:11px; color:var(--success-green); margin:6px 0 0 0;" title="${app.sha256}">
+            ? `<p style="font-size:11px; color:var(--success-green); margin:6px 0 0 0;" title="${escapeHtml(app.sha256)}">
                  ✓ Verificable${shaFecha ? ` — huella calculada el ${shaFecha}` : ""}
                </p>`
             : `<p style="font-size:11px; color:#e79b93; margin:6px 0 0 0;">
@@ -3426,9 +3566,9 @@ function renderStoreApps(storeApps) {
                </p>`;
         card.innerHTML = `
             <div>
-                <h3 style="margin-top:0; margin-bottom:8px;">${app.label}</h3>
-                <p style="font-size:12px; color:var(--text-gray); margin: 4px 0;"><strong>Paquete:</strong> ${app.packageName}</p>
-                <p style="font-size:11px; color:var(--accent); word-break:break-all; margin: 4px 0;"><strong>URL:</strong> ${app.apkUrl}</p>
+                <h3 style="margin-top:0; margin-bottom:8px;">${escapeHtml(app.label)}</h3>
+                <p style="font-size:12px; color:var(--text-gray); margin: 4px 0;"><strong>Paquete:</strong> ${escapeHtml(app.packageName)}</p>
+                <p style="font-size:11px; color:var(--accent); word-break:break-all; margin: 4px 0;"><strong>URL:</strong> ${escapeHtml(app.apkUrl)}</p>
                 ${shaHtml}
             </div>
             <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
@@ -3800,7 +3940,7 @@ function renderIabAudit() {
               '<span style="font-size:11px; font-weight:bold; white-space:nowrap; color:' + color + ';">' + etiqueta + '</span>' +
             '</div>' +
             '<div class="js-motivo" style="font-size:12px; color:var(--text-gray); margin-top:6px;"></div>' +
-            '<div style="font-size:11px; color:var(--text-gray); margin-top:4px;">' + (f.hits || 0) + ' vez/veces</div>';
+            '<div style="font-size:11px; color:var(--text-gray); margin-top:4px;">' + (Number(f.hits) || 0) + ' vez/veces</div>';
         // textContent: el nombre del paquete y el motivo vienen del equipo.
         card.querySelector(".js-pkg").textContent = f.packageName || "?";
         card.querySelector(".js-motivo").textContent = f.reason || "";
@@ -4188,7 +4328,7 @@ function renderWhitelistAudit(deviceId, audit) {
         row.innerHTML = `
             <div style="flex:1; min-width:0;">
               <div style="font-size:12px; color:var(--text-light); word-break:break-all;">${escapeHtml(e.domain)}</div>
-              <div style="font-size:10px; color:var(--text-gray);">${e.hits || 0} intento(s)</div>
+              <div style="font-size:10px; color:var(--text-gray);">${Number(e.hits) || 0} intento(s)</div>
             </div>
             <select class="wl-audit-app" style="background:var(--navy-dark); color:var(--text-light); border:1px solid var(--navy-light); border-radius:6px; font-size:11px; padding:4px; max-width:130px;">
               <option value="">Agregar a…</option>${opciones}

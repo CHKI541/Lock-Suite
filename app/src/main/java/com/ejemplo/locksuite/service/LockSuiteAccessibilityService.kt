@@ -672,6 +672,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // dispara los demás bloqueos (WhatsApp/MP/WebView/Ajustes), así que se maneja
         // aparte y barato. Detalle en handleScrollEvent().
         if (eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            // 22/9/2026 — el scroll dentro de la ventana del portal cautivo es SEÑAL DE VIDA
+            // (el usuario está leyendo los términos del Wi-Fi del avión). B.70 lo quiso
+            // contar, pero este `return` salía antes de llegar al código del portal: solo
+            // contaba CONTENT_CHANGED, y la ventana se podía cerrar con el usuario en
+            // plena lectura. Es una comparación de paquete: gratis en el camino caliente.
+            if (f.captivePortalGuard && captiveOpenedAt != 0L &&
+                CaptivePortalPolicy.isCaptivePortalWindow(packageName, null)
+            ) {
+                captiveLastActivityAt = SystemClock.elapsedRealtime()
+            }
             handleScrollEvent(ev, packageName, f)
             return
         }

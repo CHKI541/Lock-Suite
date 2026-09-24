@@ -703,7 +703,7 @@
       kv("Android", esc(String(campo("androidVersion", campo("androidSdkInt", "—"))))) +
       kv("LockSuite", esc(String(campo("appVersionName", "—"))) + " (" + esc(String(campo("appVersionCode", "—"))) + ")") +
       kv("Última vez", LS.fecha(campo("lastSeen", 0))) +
-      kv("Batería", campo("batteryLevel", null) != null ? campo("batteryLevel") + " %" : "—");
+      kv("Batería", campo("batteryLevel", null) != null ? esc(String(campo("batteryLevel"))) + " %" : "—");
 
     const salud = campo("dnsTunnelHealth", null);
     const chipSalud = salud === "OK" ? '<span class="ls-chip ok">OK</span>'
@@ -982,7 +982,7 @@
         '<div class="ls-tablewrap"><table class="ls-table"><thead><tr>' +
         "<th>Dominio</th><th>Intentos</th><th></th></tr></thead><tbody>" +
         filas.slice(0, 200).map((f) =>
-          "<tr><td style=\"font-family:monospace\">" + esc(f.domain) + "</td><td>" + (f.hits || 0) + "</td>" +
+          "<tr><td style=\"font-family:monospace\">" + esc(f.domain) + "</td><td>" + esc(String(f.hits || 0)) + "</td>" +
           '<td style="text-align:right"><button class="ls-btn ls-btn-sm" data-permitir="' +
           esc(f.domain) + '">Forzar permitir</button></td></tr>').join("") +
         "</tbody></table></div>";
@@ -1109,7 +1109,7 @@
    * ═══════════════════════════════════════════════════════════════════════ */
   /**
    * ⚠️ CADA COMANDO DE ESTA LISTA TIENE QUE EXISTIR EN LOS DOS LADOS: en el `when`
-   * de `LockSuiteFirebaseService` (el celular) y en `ALLOWED_COMMANDS` (la Cloud
+   * de `CommandProcessor` (el celular) y en `ALLOWED_COMMANDS` (la Cloud
    * Function). Lo verifica `tools/check_panel_commands.py`, y no es un trámite:
    * el modo de falla es MUDO. Un comando que la Function permite y el celular no
    * matchea sale, llega, y el panel muestra el tilde verde igual.

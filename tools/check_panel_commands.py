@@ -48,6 +48,10 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FUNCTIONS = os.path.join(RAIZ, "admin-backend", "functions", "index.js")
 SERVICE = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
                        "locksuite", "service", "LockSuiteFirebaseService.kt")
+# 22/9/2026: el `when` de comandos vive ahora en CommandProcessor.kt (lo comparten
+# FCM y el buzón). Se leen los dos archivos.
+PROCESSOR = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
+                         "locksuite", "service", "CommandProcessor.kt")
 POLICY_SPEC = os.path.join(RAIZ, "app", "src", "main", "java", "com", "ejemplo",
                            "locksuite", "mdm", "PolicySpec.kt")
 PANTALLAS = [
@@ -92,7 +96,8 @@ def permitidos():
 
 def ejecuta_el_celular():
     """Comandos que el celular matchea: el `when` grande más el registro PolicySpec."""
-    cmds = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', open(SERVICE, encoding="utf-8").read()))
+    fuente = open(PROCESSOR, encoding="utf-8").read() + "\n" + open(SERVICE, encoding="utf-8").read()
+    cmds = set(re.findall(r'"([A-Z][A-Z0-9_]+)"', fuente))
     if os.path.exists(POLICY_SPEC):
         cmds |= set(re.findall(r'"([A-Z][A-Z0-9_]+)"', open(POLICY_SPEC, encoding="utf-8").read()))
     return cmds

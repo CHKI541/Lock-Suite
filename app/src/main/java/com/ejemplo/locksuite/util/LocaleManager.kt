@@ -33,7 +33,7 @@ object LocaleManager {
         
         // Tabs
         "Políticas" to mapOf("es" to "Políticas", "en" to "Policies", "he" to "מדיניות"),
-        "Aplicaciones" to mapOf("es" to "Aplicaciones", "en" to "Applications", "he" to "אפליקציες"),
+        "Aplicaciones" to mapOf("es" to "Aplicaciones", "en" to "Applications", "he" to "אפליקציות"),
         "Servicios" to mapOf("es" to "Servicios", "en" to "Services", "he" to "שירותים"),
 
         // Filters
@@ -50,8 +50,8 @@ object LocaleManager {
 
         // Policy switch rows
         "Bloquear Restauración de Fábrica" to mapOf("es" to "Bloquear Restauración de Fábrica", "en" to "Block Factory Reset", "he" to "חסום איפוס יצרן"),
-        "Bloquear Instalación de Apps" to mapOf("es" to "Bloquear Instalación de Apps", "en" to "Block App Installations", "he" to "חסום התקנת אפליקציες"),
-        "Bloquear Desinstalación de Apps" to mapOf("es" to "Bloquear Desinstalación de Apps", "en" to "Block App Uninstallations", "he" to "חסום הסרת אפליקציες"),
+        "Bloquear Instalación de Apps" to mapOf("es" to "Bloquear Instalación de Apps", "en" to "Block App Installations", "he" to "חסום התקנת אפליקציות"),
+        "Bloquear Desinstalación de Apps" to mapOf("es" to "Bloquear Desinstalación de Apps", "en" to "Block App Uninstallations", "he" to "חסום הסרת אפליקציות"),
         "Bloquear ADB y Opciones de Desarrollador" to mapOf("es" to "Bloquear ADB y Opciones de Desarrollador", "en" to "Block ADB & Developer Options", "he" to "חסום ADB ואפשרויות מפתח"),
         "Bloquear Cambio de Usuario" to mapOf("es" to "Bloquear Cambio de Usuario", "en" to "Block User Switching", "he" to "חסום החלפת משתמש"),
         "Bloquear Modificación de Cuentas" to mapOf("es" to "Bloquear Modificación de Cuentas", "en" to "Block Account Modification", "he" to "חסום שינוי חשבונות"),

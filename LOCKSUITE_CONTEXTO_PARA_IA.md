@@ -147,6 +147,7 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - `INFORME_FORENSE_ACCESIBILIDAD_ANDROID13.md` (15/8) — diagnóstico completo del bug de accesibilidad en Android 13, con evidencia ADB (ver B.8).
 - `INSTRUCCIONES_COMPILACION_ANTIGRAVITY_2026-08-16.md` (16/8) — **empezar por acá si vas a compilar.** Qué entra en el build, comandos exactos, qué puede fallar, y en qué orden probar (B.8 primero, porque bloquea al resto).
 - `INFORME_OPTIMIZACION_ACCESIBILIDAD_2026-08-16.md` (16/8) — detalle línea por línea de la optimización de Capa 3 y del sobre-bloqueo de Mercado Pago, con el porqué de cada cambio y checklist de 9 puntos (ver B.13). Leerlo antes de tocar `LockSuiteAccessibilityService.kt`. **Ojo:** la parte que describe `BlockOverlayManager` como "una ventana por región" quedó desactualizada el 17/8 — ese archivo se reescribió a una sola capa de canvas (ver B.17).
+- `INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md` (25/9) — **EL MÁS NUEVO: empezá por acá si vas a commitear, desplegar o probar.** Los dos commits pendientes (A: la revisión del 23/9; B: los stubs) y cómo separarlos, el despliegue de 0.6.56, cómo subir los stubs a la Tienda, qué hacer en el celular del dueño (desinstalar la Maps real e instalar los stubs, en ese orden y **después** de 0.6.56) y la prueba en el auto. Ver B.87 y B.88. De las del 22/9 (`…_PRODUCCION.md`) y del 23/9 (`…_ANDROID_AUTO.md`), los commits y el despliegue ya están hechos (0.6.55).
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md` (16/9) — **EL MÁS NUEVO: empezá por acá si vas a compilar, desplegar o probar.** Los DOS commits que hay que hacer y en qué orden (uno es trabajo del 15/9 que estaba sin commitear), qué se tocó archivo por archivo con sus finales de línea, las tres cosas concretas que podrían fallar en Gradle y cómo cambiarlas sin tocar comportamiento, el orden de prueba **con las dos regresiones primero** (que el catálogo de ilustraciones siga rebotando, y que las ofertas de Mercado Pago sigan rebotando), y siete cosas que no hay que "simplificar". Ver B.67 a B.70.
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_PANEL_UNIFICADO.md` (10/9 noche) — **EL MÁS NUEVO: empezá por acá si vas a compilar o desplegar lo de la tanda del panel unificado (B.62 a B.66).** Qué se tocó archivo por archivo, qué mirar si Compose no compila (con las tres cosas concretas que podrían fallar y cómo cambiarlas sin tocar comportamiento), el orden de prueba con **la regresión que más importa primero** (que Mercado Pago siga pagando con los dominios de ofertas cerrados), lo que necesita al dueño y no a Antigravity (el APK oficial de Waze), y siete cosas que no hay que "simplificar".
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_MAESTRO.md` (10/9) — **EL PUNTO DE ENTRADA DE HOY. Empezá por acá si vas a aplicar, compilar, desplegar o probar.** Cubre las DOS tandas del 10/9 (B.58 por un lado; B.59/B.60/B.61 por el otro), en qué orden se aplican los dos parches y por qué no se pueden invertir, el orden de prueba **consolidado** (las regresiones de las dos juntas al principio), qué hace falta que haga Antigravity que ninguna sesión de IA pudo, qué se verificó sin equipo y cuánto pesa cada cosa, y qué hacer si algo sale mal. Los dos documentos de detalle de abajo siguen valiendo para el porqué de cada decisión.
@@ -203,6 +204,8 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - **(23/9) Para saber qué hace Android por dentro sin un equipo:** `sdkmanager --sdk_root=/opt/android-sdk "sources;android-36"` baja el código de la API pública con su Javadoc a `/opt/android-sdk/sources/android-36/` (por ejemplo `android/net/VpnService.java`). Lo que corre en el sistema (`services/…`, como `Vpn.java`) no viene ahí: se leyó del espejo de AOSP en GitHub (`aosp-mirror/platform_frameworks_base`). Así se verificó B.87 sin suponer.
 - **(23/9) `tools/ia_contenedor/setup_sdk.sh` fallaba en su último paso** (no copiaba el espejo de Maven: resolvía su ruta relativa después de hacer `cd` al SDK). Arreglado. Y `lintDebug` necesita dependencias que la compilación no baja: la primera vez, sin `--offline` (anotado en el README).
 - **(22/9) DECIMOTERCERA vez que `device_bash` no monta**, esta vez con las tres carpetas conectadas (la raíz, `app\src\main\java` y `admin-app\src\main\java`). La receta de siempre funcionó: clonar, trabajar en el clon, validar tamaños contra `device_list_dir` (esta vez los 24 archivos a tocar coincidían byte por byte con `HEAD`, en LF o CRLF), y escribir con `device_commit_files` + `expectedMtimeMs`.
+- **(25/9) Después de un despliegue de Antigravity, la base es `origin/main`, no el clon de antes.** Esta sesión venía del 23/9 con el clon basado en `fd76ccc`, y mientras tanto Antigravity commiteó y desplegó (`881aea1`, `0c87da2`, `e8f1d01`). Receta: `git fetch origin` y trabajar sobre `origin/main`. **Para saber si el disco tiene algo sin commitear, sin `git` ahí:** `device_list_dir` sobre `.git` da el `mtime` de `COMMIT_EDITMSG`, que es la hora del último commit en la PC. Un archivo con `mtime` posterior y tamaño distinto del de `HEAD` (contando los CRLF) tiene cambios sin commitear. Así apareció que la revisión del 23/9 (escrita a las 23:26, después del commit de las 21:49) había quedado afuera y necesitaba un commit aparte.
+- **(25/9) Se pueden armar, firmar e inspeccionar APKs chicos en el contenedor.** El SDK de `tools/ia_contenedor/setup_sdk.sh` trae `aapt2`, `zipalign` y `apksigner` (`build-tools;36.0.0`), y `keytool` viene con el JDK. La receta completa está en `tools/aa_stubs/build_stubs.sh`. Para mirar un APK ajeno: `aapt2 dump badging`, `aapt2 dump xmltree --file AndroidManifest.xml` y `apksigner verify --print-certs`. Una clave generada en el contenedor desaparece con él: para los stubs, además, se borró a propósito al firmar (B.88).
 
 ---
 
@@ -1595,7 +1598,7 @@ Además se encontraron dos fuentes de sobrebloqueo adicionales:
 
 **El marketplace sigue cerrado:** `listado.mercadolibre.com*` (búsquedas y catálogos), `click1.*` (redirecciones) y `snoopy.*` (telemetría) siguen bloqueados por DNS, y la navegación de compras queda cubierta estructuralmente por la Capa 3 (`MercadoPagoOffersPolicy`).
 
-**B.73 — REGLAS DE LA BASE: EL CELULAR NO PODÍA LEER SU PROPIA CONFIGURACIÓN, Y CUALQUIER SESIÓN ANÓNIMA PODÍA ADUEÑARSE DE UN EQUIPO AJENO. [ESCRITO Y PROBADO CONTRA EL EMULADOR REAL EL 22/9 — 44/44 en verde, 17 en rojo con las reglas viejas; SIN DESPLEGAR NI PROBAR EN EQUIPO]** *(23/9: el respaldo de las reglas publicadas que pide §2 de las instrucciones del 22/9 **se intentó y quedó VACÍO**: `scratch/reglas_publicadas_2026-09-22.json` pesa 0 bytes, porque el `firebase database:get /.settings/rules` se cortó por errores de red (`premature close`, ver `firebase-debug.log`). Sin eso no hay plan B para estas reglas. Rehacerlo antes de desplegar: recuadro de §1 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`.)*
+**B.73 — REGLAS DE LA BASE: EL CELULAR NO PODÍA LEER SU PROPIA CONFIGURACIÓN, Y CUALQUIER SESIÓN ANÓNIMA PODÍA ADUEÑARSE DE UN EQUIPO AJENO. [ESCRITO Y PROBADO CONTRA EL EMULADOR REAL EL 22/9 — 44/44 en verde, 17 en rojo con las reglas viejas; SIN DESPLEGAR NI PROBAR EN EQUIPO]** *(23/9: el respaldo de las reglas publicadas que pide §2 de las instrucciones del 22/9 **se intentó y quedó VACÍO**: `scratch/reglas_publicadas_2026-09-22.json` pesa 0 bytes, porque el `firebase database:get /.settings/rules` se cortó por errores de red (`premature close`, ver `firebase-debug.log`). Sin eso no hay plan B para estas reglas. Rehacerlo antes de desplegar: recuadro de §1 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`.)* *(25/9: **ya no está vacío.** Antigravity lo rehízo el 23/9 a las 21:32, antes de desplegar 0.6.55: 3.082 bytes, JSON válido e idéntico a las reglas del repo en `fd76ccc`, o sea las publicadas hasta ese momento. El plan B existe. Y 0.6.55 salió con `deploy_all.ps1`, que despliega `hosting,database`: si ese paso no falló, estas reglas ya están publicadas. Se confirma en Firebase Console → Realtime Database → Reglas: tiene que aparecer `deviceClaims`.)*
 
 Medido con el emulador real de Realtime Database (`firebase-tools` 13 + emulador 4.11.2), no razonado:
 
@@ -1702,7 +1705,7 @@ El guard cerraba la ventana del portal "por inactividad" mientras el usuario le�
 
 **B.86 — `UPDATE_APP` y el desbloqueo de desinstalación si el proceso muere a mitad de cierre. [VISTO EL 22/9; NO TOCADO]** `UpdateFlowManager.finish()` restaura `setUninstallBlocked` del paquete en un `postDelayed`; si el proceso muere justo en ese intervalo, esa app puede quedar desinstalable hasta que algo vuelva a aplicar su bloqueo. Caso borde; anotado para cuando se toque ese archivo.
 
-**B.87 — ANDROID AUTO NO ARRANCA CON LOCKSUITE: "Error de comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto". [ESCRITO Y COMPILADO EL 23/9 Y REVISADO LA MISMA NOCHE CONTRA REPORTES DE USUARIOS Y CÓDIGO DE ANDROID; PRUEBAS UNITARIAS EN VERDE; SIN PROBAR EN EQUIPO NI EN EL AUTO]**
+**B.87 — ~~ANDROID AUTO NO ARRANCA CON LOCKSUITE: "Error de comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto"~~ [RESUELTO 25/9 — CONFIRMADO EN EL AUTO: salió en 0.6.55 (commit `0c87da2`, desplegado el 23/9 a las 21:49) y con esa versión el error 21 ya no aparece: Android Auto pasa a su pantalla de "Descargá apps de Google Play", que es otro problema y sigue en B.88]**
 
 Reporte del dueño con dos capturas: la pantalla roja de Android Auto con ese error, y su "Ayuda con la conexión", que sugiere dos cosas: desactivar la VPN y desactivar la depuración por USB. En la captura del error se ve el ícono de Bluetooth: lo más probable es que sea **Android Auto inalámbrico**.
 
@@ -1737,7 +1740,7 @@ Reporte del dueño con dos capturas: la pantalla roja de Android Auto con ese er
 - **No se usa `allowBypass()`:** dejaría a cualquier app salir del filtro con solo atarse a la Wi-Fi.
 - **No se apaga el filtro al conectar el auto:** dejaría todo el equipo sin filtro mientras se maneja, y no hace falta si la exclusión anda. Queda como último recurso.
 
-**Falta probar**, en este orden (detalle en `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`):
+*(25/9: lo que sigue ya no hace falta. Con 0.6.55 el error 21 no apareció más en el auto; el script de ADB queda para diagnosticar si algún día vuelve.)* **Falta probar** (al 23/9), en este orden (detalle en `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`):
 
 1. Regresión: internet y filtro igual que antes.
 2. Por ADB (`check_android_auto.ps1`): que Android Auto no comparta UID con Play Services, que la VPN esté sin lockdown, que el Bluetooth no esté bloqueado, y que la UID de Android Auto quedó **fuera** de los rangos de la VPN. La lógica del script se probó en el contenedor con 12 casos (formato real de `ip rule` del A06 y variantes); el PowerShell en sí no se pudo correr.
@@ -1747,46 +1750,88 @@ Reporte del dueño con dos capturas: la pantalla roja de Android Auto con ese er
 
 Fuentes de la revisión: foro de GrapheneOS (`discuss.grapheneos.org/d/10149` y `/d/28759`), TechRadar (*"Google needs to stop blocking VPNs on Android Auto"*), Engadget (*"How to use Android Auto without turning off your VPN"*), SlashGear, issues de AdGuard (`AdGuardVPNForAndroid#551`, `AdguardForAndroid#5672`), Tailscale (`#3828`), RethinkDNS (`rethink-app#2685`), el foro de Microsoft Defender, y el código de Android: Javadoc de Android 36 (`VpnService`, `UserManager`, `DevicePolicyManager`) y AOSP (`Vpn.java`, `UsbDeviceManager.java`).
 
+
+**B.88 — ANDROID AUTO: LA PANTALLA "DESCARGÁ APPS DE GOOGLE PLAY" NO DEJA SEGUIR SIN GOOGLE MAPS Y LA APP DE GOOGLE. SOLUCIÓN: STUBS VACÍOS, WAZE PARA NAVEGAR. [ESCRITO, COMPILADO Y CON PRUEBAS EN VERDE EL 25/9 (18/18, 5 nuevas con control negativo); SIN DESPLEGAR NI PROBAR EN EL AUTO]**
+
+Con B.87 resuelto, Android Auto conecta y muestra una lista: Android Auto (instalada), **App de Google (no instalada)**, **Google Maps (no instalada)**, Texto a voz de Google (instalada), con "Descargar" y "Salir". *Descargar* abre Play Store, que LockSuite bloquea, y se traba; **"Salir" cierra Android Auto** (probado por el dueño). Pedido textual: *"sin descargarlas realmente, porque no son kosher, ni que aparezcan en el auto; que el sistema piense que están"*, y después: *"que sea kosher con navegación"*.
+
+**Medido en el celular del dueño (ADB, 25/9):**
+
+- `com.google.android.googlequicksearchbox`: **no existe** en el equipo, ni siquiera en el sistema.
+- `com.google.android.apps.maps`: la Maps **real**, instalada como app común (`/data/app`), **oculta** (`hidden=true`). Para Android Auto un paquete oculto es un paquete no instalado.
+- `com.waze`: viene **de fábrica en el sistema** (`/system/priv-app/Waze`) con una actualización encima, visible y habilitado. El dueño confirmó que es **el oficial**, actualizado desde Play Store, y que LockSuite ya le bloquea el navegador.
+
+**Lo que se descartó, y por qué:**
+
+- **"Que el sistema piense que están" sin instalar nada:** no existe ninguna API de Android, ni para un Device Owner, que haga a PackageManager reportar un paquete inexistente. La versión real de esa idea son los stubs.
+- **"Recortar" Google Maps o poner "Waze con nombre de Maps":** cualquier cambio a un APK obliga a re-firmarlo, y **Android Auto verifica la firma** de las apps de navegación de Google (Maps y Waze usan una integración privada, no el SDK público). Confirmado por la comunidad de celulares kosher: foro JTech, hilo *"Modded Waze with Android Auto"* (julio 2025 – septiembre 2026): *"AA verifies the signature on Waze"*. Un Waze re-firmado no aparece nunca en el auto; "Orígenes desconocidos" en las opciones de desarrollador de Android Auto no lo arregla, y lo único que lo logró fue root + LSPosed. **Por eso el Waze "kosher" de la Tienda (firmado por `ANDROID-KOSHER/YOLEVI`, B.66) no sirve para el auto.** Además, modificar y redistribuir una app de Google es otro problema.
+- **Instalar las apps reales y suspenderlas:** lo descartó el dueño ("no se verá kosher"). Además, una Maps real suspendida puede seguir apareciendo en el lanzador del auto.
+
+**La solución: stubs.** Una app **vacía** con el nombre del paquete. Android Auto solo verifica que el paquete exista: los stubs de la comunidad (`aa4mg`, `SolidEva/android-auto-stub`, `rik-shaw/aa-stubs`) son **exactamente un `<application/>` vacío**, medido el 25/9 con `aapt2` sobre los APK reales. Se armaron propios en `tools/aa_stubs/` (script reproducible `build_stubs.sh`):
+
+- `hasCode="false"` y **sin `classes.dex`** (no pueden ejecutar nada); sin activities, services, receivers ni providers (sin ícono, no aparecen en el auto); `versionCode` 2100000000; etiqueta honesta, *"Stub de Maps / de Google para Android Auto (LockSuite)"*; 8,5 KB cada uno.
+- Firmados con una clave nueva, `CN=LockSuite Android Auto stub`, **que se borró al firmar**: nadie puede producir otra app con ese certificado. El stub de Maps de la comunidad está firmado con la **clave de prueba pública de Android**, y cualquiera podría publicarle una "actualización".
+
+**Lo que cambió en LockSuite (`mdm/AndroidAutoStubs.kt`, nuevo), y por qué hacía falta.** Sin esto LockSuite rompía los stubs sola, por tres caminos:
+
+- el de Google se llama como una app de `DEFAULT_BLOCKED_PACKAGES` (se suspende) y de `PopularNonKosherApps` (se oculta);
+- el de Maps hereda la marca `hide_com.google.android.apps.maps` de la Maps real, y `PackageReceiver` lo ocultaba apenas se instalaba;
+- con la instalación bloqueada, `PackageReceiver` lo **desinstalaba** por "no autorizado".
+
+Los cambios:
+
+1. **Reconocimiento por firma, nunca por nombre** (`isStub()`, con caché por `lastUpdateTime`; para cualquier otro paquete cuesta una búsqueda en un Set de dos elementos). La Maps y la App de Google reales, y cualquier imitación, se tratan igual que siempre.
+2. **`AppController.isCritical()` los cuenta como críticos.** Todos los caminos que ocultan, suspenden o auto-desinstalan lo consultan (`hideApp`, `suspendApp`, `uninstallApp`, la reaplicación de 15 min, `PackageReceiver`, la suspensión de emergencia, `setBlockPopularNonKosher`), así que un solo punto los cubre todos.
+3. **Auto-reparación** en la reaplicación de `PolicyManager`: si un stub quedó oculto o suspendido de antes, se deshace.
+4. **Estado real en el panel:** `isAppHidden`/`isAppSuspended` informan el estado del sistema para los stubs, no las marcas heredadas de la app real.
+5. **La Tienda los deja instalar a cualquier equipo sin pedirlos** (pedido del dueño: *"que los pueda descargar cualquiera, igual son vacíos"*). Se los reconoce por la **huella exacta del archivo** (`APK_SHA256`), y `downloadAndInstallApk` ya compara el archivo bajado contra esa huella y falla cerrado. ⚠️ **No se agregan a `allowedPackages` a propósito:** esa lista es por nombre, y además hace que `PackageReceiver` deje de desinstalar la app, así que habría permitido la Maps real. Si la app real ya está en el equipo, la tarjeta lo explica en vez de fallar con un error mudo de firma, y distingue dos casos: **instalada** como app común, aunque esté oculta (se desinstala y listo), o **de fábrica** (en ese equipo el stub no se puede instalar nunca).
+
+**Para sacarlos** (vuelta atrás): ADB o Ajustes → Apps, con "Bloquear desinstalación de apps" apagado. LockSuite no los desinstala, ni desde su propio panel, porque cuentan como críticos.
+
+**De paso, un error viejo corregido:** en hebreo, la pestaña "Aplicaciones" y los interruptores "Bloquear instalación/desinstalación de apps" decían `אפליקציες`, con las dos últimas letras en **griego** (desde el primer commit, `LocaleManager.kt`). Ahora dicen `אפליקציות`. Importa porque el aviso nuevo de la Tienda nombra esa pestaña.
+
+**Verificado en el contenedor:** compila; 18/18 pruebas unitarias, 5 nuevas (`AndroidAutoStubsTest`, con el certificado real del stub y, como control negativo, el de prueba de Android). Están vivas: con la huella del código alterada en un carácter fallan 2, y con la regla de "de fábrica" invertida falla la de la Tienda. Ningún aviso de lint en las líneas tocadas. `tools/aa_stubs/check_stubs.py` da VERDE, y ROJO con un byte cambiado. Los APK se revisaron con `aapt2` y `apksigner` (manifiesto, contenido del zip, firma v2+v3).
+
+**Falta, en este orden** (detalle en `INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md`):
+
+1. Desplegar LockSuite 0.6.56. **Tiene que estar en el celular ANTES que los stubs**, o 0.6.55 los oculta, suspende o desinstala.
+2. Subir los dos APK al release `store-apks-v1` y cargarlos en `storeApps` con su huella.
+3. En el celular del dueño, **desinstalar la Maps real**: es una app común, sin copia de sistema, así que se va entera. Después, instalar los dos stubs desde la Tienda.
+4. Conectar al auto: la pantalla de "Descargar" tiene que mostrar todo instalado, seguir, y Waze tiene que aparecer en la pantalla del auto.
+
+**Riesgos que no se pudieron descartar desde acá:**
+
+- **Play Protect** podría avisar sobre un paquete con nombre de Google firmado por otro. Si lo hace, "Instalar de todas formas".
+- Que alguna versión futura de Android Auto pida algo más que la presencia del paquete. Hoy la comunidad reporta que alcanza.
+- En otros equipos donde la App de Google o Maps **vengan de fábrica** (en el sistema, que es lo común en celulares con Google), el stub no se puede instalar: la copia del sistema sigue ahí aunque se desinstalen sus actualizaciones, y su firma manda. La Tienda lo dice en la tarjeta (*"en este equipo la app real viene de fábrica"*). Para esos equipos la salida es otra (por ejemplo, des-ocultar la real y suspenderla), a decidir con el dueño cuando aparezca el caso.
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**23/9 — Claude (Cowork, contenedor en la nube): Android Auto no arrancaba con LockSuite ("error de comunicación 21"). Ver B.87.**
+**23/9 al 25/9 — Claude (Cowork, contenedor en la nube): Android Auto con LockSuite. El "error de comunicación 21" quedó resuelto y confirmado en el auto (B.87). Detrás apareció la pantalla "Descargá apps de Google Play", que quedó resuelta en código con stubs vacíos y Waze para navegar (B.88): compilado y probado en el contenedor, sin desplegar.**
 
-El pedido del dueño: *"al usar VPN no logra conectarse"*, con dos capturas: la pantalla roja de Android Auto (*"Error de comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto"*) y su ayuda de conexión (desactivar la VPN, desactivar la depuración por USB).
+**23/9 — el error 21 (B.87).** El dueño mandó la pantalla roja de Android Auto (*"Error de comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto"*).
 
-Qué se encontró y qué se hizo:
+- **Causa:** con la VPN permanente de LockSuite encima, el Android Auto **inalámbrico** no puede usar la Wi-Fi del auto. Con cable anda, porque va por USB.
+- **Arreglo:** Android Auto sale del túnel con `addDisallowedApplication`, como ya salía LockSuite. Un solo archivo (`KosherVpnService.kt`). Se verificó en el código de AOSP que un equipo sin Android Auto no pierde el filtro. No se excluyó Play Services (reabriría B.43) ni se usó `allowBypass()`.
+- **Revisión, esa misma noche** (pedido del dueño): los reportes de usuarios de otras VPN coinciden en que excluir solo Android Auto alcanza, siempre que la VPN no esté en lockdown, y LockSuite no lo usa. Se corrigió un comentario inexacto del código y se reforzó el script de ADB de las instrucciones.
 
-1. **Causa:** con la VPN permanente de LockSuite encima, el Android Auto **inalámbrico** no puede usar la Wi-Fi del auto (una VPN sin `allowBypass()` no deja que las apps que cubre elijan otra red). El de cable anda con VPN porque va por USB. El "error 21" es una falla genérica de comunicación; la frase de la VPN es la sospecha de Android Auto.
-2. **Arreglo:** Android Auto (`com.google.android.projection.gearhead`) sale del túnel con `addDisallowedApplication`, como ya salía LockSuite. Un solo archivo (`KosherVpnService.kt`), sin tocar rutas ni la lógica de reestablecimiento.
-3. **Verificado en el código de Android, no supuesto:** un equipo sin Android Auto no pierde el filtro (el sistema saltea el paquete inexistente, `establish()` no falla), y la visibilidad de paquetes no interfiere.
-4. **Decidido y escrito en el código:** NO se excluye Google Play Services (reabriría B.43) ni se usa `allowBypass()`.
+Antigravity commiteó lo del 22/9 (`881aea1`) y lo del 23/9 (`0c87da2`), y desplegó **0.6.55** (`e8f1d01`, 23/9 21:49). Antes rehízo el respaldo de las reglas publicadas, que había quedado vacío (ver B.73). La revisión de la noche se escribió en el disco después, a las 23:26, así que quedó sin commitear: es el commit A de "Estado del repo".
 
-Cómo se verificó:
+**25/9 — confirmado en el auto: con 0.6.55 el error 21 ya no aparece.** B.87 tachado.
 
-- **Base igual al disco:** el clon se llevó al estado del disco aplicando el parche del 22/9 y se comparó: el contexto, idéntico byte a byte salvo los CRLF; `KosherVpnService.kt`, mismo tamaño exacto contando los CRLF (73.555 + 1.346 líneas = 74.901 bytes).
-- **Gradle de verdad en el contenedor:** `compileDebugKotlin` OK; `testDebugUnitTest` 13/13; `lintDebug` sin avisos nuevos (los 3 del archivo son de código viejo que solo se corrió de línea). La clase compilada contiene el paquete nuevo.
-- **El script de ADB de las instrucciones** (`check_android_auto.ps1`, versión de la revisión): su lógica, con las mismas expresiones regulares y decisiones, probada contra el formato real de `ip rule` del A06 y variantes, 12/12. El PowerShell en sí no se pudo correr (GitHub da 403 desde el contenedor para bajar `pwsh`).
-- **El procedimiento de los dos commits** (`git apply --cached` de cada parche) se simuló en un repo en `fd76ccc` con el disco imitado (CRLF, `core.autocrlf` y `filemode = false`, como la PC): mismos árboles que los commits de la sesión y `git status` limpio.
-- **Documentación y código de Android:** Javadoc de `addDisallowedApplication` y `allowBypass` (fuentes de Android 36 bajadas con `sdkmanager`) y `Vpn.java` de AOSP.
-- **Nada probado en un equipo real ni en el auto.** Por eso no se tachó nada de B.
+**25/9 — la pantalla "Descargá apps de Google Play" (B.88).** Android Auto conecta y pide la App de Google y Google Maps. "Descargar" abre Play Store, que LockSuite bloquea, y "Salir" cierra Android Auto. El dueño pidió que no se instalen de verdad ni aparezcan en el auto: kosher y con navegación. La navegación la hace **Waze, el oficial de Play Store**, que ya tiene y al que LockSuite ya le bloquea el navegador.
 
-**Revisión, la misma noche** (pedido del dueño: *"revisá lo que hiciste, fijate que Android Auto funcionara"*). Se buscó evidencia de que excluir Android Auto alcanza, porque es lo único que no se puede probar desde el contenedor (sin KVM no hay emulador, y el celular está en otra red):
+- **Medido por ADB en su celular:** la App de Google no existe; la Maps real está instalada como app común, oculta; Waze viene del sistema, con una actualización encima.
+- **Descartado:** fingir un paquete sin instalar nada (no hay API para eso); recortar Maps o poner "Waze con nombre de Maps" (Android Auto verifica la firma, lo confirma el foro JTech); suspender las apps reales (lo descartó el dueño).
+- **Hecho:** dos stubs vacíos propios en `tools/aa_stubs/`, sin código ni componentes, firmados con una clave que se borró al firmar. LockSuite los reconoce **por la firma** (`mdm/AndroidAutoStubs.kt`, más un punto en `AppController.isCritical()`): no los oculta, no los suspende, no los desinstala, y los repara si algo se les coló. La Tienda los deja instalar a cualquier equipo, reconociéndolos por la huella exacta del archivo (pedido del dueño: *"que los pueda descargar cualquiera, igual son vacíos"*). Si en el equipo ya está la app real, la tarjeta explica qué hacer.
+- **Verificado en el contenedor:** compila; 18/18 pruebas unitarias (5 nuevas, con control negativo); lint sin avisos en las líneas tocadas; `check_stubs.py` en VERDE; los APK revisados con `aapt2` y `apksigner`.
+- **No probado en el celular ni en el auto.** Por eso B.88 queda abierto.
 
-- **Evidencia:** los reportes de usuarios de varias VPN coinciden. Con cable anda con VPN; el inalámbrico falla; y excluir **solo** Android Auto lo arregla en el acto, **siempre que la VPN no esté en lockdown** ("kill switch"). LockSuite cumple las dos condiciones: excluye Android Auto y no usa lockdown, y `DISALLOW_CONFIG_VPN` impide prenderlo. Ningún reporte necesitó excluir Play Services. Fuentes al pie de B.87.
-- **Corregido:** el comentario del código decía que Android Auto "se niega a arrancar si su red es una VPN". Es inexacto: con cable anda. Ahora explica el mecanismo real, que el error 21 es genérico, y que el arreglo depende de que no haya lockdown. También quedó anotado en B.4.
-- **Revisadas las demás restricciones de LockSuite** que podían cruzarse con Android Auto: Bluetooth (si se bloquea, el inalámbrico no puede andar), Wi-Fi (solo afecta a Ajustes), transferencia por USB (solo MTP/PTP, medido en AOSP) y depuración por USB (ya apagada por los perfiles). Dos casos borde anotados sin tocar: la suspensión de emergencia y `UPDATE_APP`.
-- **Script de ADB reforzado:** además de la exclusión, ahora chequea UID compartida con Play Services, lockdown y Bluetooth bloqueado. Las pruebas en el auto priorizan el inalámbrico, y dicen cómo leer el error si sigue: con el script en VERDE, la VPN ya no está en el camino aunque el mensaje la nombre.
-- **Límite honesto:** con esto el arreglo coincide con la configuración que a otros les funcionó, pero **la confirmación es la prueba en el auto**.
-
-De paso, dos cosas más:
-
-- **El respaldo de las reglas del 22/9 está vacío** (0 bytes): el comando de Firebase se cortó por errores de red. Es el plan B de B.73, así que hay que rehacerlo antes de desplegar (anotado en B.73 y en las instrucciones).
-- `tools/ia_contenedor/setup_sdk.sh` fallaba en su último paso (ruta relativa después de un `cd`), y el README no avisaba que `lintDebug` necesita bajar dependencias la primera vez. Los dos arreglados (ver sección A).
-
-**Lo del 22/9 sigue sin commitear, desplegar ni probar.** Lo del 23/9 va encima: dos commits en orden, sin descartar nada del disco. Lo que sigue: **`INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`** (commitear los dos → seguir las del 22/9 para desplegar → pruebas de Android Auto).
+**Lo que sigue: `INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md`.** Los dos commits, desplegar 0.6.56, subir los stubs a la Tienda, y en el celular del dueño desinstalar la Maps real, instalar los stubs y probar en el auto. **El orden importa: 0.6.56 tiene que estar en el celular antes que los stubs.**
 
 ---
 
@@ -1794,50 +1839,41 @@ De paso, dos cosas más:
 
 ### Estado de versiones
 
-- **0.6.54 / código 117 (`2ead7d5`):** la última desplegada (B.72). Commit de documentación posterior: `fd76ccc`.
-- **22/9 y 23/9: dos sesiones escritas en el disco del dueño, SIN COMMITEAR AHÍ**, y sin subir versión (lo hace `deploy_all.ps1`). En las dos, `device_bash` no montó y sin él no hay `git` sobre el disco. Al 23/9 el `HEAD` del disco sigue en `fd76ccc` (leído de `.git/logs/HEAD`). Cada sesión dejó su commit hecho en el clon, más **parche + mensaje** en `Claude outputs/` (`2026-09-22_*` y `2026-09-23_*`). **Los dos tocan `KosherVpnService.kt` y este documento**, así que el `git add` de las instrucciones del 22/9 ya no sirve tal cual: metería lo del 23/9 en el commit del 22/9. El procedimiento que los separa sin descartar nada (`git apply --cached` de cada parche + `git commit`) está en §0 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`, probado en el contenedor.
+- **0.6.55 / código 118 (`e8f1d01`, 23/9 21:49):** la última desplegada. Trae lo del 22/9 (`881aea1`, B.73 a B.86) y el arreglo de Android Auto del 23/9 (`0c87da2`, B.87, confirmado en el auto el 25/9). Al 25/9, `origin/main` está ahí, y el `HEAD` del disco también: el `mtime` de `.git/COMMIT_EDITMSG` y de `.git/index` es 23/9 21:49, y no hubo commits después.
+- **En el disco del dueño hay dos commits pendientes, SIN COMMITEAR, que van en este orden:**
+  - **A — revisión del 23/9 a la noche** (B.87; solo documentación y comentarios): `KosherVpnService.kt`, este documento e `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`. Están en el disco desde el 23/9 a las 23:26, después del commit de Antigravity.
+  - **B — stubs de Android Auto (25/9, B.88).**
+  - Cada uno tiene **parche + mensaje** en `Claude outputs/` (`2026-09-25_A_*` y `2026-09-25_B_*`). Los dos tocan este documento, así que un `git add` los mezclaría. El procedimiento que los separa sin descartar nada (`git apply --cached` de cada parche + `git commit`) está en §0 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md`, probado en el contenedor.
+  - ⚠️ `deploy_all.ps1` hace `git add .`: si se corre antes de los dos commits, los mete adentro de "Actualizacion automatica".
 
-### Archivos tocados el 23/9
+### Archivos del commit B (25/9)
 
-Mismo criterio de finales de línea: como estaban en el disco. **CRLF** en `KosherVpnService.kt` y este documento; **LF** en `setup_sdk.sh`, `README.md` de `tools/ia_contenedor/` y el archivo nuevo.
+Finales de línea como estaban en el disco: **CRLF** en `PolicyManager.kt`, `LoginActivity.kt` y este documento; **LF** en `AppController.kt`, `LocaleManager.kt` y los archivos nuevos. Con `core.autocrlf` prendido, a git le da igual.
 
 ```
-app/src/main/java/com/ejemplo/locksuite/service/KosherVpnService.kt     (B.87)
-tools/ia_contenedor/setup_sdk.sh                                          (ruta relativa después del cd)
-tools/ia_contenedor/README.md                                             (lint: la primera vez, en línea)
+app/src/main/java/com/ejemplo/locksuite/mdm/AndroidAutoStubs.kt          (NUEVO)
+app/src/main/java/com/ejemplo/locksuite/mdm/AppController.kt             (isCritical, isAppHidden, isAppSuspended)
+app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt             (auto-reparación en la reaplicación)
+app/src/main/java/com/ejemplo/locksuite/ui/auth/LoginActivity.kt         (Tienda)
+app/src/main/java/com/ejemplo/locksuite/util/LocaleManager.kt            (hebreo: letras griegas en "אפליקציות")
+app/src/test/java/com/ejemplo/locksuite/mdm/AndroidAutoStubsTest.kt      (NUEVO)
+tools/aa_stubs/{README.md, build_stubs.sh, check_stubs.py}               (NUEVOS)
+tools/aa_stubs/apk/{aa-stub-maps.apk, aa-stub-google.apk}                (NUEVOS, binarios de 8,5 KB)
 LOCKSUITE_CONTEXTO_PARA_IA.md
-INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md                     (NUEVO)
+INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md               (NUEVO)
 ```
 
-### Archivos tocados el 22/9
-
-Finales de línea: se escribieron igual que estaban en el disco. **LF** en `database.rules.json`, `LockSuiteApplication.kt`, `UninstallReceiver.kt`, `DnsPacketParser.kt`, `UpdateFlowManager.kt` y los archivos nuevos; **CRLF** en todo lo demás, este documento incluido. Con `core.autocrlf` prendido, a git le da igual.
+### Archivos del commit A (revisión del 23/9)
 
 ```
-admin-backend/database.rules.json
-admin-backend/functions/index.js
-admin-backend/public/{app.js, comun.js, celular.js, index.html, celular.html, dominios.html}
-app/src/main/java/com/ejemplo/locksuite/LockSuiteApplication.kt
-app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt
-app/src/main/java/com/ejemplo/locksuite/receiver/{PackageReceiver.kt, UninstallReceiver.kt}
-app/src/main/java/com/ejemplo/locksuite/service/CommandProcessor.kt          (NUEVO)
-app/src/main/java/com/ejemplo/locksuite/service/{LockSuiteFirebaseService.kt, KosherVpnService.kt,
-        LockSuiteAccessibilityService.kt, WatchdogForegroundService.kt}
-app/src/main/java/com/ejemplo/locksuite/util/CommandMailbox.kt               (NUEVO)
-app/src/main/java/com/ejemplo/locksuite/util/{DnsPacketParser.kt, FirebaseDeviceSync.kt,
-        SelfUpdater.kt, UpdateFlowManager.kt}
-app/src/main/java/com/ejemplo/locksuite/worker/WatchdogWorker.kt
-app/src/test/java/com/ejemplo/locksuite/util/{CommandMailboxTest.kt, DnsPacketParserTest.kt}   (NUEVOS)
-tools/{check_command_sync.py, check_panel_commands.py}
-tools/rules_tests/     (NUEVA: pruebas de reglas contra el emulador)
-tools/ia_contenedor/   (NUEVA: receta para compilar en el contenedor de una IA)
+app/src/main/java/com/ejemplo/locksuite/service/KosherVpnService.kt     (solo comentarios)
 LOCKSUITE_CONTEXTO_PARA_IA.md
-INSTRUCCIONES_ANTIGRAVITY_2026-09-22_PRODUCCION.md                           (NUEVO)
+INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md
 ```
 
 ### Antes de desplegar
 
-Los seis chequeos de siempre, y ahora también las reglas:
+Los seis chequeos de siempre, las reglas, y desde el 25/9 los stubs:
 
 ```
 python tools/check_whitelist_sync.py
@@ -1846,7 +1882,8 @@ python tools/check_command_sync.py
 python tools/check_panel_commands.py
 python tools/gen_catalog_js.py --check
 python tools/gen_policies_js.py --check
+python tools/aa_stubs/check_stubs.py                # NUEVO: los APK de los stubs == las huellas del código
 cd tools/rules_tests && npm install && npm test      # tiene que decir TODAS VERDES (44)
 ```
 
-**No hay comandos FCM nuevos, pero `functions` SÍ cambió** (buzón). **Cache-busters ya subidos:** `app.js?v=40`, `comun.js?v=2`, `celular.js?v=3`. **El orden de despliegue importa:** ver las instrucciones.
+**0.6.56 es solo la app Android:** no cambian el panel, ni `functions`, ni las reglas, y no hay comandos FCM nuevos. Los stubs no van en el APK de LockSuite: se suben aparte a la Tienda (ver las instrucciones).

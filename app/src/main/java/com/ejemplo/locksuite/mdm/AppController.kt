@@ -109,7 +109,12 @@ class AppController(private val context: Context) {
     )
 
     fun isCritical(packageName: String): Boolean {
-        return packageName in systemEssential || packageName in launcherPackages
+        return packageName in systemEssential || packageName in launcherPackages ||
+            // Los stubs de Android Auto (B.88): si se ocultan, suspenden o desinstalan,
+            // Android Auto vuelve a pedir "Descargar" y no deja seguir. Se reconocen por
+            // la FIRMA, no por el nombre: la Maps y la App de Google reales (y cualquier
+            // imitación) siguen tratándose como siempre. Ver AndroidAutoStubs.
+            AndroidAutoStubs.isStub(context, packageName)
     }
 
     // Devuelve true si la app NO puede ocultarse ni suspenderse (pero sí puede tener
@@ -274,6 +279,10 @@ class AppController(private val context: Context) {
             false
         }
         if (osHidden) return true
+        // Un stub de Android Auto hereda la marca `hide_` de la app real que reemplaza,
+        // pero nunca se oculta (B.88): informar la marca haría que el panel diga "oculta"
+        // sobre algo visible. Para los stubs vale solo el estado real del sistema.
+        if (AndroidAutoStubs.isStub(context, packageName)) return false
         val prefs = PrefsHelper.getMdmPrefs(context)
         return prefs.getBoolean("hide_$packageName", false)
     }
@@ -349,6 +358,16 @@ class AppController(private val context: Context) {
     }
 
     fun isAppSuspended(packageName: String): Boolean {
+        // Stub de Android Auto (B.88): el de Google se llama como una app de
+        // DEFAULT_BLOCKED_PACKAGES, así que por las preferencias figuraría "suspendida"
+        // sin estarlo. Para los stubs vale solo el estado real del sistema.
+        if (AndroidAutoStubs.isStub(context, packageName)) {
+            return try {
+                dpm.isPackageSuspended(adminComponent, packageName)
+            } catch (e: Exception) {
+                false
+            }
+        }
         val prefs = PrefsHelper.getMdmPrefs(context)
         val defaultSuspended = DEFAULT_BLOCKED_PACKAGES.contains(packageName)
         val hasExplicitPref = prefs.contains("suspend_$packageName")

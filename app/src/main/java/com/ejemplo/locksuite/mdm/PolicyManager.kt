@@ -2464,6 +2464,20 @@ class PolicyManager(private val context: Context) {
             }
         }
 
+        // Stubs de Android Auto (B.88). El bucle de arriba ya no los toca (cuentan como
+        // críticos), pero eso solo impide ocultarlos DE ACÁ EN ADELANTE. Si uno quedó oculto
+        // o suspendido de antes —por ejemplo, se instaló con una versión de LockSuite que
+        // todavía no lo reconocía y PackageReceiver lo ocultó—, se deshace acá. Sin esto
+        // Android Auto lo ve como "no instalada" y vuelve a pedir "Descargar".
+        try {
+            val corregidos = AndroidAutoStubs.asegurarVisibles(context, dpm, adminComponent)
+            if (corregidos > 0) {
+                android.util.Log.i("PolicyManager", "Stubs de Android Auto: $corregidos corrección(es) de visibilidad")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         // Re-aplicar restricciones de instalación
         refreshInstallRestriction()
 

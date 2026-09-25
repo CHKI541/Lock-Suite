@@ -833,7 +833,28 @@ fun LoginScreen(
                         ) {
                             items(storeAppsList.size) { index ->
                                 val app = storeAppsList[index]
-                                val isAllowed = allowedPackagesSet.contains(app.packageName)
+                                // B.88 — los stubs de Android Auto se instalan sin pedirlos, en
+                                // cualquier equipo: son apps vacías. Se reconocen por la huella
+                                // EXACTA del archivo (AndroidAutoStubs.APK_SHA256), no por el
+                                // nombre: una entrada con la Maps o la App de Google REALES
+                                // bajo ese nombre sigue necesitando permiso. Ver el porqué de no
+                                // usar allowedPackages en AndroidAutoStubs.APK_SHA256.
+                                val esStubAa = com.ejemplo.locksuite.mdm.AndroidAutoStubs
+                                    .esEntradaDeStub(app.packageName, app.sha256)
+                                val isAllowed = allowedPackagesSet.contains(app.packageName) || esStubAa
+                                // Si ya existe la app REAL con ese nombre (instalada aunque esté
+                                // oculta, o de fábrica), Android rechaza el stub por firma con un
+                                // error mudo: se avisa qué pasa en vez de intentar. Se vuelve a
+                                // mirar al terminar cada descarga (la clave del remember).
+                                val impedimentoStub = if (esStubAa) {
+                                    remember(app.packageName, storeDownloadingPackage) {
+                                        com.ejemplo.locksuite.mdm.AndroidAutoStubs
+                                            .impedimentoParaInstalar(context, app.packageName)
+                                    }
+                                } else {
+                                    null
+                                }
+                                val stubTapadoPorAppReal = impedimentoStub != null
                                 val coroutineScope = rememberCoroutineScope()
                                 
                                 Row(
@@ -865,6 +886,22 @@ fun LoginScreen(
                                                 fontSize = 11.sp
                                             )
                                         }
+                                        if (impedimentoStub != null) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                if (impedimentoStub == com.ejemplo.locksuite.mdm.AndroidAutoStubs.Impedimento.APP_REAL_DE_FABRICA) {
+                                                    if (LocaleManager.getLang() == "he") "⚠ במכשיר זה האפליקציה המקורית מובנית במערכת — לא ניתן להתקין"
+                                                    else if (LocaleManager.getLang() == "en") "⚠ On this phone the real app is built in — this can't be installed"
+                                                    else "⚠ En este equipo la app real viene de fábrica: esto no se puede instalar"
+                                                } else {
+                                                    if (LocaleManager.getLang() == "he") "⚠ האפליקציה המקורית מותקנת — יש להסיר אותה קודם (LockSuite ← אפליקציות)"
+                                                    else if (LocaleManager.getLang() == "en") "⚠ The real app is installed — uninstall it first (LockSuite → Applications)"
+                                                    else "⚠ Está instalada la app real — primero desinstalala (LockSuite → Aplicaciones)"
+                                                },
+                                                color = Color(0xFFF1C40F),
+                                                fontSize = 11.sp
+                                            )
+                                        }
                                     }
 
                                     val isDownloadingThis = storeDownloadingPackage == app.packageName
@@ -875,7 +912,7 @@ fun LoginScreen(
                                     }
                                     Button(
                                         onClick = {
-                                            if (isAllowed && hasChecksum && storeDownloadingPackage == null) {
+                                            if (isAllowed && hasChecksum && !stubTapadoPorAppReal && storeDownloadingPackage == null) {
                                                 coroutineScope.launch {
                                                     storeDownloadingPackage = app.packageName
                                                     val db = FirebaseDatabase.getInstance()
@@ -929,7 +966,8 @@ fun LoginScreen(
                                         // app YA está permitida, lo que falta es que el administrador
                                         // calcule la huella. Pedirla otra vez no arregla eso.
                                         enabled = if (isAllowed) {
-                                            hasChecksum && (storeDownloadingPackage == null || isDownloadingThis)
+                                            hasChecksum && !stubTapadoPorAppReal &&
+                                                (storeDownloadingPackage == null || isDownloadingThis)
                                         } else {
                                             !yaPedida
                                         },

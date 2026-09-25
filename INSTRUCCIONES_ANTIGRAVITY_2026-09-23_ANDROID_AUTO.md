@@ -103,20 +103,41 @@ las reglas ni de las Functions. No hay comando FCM nuevo ni cache-buster que sub
 
 ## 2. PRUEBAS DE ANDROID AUTO (después de las del 22/9, en este orden)
 
+**Qué esperar, según lo revisado el 23/9 (B.87):** Android Auto **con cable** funciona con VPN
+(va por USB, no usa la red). El que falla es el **inalámbrico**: usa el Bluetooth para
+encontrar la Wi-Fi del auto y después todo pasa por esa Wi-Fi, y la VPN de LockSuite no lo
+dejaba usarla. En la captura del dueño se ve el ícono de Bluetooth: lo más probable es que sea
+inalámbrico. **La prueba que importa es la 3.**
+
 ### Prueba 0: que no se rompió nada (va primero)
 
 Con la 0.6.55 instalada: hay internet, los dominios resuelven, un dominio bloqueado sigue
 fallando al instante, y `check_tun.ps1` (el de las instrucciones del 6/9) da VERDE.
 
-### Prueba 1: Android Auto quedó fuera del túnel (ADB, un minuto, sin auto)
+### Prueba 1: el celular está listo (ADB, un minuto, sin auto)
 
-Guardá esto como `check_android_auto.ps1` y correlo con el celular conectado a la PC:
+Guardá esto como `check_android_auto.ps1` y correlo con el celular conectado a la PC. Revisa
+cuatro cosas, en este orden: que Android Auto **no comparta UID** con Play Services (si la
+compartiera, excluirla excluiría también Play Services y reabriría B.43), que la VPN esté
+**sin lockdown** (con lockdown, Android deja sin red a las apps excluidas), que el
+**Bluetooth** no esté bloqueado (sin él, el inalámbrico no puede andar), y que Android Auto
+haya quedado **fuera** de los rangos de la VPN.
 
 ```powershell
 $pkg = "com.google.android.projection.gearhead"
-$linea = adb shell pm list packages -U | Select-String ('package:' + $pkg + ' uid:') | Select-Object -First 1
+$todos = adb shell pm list packages -U
+$linea = $todos | Select-String ('package:' + $pkg + ' uid:') | Select-Object -First 1
 if (-not $linea) { Write-Host "Android Auto no esta instalada en este equipo" -Foreground Yellow; return }
 $uid = [int]([regex]::Match($linea.Line, 'uid:(\d+)').Groups[1].Value)
+# 1) Android Auto NO puede compartir UID con Play Services: excluirla excluiria tambien GMS (B.43)
+$gms = $todos | Select-String 'package:com.google.android.gms uid:' | Select-Object -First 1
+if ($gms -and ([int]([regex]::Match($gms.Line, 'uid:(\d+)').Groups[1].Value) -eq $uid)) {
+  Write-Host "ROJO GRAVE: Android Auto comparte UID con Play Services (reabre B.43). Avisar antes de seguir." -Foreground Red; return }
+# 2) La VPN tiene que estar SIN lockdown: con lockdown, las apps excluidas se quedan sin red
+$lockdown = (adb shell settings get secure always_on_vpn_lockdown | Out-String).Trim()
+# 3) El inalambrico necesita Bluetooth
+$sinBluetooth = [bool](adb shell dumpsys user | Select-String 'no_bluetooth(\s|$)')
+# 4) Android Auto fuera de los rangos de UID de la VPN
 $tun = adb shell ip addr show tun0 | Select-Object -First 1
 if ($tun -match '^\s*(\d+):\s*tun0') { $tabla = 1000 + [int]($Matches[1]) }
 else { Write-Host "La VPN no esta activa (no hay tun0): prendela y volve a correr esto" -Foreground Yellow; return }
@@ -131,56 +152,75 @@ foreach ($r in $reglas) {
     if ($uid -ge $desde -and $uid -le $hasta) { $cubierto = $true }
   }
 }
-Write-Host "Android Auto uid=$uid   tabla de la VPN=$tabla   reglas de la VPN=$($reglas.Count)"
+Write-Host "Android Auto uid=$uid   tabla de la VPN=$tabla   reglas de la VPN=$($reglas.Count)   lockdown=$lockdown"
 if ($cubierto) { Write-Host "ROJO: Android Auto sigue DENTRO de la VPN" -Foreground Red }
-else { Write-Host "VERDE: Android Auto quedo FUERA de la VPN" -Foreground Green }
+elseif ($lockdown -eq "1") { Write-Host "ROJO: Android Auto esta fuera de la VPN, pero la VPN esta en LOCKDOWN (ver B.87)" -Foreground Red }
+else { Write-Host "VERDE: Android Auto quedo FUERA de la VPN y sin lockdown" -Foreground Green }
+if ($sinBluetooth) { Write-Host "AMARILLO: el Bluetooth esta bloqueado en este equipo: el Android Auto inalambrico no puede andar (el de cable si)" -Foreground Yellow }
 ```
 
 - **VERDE** es lo esperado. En `adb shell ip rule show` los rangos `uidrange` de la VPN
   saltean la UID de LockSuite (el 6/9 era la 10223) y ahora también la de Android Auto. En
   Android 13+ también saltean la misma UID + 10000, que es la de su "sandbox" de publicidad:
   es normal.
-- **ROJO:** el celular no tiene la versión nueva (mirá la versión en el panel), o el túnel no
-  se rehízo desde que se instaló: reiniciá el celular y volvé a correrlo.
+- **ROJO "sigue DENTRO":** el celular no tiene la versión nueva (mirá la versión en el panel),
+  o el túnel no se rehízo desde que se instaló: reiniciá el celular y volvé a correrlo.
+- **ROJO "LOCKDOWN":** no debería pasar nunca (LockSuite lo pone en `false` y
+  `DISALLOW_CONFIG_VPN` impide cambiarlo). Si aparece, **pará y avisá**: es lo que en los
+  reportes hacía fallar la exclusión.
+- **ROJO GRAVE "comparte UID":** no debería pasar (Android no deja cambiar eso en una
+  actualización). Si aparece, **no desplegar** y avisar.
+- **AMARILLO Bluetooth:** alguien prendió "Bloquear Bluetooth" para ese equipo en el panel.
+  Con eso el inalámbrico no puede funcionar, con o sin este arreglo. Es decisión del dueño.
 - **Amarillo "No hay reglas apuntando a la tabla":** es el bug de B.49 (reglas colgadas de un
   `tun0` viejo). No dice nada de Android Auto: primero `check_tun.ps1` y la auto-reparación.
 
-La lógica del script (las mismas expresiones regulares, en el mismo orden) se probó en el
-contenedor contra el formato real de `ip rule` de tu Galaxy A06 (el del 6/9), con CRLF, con
-tabla por nombre, con una tabla de número parecido y con la VPN rota o apagada: 9 de 9. Lo que
-no se pudo correr es el PowerShell en sí (no hay `pwsh` en el contenedor): si alguna línea da
-error de sintaxis, avisá y se corrige.
+La lógica del script (las mismas expresiones regulares y decisiones, en el mismo orden) se
+probó en el contenedor contra el formato real de `ip rule` de tu Galaxy A06 (el del 6/9) y
+variantes: CRLF, tabla por nombre, tabla de número parecido, VPN rota o apagada, lockdown en
+`1`/`0`/`null`, Bluetooth bloqueado, solo "compartir por Bluetooth" bloqueado, y UID
+compartida: 12 de 12. Lo que no se pudo correr es el PowerShell en sí (no hay `pwsh` en el
+contenedor): si alguna línea da error de sintaxis, avisá y se corrige.
 
-### Prueba 2: en el auto, con cable
+### Prueba 2: en el auto, inalámbrico — LA IMPORTANTE
 
-1. LockSuite 0.6.55 activa (la llave de VPN en la barra de estado, como en la captura del dueño).
-2. Conectar el celular al auto por USB.
-3. **Tiene que arrancar Android Auto sin la pantalla roja del "error 21".**
-4. Con Android Auto andando, en el celular abrir un sitio bloqueado: **tiene que seguir bloqueado**.
-   El filtro sigue funcionando para todo lo demás.
+1. LockSuite 0.6.55 activa (la llave de VPN en la barra de estado, como en la captura del
+   dueño), Bluetooth y Wi-Fi prendidos.
+2. Subir al auto y dejar que conecte solo, sin cable.
+3. **Tiene que arrancar Android Auto en la pantalla del auto, sin la pantalla roja del "error 21".**
+4. Con Android Auto andando, en el celular abrir un sitio bloqueado: **tiene que seguir
+   bloqueado**. El filtro sigue funcionando para todo lo demás, incluidas las apps que se ven
+   en el auto (Maps, Waze, Spotify, WhatsApp).
 
-### Prueba 3: en el auto, inalámbrico (si el auto lo tiene)
+### Prueba 3: en el auto, con cable
 
-Lo mismo que la prueba 2, sin cable. Es el caso que más suele fallar con VPNs, y el que más
-depende de este arreglo.
+Lo mismo con cable. Según los reportes ya andaba con VPN, así que es un control: tiene que
+seguir andando igual.
 
-### Si sigue el error 21
+### Si sigue fallando
 
-1. **Correr `check_android_auto.ps1`.** Si da ROJO, el arreglo no llegó (ver arriba).
-2. **Si da VERDE y el auto igual da error 21**, guardá la evidencia **antes de tocar nada**.
-   El logcat queda en memoria del celular un rato, así que conectá el celular a la PC en los
-   5 minutos siguientes al intento:
+1. **Correr `check_android_auto.ps1`.** Si da ROJO o AMARILLO, lo que dice es la causa.
+2. **Si da VERDE, la VPN de LockSuite ya no está en el camino de Android Auto**, aunque el
+   mensaje de error la siga nombrando: el "error 21" es una falla genérica de comunicación con
+   el auto, y la frase de la VPN es solo la sospecha que agrega Android Auto. Buscá otra causa:
+   - **con cable:** el cable o el puerto (es la causa más común del error 21 con cable). Probá
+     otro cable, corto y de datos.
+   - **inalámbrico:** Wi-Fi o Bluetooth apagados en el celular, o el auto necesita volver a
+     emparejarse (olvidar el auto en el Bluetooth del celular y emparejar de nuevo).
+3. **Guardá la evidencia antes de tocar nada más.** El logcat queda en memoria del celular un
+   rato, así que conectá el celular a la PC en los 5 minutos siguientes al intento:
    ```powershell
    adb logcat -b all -d > scratch/diag_android_auto_2026-09-XX.txt
    adb shell ip rule show > scratch/diag_android_auto_iprule_2026-09-XX.txt
    adb shell dumpsys connectivity > scratch/diag_android_auto_conn_2026-09-XX.txt
    ```
-   y anotá: con cable o inalámbrico, modelo del auto, y si la depuración por USB estaba prendida.
-3. **Probá con la depuración por USB apagada** (Ajustes → Opciones para desarrolladores →
+   y anotá: con cable o inalámbrico, modelo del auto, y si el mensaje nombraba la VPN.
+4. **Probá con la depuración por USB apagada** (Ajustes → Opciones para desarrolladores →
    Depuración por USB). Es lo otro que pide la ayuda de Android Auto (la primera captura del
-   dueño) y no depende de LockSuite. Si LockSuite tiene "Bloquear depuración" prendido para
-   ese equipo, ya está apagada.
-4. Con eso, la próxima sesión decide. **No lo resuelvas agregando Google Play Services a la
+   dueño) y no depende de LockSuite. En los equipos dados de alta con cualquiera de los tres
+   perfiles ya está apagada (`DISALLOW_DEBUGGING_FEATURES` es parte de la base); en el
+   celular de pruebas del dueño probablemente no, porque se usa ADB.
+5. Con eso, la próxima sesión decide. **No lo resuelvas agregando Google Play Services a la
    exclusión:** ver §3.
 
 ---
@@ -191,7 +231,9 @@ depende de este arreglo.
   recomiende. En ese proceso corre "Gestionar tu cuenta de Google", con el historial de
   YouTube y Mi Actividad: excluirlo reabre **B.43** entero.
 - **No agregar `allowBypass()` al túnel:** cualquier app podría salir del filtro atándose a la Wi-Fi.
-- **No pasar a `lockdown=true`:** ver B.4. Rompe el internet general con esta VPN de solo DNS.
+- **No pasar a `lockdown=true`:** ver B.4. Rompe el internet general con esta VPN de solo DNS, y
+  además vuelve a romper Android Auto: con lockdown, Android deja sin red a las apps excluidas
+  (B.87).
 
 ---
 

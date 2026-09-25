@@ -112,21 +112,34 @@ class KosherVpnService : VpnService() {
         // ──────────────────────────────────────────────────────────────────────────
         // ANDROID AUTO FUERA DEL TÚNEL  (23/9/2026 — B.87)
         //
-        // SÍNTOMA. Con LockSuite activa, Android Auto no arranca: "Error de comunicación
-        // 21 - Conectarse a una VPN podría impedir que se inicie Android Auto".
+        // SÍNTOMA. Con LockSuite activa, Android Auto no conecta con el auto: "Error de
+        // comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto".
+        // El error 21 es una falla GENÉRICA de comunicación con el auto (también la da un
+        // cable malo); la frase de la VPN es la sospecha que agrega Android Auto al ver una.
         //
-        // POR QUÉ. Android Auto se niega a arrancar si SU red es una VPN, sin mirar qué
-        // enruta esa VPN. Como LockSuite es la VPN permanente del equipo (always-on, sin
-        // lockdown), TODAS las apps quedan en la red VPN, así que Android Auto la ve
-        // aunque este túnel solo capture DNS. Y el Android Auto inalámbrico tiene un
-        // segundo problema: necesita abrir sockets sobre la Wi-Fi del auto, y una VPN sin
-        // `allowBypass()` —esta— no deja que las apps que cubre elijan otra red.
+        // POR QUÉ (revisado el 23/9 contra reportes de usuarios de varias VPN, ver B.87).
+        // Android Auto CON CABLE funciona con VPN: va por USB y no usa la red. El
+        // INALÁMBRICO no: usa el Bluetooth solo para encontrar la Wi-Fi del auto, y después
+        // todo pasa por esa Wi-Fi. Android Auto tiene que abrir sus sockets sobre esa red, y
+        // una VPN sin `allowBypass()` —esta— no deja que las apps que cubre elijan otra red
+        // (Javadoc de `allowBypass`: "it is not possible for apps to side-step the VPN").
+        // Que este túnel solo capture DNS no cambia nada: es la VPN permanente del equipo
+        // (always-on), así que cubre a TODAS las apps, Android Auto incluida.
         //
         // ARREGLO. Sacar Android Auto del túnel con `addDisallowedApplication`, igual que
         // se saca LockSuite. Según la documentación de Android, una app excluida "usa la
-        // red como si la VPN no estuviera": su red por omisión es la física (es lo mismo
-        // que hace que el `registerDefaultNetworkCallback` de LockSuite vea la Wi-Fi y no
-        // la VPN). Android Auto deja de ver la VPN y puede usar la red del auto.
+        // red como si la VPN no estuviera": puede usar la Wi-Fi del auto y la VPN deja de
+        // ser su red (es lo mismo que hace que el `registerDefaultNetworkCallback` de
+        // LockSuite vea la red física y no la VPN). Es la salida que se recomienda para
+        // cualquier VPN ("split tunneling" excluyendo Android Auto).
+        //
+        // ⚠️ FUNCIONA PORQUE LA VPN VA SIN LOCKDOWN: `setAlwaysOnVpnPackage(..., false)` en
+        // PolicyManager, y DISALLOW_CONFIG_VPN (base de los tres perfiles) impide prenderlo
+        // desde Ajustes. En los reportes, excluir Android Auto NO alcanzó mientras estaba
+        // prendido el "kill switch" (el lockdown de Android), y anduvo en el acto al
+        // apagarlo. Si algún día se pasa a lockdown=true (B.4), hay que volver a probar
+        // Android Auto: la salida documentada es el `lockdownAllowlist` de
+        // `setAlwaysOnVpnPackage` (Android 10+), y habría que medir cómo se comporta.
         //
         // COSTO PARA EL FILTRO: prácticamente nulo. Se excluye SOLO la app Android Auto,
         // que no tiene navegador ni WebView. Las apps que se proyectan al auto (Maps,
@@ -679,8 +692,9 @@ class KosherVpnService : VpnService() {
             android.util.Log.w("KosherVPN", "No se pudo desautorizar la propia app de la VPN: ${e.message}")
         }
 
-        // Android Auto también queda afuera: si ve la VPN no arranca ("error 21"). El
-        // porqué, y por qué NO se agrega Google Play Services, en ANDROID_AUTO_PACKAGES.
+        // Android Auto también queda afuera: con la VPN encima, el inalámbrico no puede
+        // usar la Wi-Fi del auto ("error 21"). El porqué, la condición de que no haya
+        // lockdown, y por qué NO se agrega Google Play Services, en ANDROID_AUTO_PACKAGES.
         ANDROID_AUTO_PACKAGES.forEach { pkg ->
             try {
                 builder.addDisallowedApplication(pkg)

@@ -1856,17 +1856,14 @@ Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, 
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**27/9 — Claude (contenedor en la nube; el puente al disco anduvo al principio y se cortó a mitad de sesión): revisión de CPU y batería, en uso y en reposo. Lo más grande: la re-aplicación de cada 15 minutos reescribía todas las políticas del sistema aunque no cambiara nada, y en Android ≤ 13 sumaba un "launcher preferido" duplicado en cada vuelta, para siempre. Arreglado en código, compilado y con pruebas; sin probar en equipo (B.89).**
+**28/9 — Antigravity (PC local con terminal real): aplicación del commit de batería (B.89), chequeos y verificación de compilación.**
 
-- **Arranque:** contexto leído completo. Clon validado contra el disco; `HEAD` = `origin/main` = `80573e5` (0.6.56, 25/9 17:30), o sea que los commits A y B del 25/9 ya los había hecho Antigravity y 0.6.56 está desplegada. La sección "Estado del repo" todavía decía lo contrario: corregida abajo.
-- **Inventario:** todo lo que corre solo, cuándo, y si hace falta (tabla en B.89). Lo que pasa dentro de Android se midió leyendo AOSP 11, 13, 14, 15 y `main`: cuánto cuesta cada `addUserRestriction`, `setLockTaskPackages`, `setPackagesSuspended`, `setCameraDisabled`, `addPersistentPreferredActivity`, etc., cuando no cambia nada.
-- **Cambios** (B.89, 1 a 6): comparar antes de escribir en toda la re-aplicación (`mdm/PolicyReconciler.kt`, nuevo); consolidar el launcher preferido (limpia los duplicados acumulados en la primera vuelta); enumerar las apps de la re-aplicación con una sola llamada; una sola instancia de las preferencias cifradas por proceso; en la accesibilidad, la memoria del equipo se consulta una vez y los códigos del marcador se buscan en un recorrido (`mdm/DialerCodeScan.kt`, nuevo); y los bucles de las pantallas de PIN y emergencia solo corren mientras se ven.
-- **Verificado en el contenedor:** compila y arma el APK de depuración; 45/45 pruebas (27 nuevas; `DialerCodeScanTest` compara contra la versión vieja copiada tal cual en 5.500 árboles al azar); 22 controles negativos, todos detectados; lint comparado contra `HEAD` (un error real encontrado y arreglado: `getLockTaskPackages` es de API 26); simetría de B.38 y los siete chequeos de `tools/` en verde.
-- **Revisado dos veces contra AOSP antes de cerrar:** en Android 14 el getter de la cámara lee un lugar distinto del que escribe el setter (da siempre `false`, así que ahí se sigue escribiendo como antes) y desde 14 la cámara es la restricción `no_camera`, que ahora también se exige que rija; y la escritura vieja de la VPN permanente arrancaba la VPN si estaba caída, algo que ya cubren el `WatchdogWorker` y el ciclo de 20 s.
-- **Decisiones del dueño, no tocadas** (B.89 a-e): Firebase Analytics sin usar; la lista de apps se sube completa y dos veces; el scroll de accesibilidad llega de todas las apps; Play Store se libera dos veces por vuelta; ruido de "no aplicó ocultamiento" en el logcat.
-- **Entrega:** el commit está hecho en el clon. El puente se cortó antes de escribir en el disco, así que el parche (`git format-patch`) y el mensaje van como archivos adjuntos en el chat, para dejarlos en `Claude outputs/`. Si el puente volvió antes del cierre, también quedaron escritos en el disco (ver "Estado del repo").
-
-**Lo que sigue: `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md`.** El commit, medir con 0.6.56 antes de instalar, desplegar 0.6.57, y las pruebas en el celular empezando por **que ninguna restricción se haya perdido**.
+- **Commit B.89 aplicado:** se tomaron el parche y mensaje de commit provistos por Claude (`Claude outputs/2026-09-27_bateria.patch`), aplicándose limpiamente con `git am` en el commit `6183392` (`perf(bateria): comparar antes de escribir en la reaplicacion de politicas (B.89)`).
+- **Consistencia del repo:** los siete scripts de verificación en `tools/` dieron verde (`check_whitelist_sync.py`, `check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`, `aa_stubs/check_stubs.py`).
+- **Pruebas unitarias:** 45/45 pruebas en verde (`:app:testDebugUnitTest`, 0 fallas, 0 errores), incluyendo las 19 de `PolicyReconcilerTest` y las 8 de `DialerCodeScanTest`.
+- **Compilación Release:** `./gradlew :app:assembleRelease` completado con éxito (6m 57s) con optimización y minificación R8 sin advertencias bloqueantes ni errores.
+- **Estado de equipo físico:** `adb devices` sin dispositivos conectados al momento de la sesión. La medición previa con 0.6.56 (`bat_user_0656.txt`, `bat_dp_0656.txt`, `bat_log_0656.txt`) queda lista para ejecutarse apenas se conecte el celular por USB con depuración habilitada.
+- **Lo que sigue:** conectar el celular, tomar la medición de línea base de 0.6.56 (§1 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md`), correr `deploy_all.ps1 -VersionName "0.6.57"` y ejecutar las pruebas de regresión en el celular (§3).
 
 ---
 
@@ -1874,9 +1871,9 @@ Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, 
 
 ### Estado de versiones
 
-- **0.6.56 / código 119 (`80573e5`, 25/9 17:30):** la última desplegada. Trae los dos commits del 25/9: `26d2fff` (revisión de B.87, solo comentarios y documentación) y `867908f` (stubs de Android Auto, B.88). Al 27/9 `origin/main` está ahí y no hubo commits después.
-- **Pendiente: UN commit, el del 27/9 (B.89, batería).** Hecho en el clon de la nube sobre `80573e5`. Viaja como `Claude outputs/2026-09-27_bateria.patch` (formato `git format-patch`) + `Claude outputs/2026-09-27_mensaje_commit.txt`. Cómo aplicarlo, según esté o no escrito en el disco: §0 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md`.
-- ⚠️ `deploy_all.ps1` hace `git add .`: si se corre antes del commit, lo mete adentro de "Actualizacion automatica".
+- **0.6.56 / código 119 (`80573e5`, 25/9 17:30):** la última desplegada en producción.
+- **Commit local aplicado: `6183392` (28/9, B.89, batería).** Aplicado sobre `80573e5`. `HEAD` está 1 commit por delante de `origin/main`. Sin cambios sin commitear.
+- **Pendiente:** despliegue de 0.6.57 vía `deploy_all.ps1 -VersionName "0.6.57"` tras medición en equipo real.
 
 ### Archivos del commit del 27/9
 

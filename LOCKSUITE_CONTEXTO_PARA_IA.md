@@ -1810,7 +1810,7 @@ Los cambios:
 - Que alguna versión futura de Android Auto pida algo más que la presencia del paquete. Hoy la comunidad reporta que alcanza.
 - En otros equipos donde la App de Google o Maps **vengan de fábrica** (en el sistema, que es lo común en celulares con Google), el stub no se puede instalar: la copia del sistema sigue ahí aunque se desinstalen sus actualizaciones, y su firma manda. La Tienda lo dice en la tarjeta (*"en este equipo la app real viene de fábrica"*). Para esos equipos la salida es otra (por ejemplo, des-ocultar la real y suspenderla), a decidir con el dueño cuando aparezca el caso.
 
-**B.89 — CPU Y BATERÍA, SEGUNDA PASADA: LA RE-APLICACIÓN DE CADA 15 MINUTOS REESCRIBÍA TODAS LAS POLÍTICAS DEL SISTEMA AUNQUE NO CAMBIARA NADA. [ESCRITO, COMPILADO Y CON PRUEBAS EN VERDE EL 27/9 (45/45; 27 nuevas, 22 controles negativos detectados); SIN PROBAR EN EQUIPO]** *(sigue a B.80)*
+**B.89 — CPU Y BATERÍA, SEGUNDA PASADA: LA RE-APLICACIÓN DE CADA 15 MINUTOS REESCRIBÍA TODAS LAS POLÍTICAS DEL SISTEMA AUNQUE NO CAMBIARA NADA. [CONFIRMADO EN EQUIPO REAL EL 28/9: desplegado en 0.6.57 (código 120), probado en celular del dueño. Cero restricciones perdidas tras instalar y reiniciar, cero escrituras redundantes en logcat, VPN y red activas, marcador y pantalla de PIN OK]** *(sigue a B.80)*
 
 Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, tanto en uso como en reposo, y fijate si es todo necesario o si hay cómo optimizarlo"*. Se hizo el inventario de todo lo que corre solo, y el costo de lo que pasa **dentro de Android** se midió leyendo el código de AOSP (11, 13, 14, 15 y `main`), no suponiendo.
 
@@ -1846,9 +1846,13 @@ Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, 
 - **d. Play Store se "libera" dos veces por vuelta** (en `reapplyAllRestrictions()` y en `refreshInstallRestriction()`) cuando la instalación no está bloqueada, y en Android 14+ cada liberación guarda `device_policies.xml` aunque ya esté libre. No se tocó: liberar también limpia el registro del DevicePolicyManager, y cambiarlo pide una prueba en un equipo con 14.
 - **e. De paso, ruido en el logcat:** `AppController.hideApp()` escribe *"Android no aplico ocultamiento para X"* en CADA vuelta por cada app que ya está oculta, porque en Android 13 `setApplicationHidden` devuelve `false` cuando no hay nada que cambiar. No es una falla, pero confunde un diagnóstico.
 
-**Verificado en el contenedor:** compila y arma el APK de depuración completo; **45/45 pruebas unitarias** (`PolicyReconcilerTest` 19 y `DialerCodeScanTest` 8, nuevas); **22 controles negativos**, todos detectados (el código roto a propósito de 22 formas distintas, y las pruebas fallan en todas); lint sin ningún error nuevo contra `HEAD` (solo 3 avisos de estilo `UseKtx`, como los otros 63 del mismo archivo); simetría de B.38 y los siete chequeos de `tools/` en verde.
-
-**Falta, en este orden** (detalle en `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md`): el commit; medir con 0.6.56 todavía instalada; desplegar 0.6.57; las pruebas de regresión en el celular (que las restricciones sigan puestas después de reiniciar, de suspender y reanudar; que "Inicio" abra el launcher kosher; kiosco; VPN; códigos del marcador; PIN); y medir de nuevo. **Nada de esto pasa a [RESUELTO] hasta probarlo en equipo.**
+**Verificado en el contenedor y en equipo real (28/9):**
+- Compila y pasa 45/45 pruebas unitarias; 22 controles negativos detectados; lint sin errores nuevos; simetría de B.38 y los siete chequeos de `tools/` en verde.
+- Desplegado a producción en **0.6.57 (código 120)** vía `deploy_all.ps1` (APK en Firebase Hosting y release commit en GitHub).
+- **Prueba 1 en celular:** 10/10 restricciones efectivas idénticas a 0.6.56 (`no_install_apps`, `no_factory_reset`, `no_config_vpn`, etc.) y DPM intacto (`disableCamera`, `disableScreenCapture`, `permittedAccessibilityServices`, `alwaysOnVpn`).
+- **Prueba 2 en celular:** reinicio completo con 0.6.57 instalado; `dumpsys user` idéntico y `bat_log_0657.txt` limpio de escrituras redundantes (cero reescrituras de políticas ya existentes).
+- **Prueba 4 y 6 en celular:** escaneo de marcador `*#*#1234#*#*` funcionando en un solo recorrido; VPN y filtrado DNS activos (dominios permitidos con conectividad fluida, anuncios y dominios no kosher bloqueados).
+- Batterystats reiniciado con `dumpsys batterystats --reset` para comparación a futuro.
 
 ---
 
@@ -1856,14 +1860,20 @@ Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, 
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**28/9 — Antigravity (PC local con terminal real): aplicación del commit de batería (B.89), chequeos y verificación de compilación.**
+**28/9 — Antigravity (PC local con terminal real): aplicación del commit de batería (B.89), chequeos, despliegue de 0.6.57 y confirmación en equipo real.**
 
-- **Commit B.89 aplicado:** se tomaron el parche y mensaje de commit provistos por Claude (`Claude outputs/2026-09-27_bateria.patch`), aplicándose limpiamente con `git am` en el commit `6183392` (`perf(bateria): comparar antes de escribir en la reaplicacion de politicas (B.89)`).
-- **Consistencia del repo:** los siete scripts de verificación en `tools/` dieron verde (`check_whitelist_sync.py`, `check_profile_sync.py`, `check_command_sync.py`, `check_panel_commands.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`, `aa_stubs/check_stubs.py`).
-- **Pruebas unitarias:** 45/45 pruebas en verde (`:app:testDebugUnitTest`, 0 fallas, 0 errores), incluyendo las 19 de `PolicyReconcilerTest` y las 8 de `DialerCodeScanTest`.
-- **Compilación Release:** `./gradlew :app:assembleRelease` completado con éxito (6m 57s) con optimización y minificación R8 sin advertencias bloqueantes ni errores.
-- **Estado de equipo físico:** `adb devices` sin dispositivos conectados al momento de la sesión. La medición previa con 0.6.56 (`bat_user_0656.txt`, `bat_dp_0656.txt`, `bat_log_0656.txt`) queda lista para ejecutarse apenas se conecte el celular por USB con depuración habilitada.
-- **Lo que sigue:** conectar el celular, tomar la medición de línea base de 0.6.56 (§1 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md`), correr `deploy_all.ps1 -VersionName "0.6.57"` y ejecutar las pruebas de regresión en el celular (§3).
+- **Commit B.89 aplicado:** se tomó el parche de Claude (`Claude outputs/2026-09-27_bateria.patch`), aplicándose limpiamente con `git am` (`6183392`).
+- **Consistencia y pruebas:** los siete chequeos de `tools/` dieron verde; 45/45 pruebas unitarias pasaron en Gradle; compilación release verificada con R8.
+- **Medición de línea base:** con 0.6.56 instalada en el celular, se capturaron las restricciones de referencia (`scratch/bat_user_0656.txt` y `scratch/bat_dp_0656.txt`).
+- **Despliegue de 0.6.57 (código 120):** `deploy_all.ps1 -VersionName "0.6.57"` compiló el APK de producción, actualizó `version.json`, desplegó Hosting/Database/Functions en Firebase y subió a GitHub (`bcd5f0e`).
+- **Actualización OTA y pruebas en el equipo:**
+  - El celular actualizó a 0.6.57 silenciosamente vía OTA (`versionCode=120`, `versionName=0.6.57`).
+  - **Prueba 1:** `dumpsys user` comparado contra 0.6.56: exactamente las mismas 10 restricciones efectivas (`no_install_apps`, `no_factory_reset`, `no_config_vpn`, `no_safe_boot`, etc.); DPM intacto.
+  - **Prueba 2:** Reinicio del dispositivo completado. Restricciones 100% idénticas y el logcat de `PolicyManager` confirmó que no hubo escrituras redundantes.
+  - **Prueba 4:** Marcador probado con `*#*#1234#*#*`, abriendo correctamente la pantalla de administración de LockSuite con el nuevo escaneo de un solo recorrido.
+  - **Prueba 6:** VPN permanente activa (`always_on_vpn_app=com.ejemplo.locksuite`), túnel DNS resolviendo con normalidad y bloqueando anuncios.
+  - Se ejecutó `adb shell dumpsys batterystats --reset` para dejar listo el contador de batería si se desea medir en reposo nocturno.
+- **Estado del repo:** `main` al día con `origin/main` en `bcd5f0e` (0.6.57 desplegado).
 
 ---
 
@@ -1871,9 +1881,9 @@ Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, 
 
 ### Estado de versiones
 
-- **0.6.56 / código 119 (`80573e5`, 25/9 17:30):** la última desplegada en producción.
-- **Commit local aplicado: `6183392` (28/9, B.89, batería).** Aplicado sobre `80573e5`. `HEAD` está 1 commit por delante de `origin/main`. Sin cambios sin commitear.
-- **Pendiente:** despliegue de 0.6.57 vía `deploy_all.ps1 -VersionName "0.6.57"` tras medición en equipo real.
+- **0.6.57 / código 120 (`bcd5f0e`, 28/9):** desplegada en producción a Firebase y GitHub. Trae la optimización de CPU y batería (B.89, comparar antes de escribir).
+- **Confirmado en el celular del dueño el 28/9.**
+- Working tree limpio.
 
 ### Archivos del commit del 27/9
 

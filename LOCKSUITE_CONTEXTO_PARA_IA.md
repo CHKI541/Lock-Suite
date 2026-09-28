@@ -56,6 +56,7 @@ CAPA 3 — VISUAL (service/LockSuiteAccessibilityService.kt)
 |---|---|
 | `mdm/PolicyManager.kt` | Motor central. Singleton, ~50 KB, el archivo más grande. Todas las llamadas a DevicePolicyManager/UserManager, FRP, presets HMAC, bloqueo de internet por proxy. |
 | `mdm/AppController.kt` | Suspender/ocultar/desinstalar apps, inventario de apps instaladas. |
+| `mdm/PolicyReconciler.kt` | **(27/9, NUEVO)** Las decisiones de "comparar antes de escribir" de `reapplyAllRestrictions()`: cuándo se saltea una escritura porque el sistema ya la tiene. Funciones puras, con banco de pruebas (`PolicyReconcilerTest`). **Ante la duda, se escribe.** Leer su cabecera antes de sumarle una política a la re-aplicación. Ver B.89. |
 | `mdm/WebViewBlockManager.kt` / `WebViewPolicy.kt` | WebView bloqueado por app; whitelist estricta (`CORE_DOMAINS`) para Waze/DiDi, whitelist dinámica para el resto. |
 | `mdm/ImageBlockManager.kt` | Filtrado visual de imágenes (silueta / AI gate). |
 | `dns/DomainRuleManager.kt`, `dns/DomainRuleTrie.kt` | Reglas DNS personalizadas, 4 tipos (ver Capa 2). Arranca la VPN sola al fijar una regla. |
@@ -66,7 +67,7 @@ CAPA 3 — VISUAL (service/LockSuiteAccessibilityService.kt)
 | `worker/WatchdogWorker.kt` | WorkManager, cada **15 min**, sobrevive a que muera el proceso. **Por eso mismo es la red de seguridad de último recurso**: desde el 21/8 también libera el proxy del arranque protegido si quedó clavado (ver B.20). Es el único mecanismo del proyecto que sigue funcionando con el servicio de primer plano caído — pensarlo así antes de agregarle o sacarle cosas. **(22/9)** También drena el buzón de comandos (B.74), relee la lista blanca/negra una vez por hora (B.77) y cierra instalaciones que quedaron colgadas por un reinicio (B.81). |
 | `receiver/BootReceiver.kt` | Al bootear: reaplica restricciones, arranca Watchdog y VPN. Acá viven `shouldVpnBeRunning()` y `ensureVpnRunning()`. |
 | `receiver/PackageReceiver.kt` | Eventos de paquetes: fin real de una actualización de Play Store (`ACTION_PACKAGE_REPLACED`) y su timeout de 10 min, re-suspensión de lo que se instala o actualiza, bloqueo de instalaciones no autorizadas. **(22/9) En Android 8+ el sistema no le entrega esos eventos por el Manifest: lo registra `LockSuiteApplication` en tiempo de ejecución** (antes no corría en casi ningún equipo). Ver B.75. |
-| `service/LockSuiteAccessibilityService.kt` | Capa 3. Detección por texto/IDs de vista (incluye ídish). Automatiza clicks en el flujo de actualización de Play Store (`handlePlayStoreAutoUpdate`). |
+| `service/LockSuiteAccessibilityService.kt` | Capa 3. Detección por texto/IDs de vista (incluye ídish). Automatiza clicks en el flujo de actualización de Play Store (`handlePlayStoreAutoUpdate`). **(27/9)** Los códigos del marcador se buscan con `mdm/DialerCodeScan.kt` (un solo recorrido, probado contra el de antes: B.89). |
 | `service/BlockOverlayManager.kt` | Dos cosas distintas en un archivo: (a) **la capa de tapado de imágenes** — desde el 17/8 es UNA sola ventana transparente a pantalla completa que pinta los recuadros en canvas, no N ventanas del WindowManager (ver B.17); (b) el overlay negro opaco que absorbe el 100% de los toques durante una actualización forzada de app, con título + estado en vivo + botón Cancelar. |
 | `util/AccessibilityEnforcer.kt` | **(18/8, NUEVO — sin compilar/probar)** Única fuente de verdad sobre "¿está funcionando la accesibilidad?" (vía `AccessibilityManager`, con antirrebote de 1,2 s) y reconciliador de la suspensión de emergencia: compara contra el estado real de cada app y corrige solo lo que difiere. Resuelve el vaivén de "se suspenden y vuelven a aparecer". Ver B.15. |
 | `util/BootGate.kt` | **(17/8, NUEVO; corregido a fondo el 21/8 — sin compilar/probar)** Arranque protegido: cierra la red con el proxy global a puerto muerto apenas bootea el equipo y la reabre cuando el túnel DNS está leyendo paquetes de verdad. Tapa el hueco de "al reiniciar tarda en activarse y mientras queda todo abierto". Desde el 21/8 además **reconcilia el proxy real del sistema** (`healStuckProxy()`): era la causa del "se cae el internet". Ver B.16 y **B.20**. |
@@ -147,7 +148,8 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - `INFORME_FORENSE_ACCESIBILIDAD_ANDROID13.md` (15/8) — diagnóstico completo del bug de accesibilidad en Android 13, con evidencia ADB (ver B.8).
 - `INSTRUCCIONES_COMPILACION_ANTIGRAVITY_2026-08-16.md` (16/8) — **empezar por acá si vas a compilar.** Qué entra en el build, comandos exactos, qué puede fallar, y en qué orden probar (B.8 primero, porque bloquea al resto).
 - `INFORME_OPTIMIZACION_ACCESIBILIDAD_2026-08-16.md` (16/8) — detalle línea por línea de la optimización de Capa 3 y del sobre-bloqueo de Mercado Pago, con el porqué de cada cambio y checklist de 9 puntos (ver B.13). Leerlo antes de tocar `LockSuiteAccessibilityService.kt`. **Ojo:** la parte que describe `BlockOverlayManager` como "una ventana por región" quedó desactualizada el 17/8 — ese archivo se reescribió a una sola capa de canvas (ver B.17).
-- `INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md` (25/9) — **EL MÁS NUEVO: empezá por acá si vas a commitear, desplegar o probar.** Los dos commits pendientes (A: la revisión del 23/9; B: los stubs) y cómo separarlos, el despliegue de 0.6.56, cómo subir los stubs a la Tienda, qué hacer en el celular del dueño (desinstalar la Maps real e instalar los stubs, en ese orden y **después** de 0.6.56) y la prueba en el auto. Ver B.87 y B.88. De las del 22/9 (`…_PRODUCCION.md`) y del 23/9 (`…_ANDROID_AUTO.md`), los commits y el despliegue ya están hechos (0.6.55).
+- `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md` (27/9) — **EL MÁS NUEVO: empezá por acá si vas a commitear, desplegar o probar.** El commit de B.89 (con `git am` o `git apply --cached`, según lo que haya en el disco), **medir con 0.6.56 antes de instalar 0.6.57**, el despliegue, las pruebas de regresión en el celular (la primera: que ninguna restricción se haya perdido) y qué no hay que "simplificar". Ver B.89.
+- `INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md` (25/9) — *(27/9: los dos commits y el despliegue de 0.6.56 ya están hechos: `26d2fff`, `867908f`, `80573e5`. Sigue valiendo para los stubs en la Tienda, el celular del dueño y el auto, de los que no hay noticias.)* Los dos commits pendientes (A: la revisión del 23/9; B: los stubs) y cómo separarlos, el despliegue de 0.6.56, cómo subir los stubs a la Tienda, qué hacer en el celular del dueño (desinstalar la Maps real e instalar los stubs, en ese orden y **después** de 0.6.56) y la prueba en el auto. Ver B.87 y B.88. De las del 22/9 (`…_PRODUCCION.md`) y del 23/9 (`…_ANDROID_AUTO.md`), los commits y el despliegue ya están hechos (0.6.55).
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-16_CAPA3_SOBREBLOQUEO.md` (16/9) — **EL MÁS NUEVO: empezá por acá si vas a compilar, desplegar o probar.** Los DOS commits que hay que hacer y en qué orden (uno es trabajo del 15/9 que estaba sin commitear), qué se tocó archivo por archivo con sus finales de línea, las tres cosas concretas que podrían fallar en Gradle y cómo cambiarlas sin tocar comportamiento, el orden de prueba **con las dos regresiones primero** (que el catálogo de ilustraciones siga rebotando, y que las ofertas de Mercado Pago sigan rebotando), y siete cosas que no hay que "simplificar". Ver B.67 a B.70.
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_PANEL_UNIFICADO.md` (10/9 noche) — **EL MÁS NUEVO: empezá por acá si vas a compilar o desplegar lo de la tanda del panel unificado (B.62 a B.66).** Qué se tocó archivo por archivo, qué mirar si Compose no compila (con las tres cosas concretas que podrían fallar y cómo cambiarlas sin tocar comportamiento), el orden de prueba con **la regresión que más importa primero** (que Mercado Pago siga pagando con los dominios de ofertas cerrados), lo que necesita al dueño y no a Antigravity (el APK oficial de Waze), y siete cosas que no hay que "simplificar".
 - `INSTRUCCIONES_ANTIGRAVITY_2026-09-10_MAESTRO.md` (10/9) — **EL PUNTO DE ENTRADA DE HOY. Empezá por acá si vas a aplicar, compilar, desplegar o probar.** Cubre las DOS tandas del 10/9 (B.58 por un lado; B.59/B.60/B.61 por el otro), en qué orden se aplican los dos parches y por qué no se pueden invertir, el orden de prueba **consolidado** (las regresiones de las dos juntas al principio), qué hace falta que haga Antigravity que ninguna sesión de IA pudo, qué se verificó sin equipo y cuánto pesa cada cosa, y qué hacer si algo sale mal. Los dos documentos de detalle de abajo siguen valiendo para el porqué de cada decisión.
@@ -205,6 +207,9 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - **(23/9) `tools/ia_contenedor/setup_sdk.sh` fallaba en su último paso** (no copiaba el espejo de Maven: resolvía su ruta relativa después de hacer `cd` al SDK). Arreglado. Y `lintDebug` necesita dependencias que la compilación no baja: la primera vez, sin `--offline` (anotado en el README).
 - **(22/9) DECIMOTERCERA vez que `device_bash` no monta**, esta vez con las tres carpetas conectadas (la raíz, `app\src\main\java` y `admin-app\src\main\java`). La receta de siempre funcionó: clonar, trabajar en el clon, validar tamaños contra `device_list_dir` (esta vez los 24 archivos a tocar coincidían byte por byte con `HEAD`, en LF o CRLF), y escribir con `device_commit_files` + `expectedMtimeMs`.
 - **(25/9) Después de un despliegue de Antigravity, la base es `origin/main`, no el clon de antes.** Esta sesión venía del 23/9 con el clon basado en `fd76ccc`, y mientras tanto Antigravity commiteó y desplegó (`881aea1`, `0c87da2`, `e8f1d01`). Receta: `git fetch origin` y trabajar sobre `origin/main`. **Para saber si el disco tiene algo sin commitear, sin `git` ahí:** `device_list_dir` sobre `.git` da el `mtime` de `COMMIT_EDITMSG`, que es la hora del último commit en la PC. Un archivo con `mtime` posterior y tamaño distinto del de `HEAD` (contando los CRLF) tiene cambios sin commitear. Así apareció que la revisión del 23/9 (escrita a las 23:26, después del commit de las 21:49) había quedado afuera y necesitaba un commit aparte.
+- **(27/9) El puente se cortó a mitad de sesión** (las herramientas `mcp__remote-devices__*` desaparecieron solas, sin que nadie cerrara nada). Al arrancar funcionaba: se validó el clon contra el disco (`LOCKSUITE_CONTEXTO_PARA_IA.md` 385.073 bytes en CRLF = el del clon + sus líneas). Receta para el cierre sin puente: commitear en el clon, sacar el parche con `git format-patch -1 --stdout`, mandarlo al dueño con `SendUserFile` junto con las instrucciones, y que Antigravity lo aplique con `git am` (§0 de las instrucciones del 27/9). **Si el puente vuelve, escribir igual con `device_commit_files` + `expectedMtimeMs`.**
+- **(27/9) `assembleDebug` tarda más de 10 minutos la primera vez, y el `Bash` del contenedor corta a los 10.** Correrlo en segundo plano (`nohup bash -c '…' &`) y consultar el log. Las pruebas y el lint entran en el tope.
+- **(27/9) Para saber si el lint empeoró, compararlo contra `HEAD`**: `git worktree add --detach <carpeta> HEAD`, copiarla con `LS_BUILD_DIR=<otra carpeta> python3 tools/ia_contenedor/sync_build_copy.py` desde el worktree, correr `lintDebug` en las dos copias y diferenciar los XML por (severidad, id, archivo). El proyecto tiene ~310 avisos y 10 errores viejos (la mayoría `NewApi` de FRP en `applyOfficialFrpPolicy`, que se llama con la versión chequeada afuera): sin la comparación no se sabe cuáles son nuevos. Así se encontró el único error real de esta sesión (`getLockTaskPackages` es de API 26 y `minSdk` es 24).
 - **(25/9) Se pueden armar, firmar e inspeccionar APKs chicos en el contenedor.** El SDK de `tools/ia_contenedor/setup_sdk.sh` trae `aapt2`, `zipalign` y `apksigner` (`build-tools;36.0.0`), y `keytool` viene con el JDK. La receta completa está en `tools/aa_stubs/build_stubs.sh`. Para mirar un APK ajeno: `aapt2 dump badging`, `aapt2 dump xmltree --file AndroidManifest.xml` y `apksigner verify --print-certs`. Una clave generada en el contenedor desaparece con él: para los stubs, además, se borró a propósito al firmar (B.88).
 
 ---
@@ -696,7 +701,7 @@ Antigravity entregó una auditoría "función por función" de `:app`, `:admin-a
 8. **El perfil exportable del panel omite casi todo lo nuevo.** `app.js` línea 1704: `dataObj.restrictions` es una lista fija de 20 claves — **no incluye ninguna de las 20 de `PolicySpec.EXTRA_RESTRICTIONS`** (B.33), ni `no_config_date_time`, ni `kioskLockTask`, `nokiaKeypadMode`, `nokiaTouchEnabled`, `hideSuspendedApps`. **La app sí las exporta bien** (`PolicyManager.kt` líneas 1120-1122 iteran `EXTRA_RESTRICTIONS`): el que quedó atrás es solo el panel, así que un perfil hecho en el celular y uno hecho en el panel no son equivalentes. ⚠️ **Trampa en el arreglo propuesto:** el informe dice guardar `kioskLockTaskEnabled`, pero el importador lee **`kioskLockTask`** (línea 1255). Una clave que la app no conoce se acepta y no hace nada — **es el bug de `no_apps_control` de B.28**. Los nombres exactos están en el documento de revisión.
 9. **Nodo DOM duplicado en el panel.** `app.js` líneas 711-713 son copia literal de 680-682; `appendChild` mueve el nodo, así que la fila de bloqueo de imágenes salta al final de la tarjeta. Borrar 3 líneas.
 10. **La lista de apps del launcher queda congelada.** `launchMode="singleInstance"` (Manifest 200) + `remember { }` sin claves (línea 501) + `nokiaApps` cargado solo en `onCreate()` (línea 176); `onResume()` (410) no recarga. Volver al inicio muestra apps desinstaladas y esconde las nuevas. ⚠️ **No recargar ciego en cada `onResume()`**: eso es un `queryIntentActivities()` completo cada vez que se aprieta HOME, y el propio archivo advierte del costo en las líneas 172-174. Usar invalidación por cambio, como `AppController.eligiblePackages` (B.15).
-11. **El fondo de pantalla se regenera cada 15 minutos.** `reapplyAllRestrictions()` (línea 1610) → `setKosherLauncherEnabled(true, false)` → `applyKosherMp3Wallpaper()` (512): un bitmap 1080×1920 ARGB_8888 (~8,3 MB) + `setBitmap(FLAG_SYSTEM or FLAG_LOCK)` en cada vuelta del `WatchdogWorker`. Escrituras a disco, `ACTION_WALLPAPER_CHANGED` global y recálculo de paleta del sistema, cada 15 min, para dejar el mismo degradado.
+11. **El fondo de pantalla se regenera cada 15 minutos.** `reapplyAllRestrictions()` (línea 1610) → `setKosherLauncherEnabled(true, false)` → `applyKosherMp3Wallpaper()` (512): un bitmap 1080×1920 ARGB_8888 (~8,3 MB) + `setBitmap(FLAG_SYSTEM or FLAG_LOCK)` en cada vuelta del `WatchdogWorker`. Escrituras a disco, `ACTION_WALLPAPER_CHANGED` global y recálculo de paleta del sistema, cada 15 min, para dejar el mismo degradado. *(27/9, medido en el código: el fondo ya NO se regenera — `applyKosherMp3Wallpaper()` corta con la marca `kosher_wallpaper_applied`, que está desde 0.6.35 (`262057a`, 2/9). Lo que SÍ seguía pasando cada 15 minutos por ese mismo camino era otra cosa: `addPersistentPreferredActivity` sumando un launcher preferido duplicado en cada vuelta. Ver B.89. Falta confirmarlo en equipo.)*
 12. **Importar un perfil no enciende la VPN.** `importPolicyPresetJson()` escribe `per_app_internet_blocked` (línea 1266) y retorna (1270) sin llamar a `ensureVpnRunning()`. El bloqueo por app no rige hasta el próximo reinicio o ciclo del Watchdog. Una línea.
 13. **Bucle de lectura del TUN ante EOF.** `KosherVpnService.kt` 354-363: `length <= 0` duerme 30 ms y reintenta para siempre, así que un `-1` gira sin fin. ⚠️ **El informe cita un `try/catch (IOException)` alrededor del `read()` que NO EXISTE en el archivo** — el `read()` es pelado dentro del `try` grande del bucle (343), que ya limpia bien en su `finally` (399-426). O sea que una excepción **ya sale correctamente** y la severidad es mucho menor que la descrita. El `if (length < 0) break` se aplica igual, pero **al menos un fragmento del informe se escribió de memoria y no leyendo el archivo: que Antigravity reabra cada archivo antes de parchear.**
 
@@ -1805,33 +1810,63 @@ Los cambios:
 - Que alguna versión futura de Android Auto pida algo más que la presencia del paquete. Hoy la comunidad reporta que alcanza.
 - En otros equipos donde la App de Google o Maps **vengan de fábrica** (en el sistema, que es lo común en celulares con Google), el stub no se puede instalar: la copia del sistema sigue ahí aunque se desinstalen sus actualizaciones, y su firma manda. La Tienda lo dice en la tarjeta (*"en este equipo la app real viene de fábrica"*). Para esos equipos la salida es otra (por ejemplo, des-ocultar la real y suspenderla), a decidir con el dueño cuando aparezca el caso.
 
+**B.89 — CPU Y BATERÍA, SEGUNDA PASADA: LA RE-APLICACIÓN DE CADA 15 MINUTOS REESCRIBÍA TODAS LAS POLÍTICAS DEL SISTEMA AUNQUE NO CAMBIARA NADA. [ESCRITO, COMPILADO Y CON PRUEBAS EN VERDE EL 27/9 (45/45; 27 nuevas, 22 controles negativos detectados); SIN PROBAR EN EQUIPO]** *(sigue a B.80)*
+
+Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, tanto en uso como en reposo, y fijate si es todo necesario o si hay cómo optimizarlo"*. Se hizo el inventario de todo lo que corre solo, y el costo de lo que pasa **dentro de Android** se midió leyendo el código de AOSP (11, 13, 14, 15 y `main`), no suponiendo.
+
+**El mapa: qué gasta, cuándo, y si hace falta.**
+
+| Qué | Cuándo corre | Veredicto |
+|---|---|---|
+| `WatchdogWorker` → `reapplyAllRestrictions()` | Cada 15 min (despierta al equipo; en Doze se agrupa), en cada arranque, y en cada arranque del proceso (en el hilo principal, desde `LockSuiteApplication`) | **Hace falta** (es la red de seguridad), pero **ordenaba todo de nuevo en cada vuelta**. Es el hallazgo grande: ver 1 y 2. |
+| `WatchdogForegroundService` (ciclos de 20 s y 60 s) | Con `Handler`: usa tiempo de CPU despierta, **no despierta al equipo dormido** | Bien. Ya optimizado el 2/9 y el 22/9 (B.80). |
+| VPN de DNS | Bloqueada en `read()` del túnel | Sin tráfico no gasta. Bien. |
+| Accesibilidad | Hasta ~10 eventos/s por tipo con la pantalla prendida; con la pantalla apagada corta en la primera línea | El camino caliente ya estaba cuidado (B.13, B.17). Dos gastos que se escaparon: ver 5. |
+| Pantallas de PIN y de emergencia | Bucle de 1-3 s | **Seguía corriendo con la pantalla en segundo plano**, días enteros. Ver 6. |
+| Preferencias cifradas | Cada comando del panel, cada 60 s desde el vigilante de accesibilidad, cada 1-3 s desde el PIN | **Se reconstruían desde cero en cada llamada**: unas seis operaciones en el chip de seguridad (TEE). Ver 4. |
+| Marca de agua | Ventana fija de 56 dp, sin temporizadores | Costo despreciable. No se toca. |
+| Firebase Analytics | Solo, en segundo plano | Incluido y **sin usar**. Decisión del dueño (a). |
+
+**Lo que se cambió** (siete archivos tocados, dos nuevos, dos de pruebas nuevas):
+
+1. **Comparar antes de escribir en la re-aplicación** (`PolicyManager`; las decisiones, puras y con banco de pruebas, en `mdm/PolicyReconciler.kt`). Medido en AOSP: en Android 13 cada `addUserRestriction` guarda `device_policies.xml` entero con `fsync`, manda **dos** broadcasts `DEVICE_POLICY_MANAGER_STATE_CHANGED` e invalida las cachés del DevicePolicyManager en todos los procesos; en 14+ reescribe el archivo del motor de políticas. Eran **20 a 40 escrituras así por vuelta**, ~96 vueltas por día. Ahora se lee una vez lo que el sistema tiene y se escribe solo lo que falta. Cubre: las restricciones (se saltea **solo** si está puesta por nosotros **y** rige de verdad: si no rige, se escribe igual, porque esa llamada es la que re-sincroniza — el propio Android lo dice en su código, b/307481299), el bloqueo de desinstalación de LockSuite, la cámara (en 14+ además tiene que regir `no_camera`), la captura de pantalla, Lock Task (lista y funciones; en Android 7 no se puede leer y se escribe como antes), la VPN permanente (paquete y lockdown), la lista de accesibilidad permitida, FRP (por la misma vía que usaría `setFrpPolicy()`), la restricción de instalar apps, el DNS privado (que además llamaba el vigilante cada 60 s) y la suspensión de navegadores y de WebView (en 14+ cada `setPackagesSuspended` guarda siempre). **Ante una lectura que falla, se escribe como antes**, y la llamada que corrige es la misma de siempre: la auto-reparación no pierde nada, solo deja de escribir cuando no hay nada que reparar.
+2. **Launcher kosher: en Android ≤ 13 cada vuelta AGREGABA un "launcher preferido" duplicado, para siempre.** `addPersistentPreferredActivity` no deduplica hasta el 13 (`IntentResolver.addFilter` → un `ArraySet` de objetos sin `equals`, verificado en AOSP 11 y 13): unas 96 entradas nuevas por día en `package-restrictions.xml`, que el sistema reescribe entero en cada cambio de cualquier app y recorre en cada "Inicio". Ahora se **consolida** (borrar las propias y poner una) la primera vez, cada vez que LockSuite pone o saca la entrada, si "Inicio" deja de abrir el nuestro, y una vez por día (no hay API pública para leer esas entradas, así que el chequeo por resultado no alcanza solo). **La primera vuelta con la versión nueva limpia todo lo acumulado.** De ~96 escrituras por día a 2.
+3. **Enumeración de apps de la re-aplicación.** Usaba `getUserApps()`, que es la lista para MOSTRAR (carga el nombre de cada app desde sus recursos y hace 3-4 llamadas al sistema por app, 200-400 apps con las del sistema), para usar solo el nombre del paquete. Ahora es una sola llamada, y la suspensión se lee del flag que ya viene en ella, igual que `reconcileEmergencySuspend()`.
+4. **`PrefsHelper.getEncryptedPrefs()`: una sola instancia por proceso.** No cambia qué se lee ni qué se escribe (todas las instancias de un archivo comparten el mismo `SharedPreferences` del sistema). El respaldo sin cifrar no se guarda: si el Keystore falla una vez, la próxima llamada reintenta, como antes.
+5. **Accesibilidad.** `DeviceCapability.isEligibleForAIBlocking()` hacía `getMemoryInfo()` al sistema en cada evento, aunque el bloqueo de imágenes estuviera apagado: ahora se calcula una vez, y solo si la IA haría falta. Y los códigos del marcador (`*#*#1234#*#*` y `*#*#9999#*#*`) se buscan en **un** recorrido del árbol en vez de dos (`mdm/DialerCodeScan.kt`): en la pantalla de llamada el cronómetro dispara un evento por segundo. Probado contra la versión vieja, copiada tal cual, en 5.500 árboles al azar: mismo resultado y **los mismos nodos leídos, en el mismo orden**.
+6. **Pantallas de PIN y de emergencia:** el bucle de refresco del bloqueo por intentos corre solo mientras la pantalla se ve (`repeatOnLifecycle(STARTED)`). Un `while (true)` dentro de `LaunchedEffect` no se frena al apretar Inicio.
+
+**Lo que NO cambia:** ninguna política nueva ni quitada; la simetría de B.38 sigue en 20/20/20/20; los pedidos explícitos (panel, app, perfil) escriben como antes, salvo la restricción de instalar apps y la suspensión de navegadores y WebView, que comparan también ahí.
+
+**Decisiones del dueño (no tocadas; el costo y el riesgo de cada una):**
+
+- **a. Firebase Analytics.** `firebase-analytics-ktx` está en el build y **ningún archivo lo usa**, pero recolecta y sube eventos solo (sesiones, primera apertura, actualizaciones), con su propio servicio y trabajos programados. Si nadie mira Analytics en la consola de Firebase, sacar la dependencia de `app/build.gradle.kts`, o apagarlo sin sacarla con `<meta-data android:name="firebase_analytics_collection_deactivated" android:value="true"/>` en el Manifest. Si se usa, dejarlo.
+- **b. La lista de apps al panel se sube completa, y dos veces** (`apps` e `info/apps`), en cada sincronización completa (una por hora, después de cada comando y después de cada ráfaga de eventos de paquete), armada con `getUserApps()`. Propuesta: firma de contenido y subir solo si cambió, con una subida forzada cada pocas horas por si alguien borra el nodo desde el panel. Toca lo que ve el panel: mejor hacerlo con el panel a la vista.
+- **c. Scroll en la accesibilidad.** `TYPE_VIEW_SCROLLED` llega de todas las apps (hasta 10 por segundo mientras se desplaza) aunque no haya ningún bloqueo de imágenes activo, y se descarta con una comparación. Se podría suscribir solo con el bloqueo de imágenes encendido; el riesgo es olvidarse de re-suscribir al encenderlo (los recuadros dejarían de seguir el scroll, que es B.17).
+- **d. Play Store se "libera" dos veces por vuelta** (en `reapplyAllRestrictions()` y en `refreshInstallRestriction()`) cuando la instalación no está bloqueada, y en Android 14+ cada liberación guarda `device_policies.xml` aunque ya esté libre. No se tocó: liberar también limpia el registro del DevicePolicyManager, y cambiarlo pide una prueba en un equipo con 14.
+- **e. De paso, ruido en el logcat:** `AppController.hideApp()` escribe *"Android no aplico ocultamiento para X"* en CADA vuelta por cada app que ya está oculta, porque en Android 13 `setApplicationHidden` devuelve `false` cuando no hay nada que cambiar. No es una falla, pero confunde un diagnóstico.
+
+**Verificado en el contenedor:** compila y arma el APK de depuración completo; **45/45 pruebas unitarias** (`PolicyReconcilerTest` 19 y `DialerCodeScanTest` 8, nuevas); **22 controles negativos**, todos detectados (el código roto a propósito de 22 formas distintas, y las pruebas fallan en todas); lint sin ningún error nuevo contra `HEAD` (solo 3 avisos de estilo `UseKtx`, como los otros 63 del mismo archivo); simetría de B.38 y los siete chequeos de `tools/` en verde.
+
+**Falta, en este orden** (detalle en `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md`): el commit; medir con 0.6.56 todavía instalada; desplegar 0.6.57; las pruebas de regresión en el celular (que las restricciones sigan puestas después de reiniciar, de suspender y reanudar; que "Inicio" abra el launcher kosher; kiosco; VPN; códigos del marcador; PIN); y medir de nuevo. **Nada de esto pasa a [RESUELTO] hasta probarlo en equipo.**
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**23/9 al 25/9 — Claude (Cowork, contenedor en la nube): Android Auto con LockSuite. El "error de comunicación 21" quedó resuelto y confirmado en el auto (B.87). Detrás apareció la pantalla "Descargá apps de Google Play", que quedó resuelta en código con stubs vacíos y Waze para navegar (B.88): compilado y probado en el contenedor, sin desplegar.**
+**27/9 — Claude (contenedor en la nube; el puente al disco anduvo al principio y se cortó a mitad de sesión): revisión de CPU y batería, en uso y en reposo. Lo más grande: la re-aplicación de cada 15 minutos reescribía todas las políticas del sistema aunque no cambiara nada, y en Android ≤ 13 sumaba un "launcher preferido" duplicado en cada vuelta, para siempre. Arreglado en código, compilado y con pruebas; sin probar en equipo (B.89).**
 
-**23/9 — el error 21 (B.87).** El dueño mandó la pantalla roja de Android Auto (*"Error de comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto"*).
+- **Arranque:** contexto leído completo. Clon validado contra el disco; `HEAD` = `origin/main` = `80573e5` (0.6.56, 25/9 17:30), o sea que los commits A y B del 25/9 ya los había hecho Antigravity y 0.6.56 está desplegada. La sección "Estado del repo" todavía decía lo contrario: corregida abajo.
+- **Inventario:** todo lo que corre solo, cuándo, y si hace falta (tabla en B.89). Lo que pasa dentro de Android se midió leyendo AOSP 11, 13, 14, 15 y `main`: cuánto cuesta cada `addUserRestriction`, `setLockTaskPackages`, `setPackagesSuspended`, `setCameraDisabled`, `addPersistentPreferredActivity`, etc., cuando no cambia nada.
+- **Cambios** (B.89, 1 a 6): comparar antes de escribir en toda la re-aplicación (`mdm/PolicyReconciler.kt`, nuevo); consolidar el launcher preferido (limpia los duplicados acumulados en la primera vuelta); enumerar las apps de la re-aplicación con una sola llamada; una sola instancia de las preferencias cifradas por proceso; en la accesibilidad, la memoria del equipo se consulta una vez y los códigos del marcador se buscan en un recorrido (`mdm/DialerCodeScan.kt`, nuevo); y los bucles de las pantallas de PIN y emergencia solo corren mientras se ven.
+- **Verificado en el contenedor:** compila y arma el APK de depuración; 45/45 pruebas (27 nuevas; `DialerCodeScanTest` compara contra la versión vieja copiada tal cual en 5.500 árboles al azar); 22 controles negativos, todos detectados; lint comparado contra `HEAD` (un error real encontrado y arreglado: `getLockTaskPackages` es de API 26); simetría de B.38 y los siete chequeos de `tools/` en verde.
+- **Revisado dos veces contra AOSP antes de cerrar:** en Android 14 el getter de la cámara lee un lugar distinto del que escribe el setter (da siempre `false`, así que ahí se sigue escribiendo como antes) y desde 14 la cámara es la restricción `no_camera`, que ahora también se exige que rija; y la escritura vieja de la VPN permanente arrancaba la VPN si estaba caída, algo que ya cubren el `WatchdogWorker` y el ciclo de 20 s.
+- **Decisiones del dueño, no tocadas** (B.89 a-e): Firebase Analytics sin usar; la lista de apps se sube completa y dos veces; el scroll de accesibilidad llega de todas las apps; Play Store se libera dos veces por vuelta; ruido de "no aplicó ocultamiento" en el logcat.
+- **Entrega:** el commit está hecho en el clon. El puente se cortó antes de escribir en el disco, así que el parche (`git format-patch`) y el mensaje van como archivos adjuntos en el chat, para dejarlos en `Claude outputs/`. Si el puente volvió antes del cierre, también quedaron escritos en el disco (ver "Estado del repo").
 
-- **Causa:** con la VPN permanente de LockSuite encima, el Android Auto **inalámbrico** no puede usar la Wi-Fi del auto. Con cable anda, porque va por USB.
-- **Arreglo:** Android Auto sale del túnel con `addDisallowedApplication`, como ya salía LockSuite. Un solo archivo (`KosherVpnService.kt`). Se verificó en el código de AOSP que un equipo sin Android Auto no pierde el filtro. No se excluyó Play Services (reabriría B.43) ni se usó `allowBypass()`.
-- **Revisión, esa misma noche** (pedido del dueño): los reportes de usuarios de otras VPN coinciden en que excluir solo Android Auto alcanza, siempre que la VPN no esté en lockdown, y LockSuite no lo usa. Se corrigió un comentario inexacto del código y se reforzó el script de ADB de las instrucciones.
-
-Antigravity commiteó lo del 22/9 (`881aea1`) y lo del 23/9 (`0c87da2`), y desplegó **0.6.55** (`e8f1d01`, 23/9 21:49). Antes rehízo el respaldo de las reglas publicadas, que había quedado vacío (ver B.73). La revisión de la noche se escribió en el disco después, a las 23:26, así que quedó sin commitear: es el commit A de "Estado del repo".
-
-**25/9 — confirmado en el auto: con 0.6.55 el error 21 ya no aparece.** B.87 tachado.
-
-**25/9 — la pantalla "Descargá apps de Google Play" (B.88).** Android Auto conecta y pide la App de Google y Google Maps. "Descargar" abre Play Store, que LockSuite bloquea, y "Salir" cierra Android Auto. El dueño pidió que no se instalen de verdad ni aparezcan en el auto: kosher y con navegación. La navegación la hace **Waze, el oficial de Play Store**, que ya tiene y al que LockSuite ya le bloquea el navegador.
-
-- **Medido por ADB en su celular:** la App de Google no existe; la Maps real está instalada como app común, oculta; Waze viene del sistema, con una actualización encima.
-- **Descartado:** fingir un paquete sin instalar nada (no hay API para eso); recortar Maps o poner "Waze con nombre de Maps" (Android Auto verifica la firma, lo confirma el foro JTech); suspender las apps reales (lo descartó el dueño).
-- **Hecho:** dos stubs vacíos propios en `tools/aa_stubs/`, sin código ni componentes, firmados con una clave que se borró al firmar. LockSuite los reconoce **por la firma** (`mdm/AndroidAutoStubs.kt`, más un punto en `AppController.isCritical()`): no los oculta, no los suspende, no los desinstala, y los repara si algo se les coló. La Tienda los deja instalar a cualquier equipo, reconociéndolos por la huella exacta del archivo (pedido del dueño: *"que los pueda descargar cualquiera, igual son vacíos"*). Si en el equipo ya está la app real, la tarjeta explica qué hacer.
-- **Verificado en el contenedor:** compila; 18/18 pruebas unitarias (5 nuevas, con control negativo); lint sin avisos en las líneas tocadas; `check_stubs.py` en VERDE; los APK revisados con `aapt2` y `apksigner`.
-- **No probado en el celular ni en el auto.** Por eso B.88 queda abierto.
-
-**Lo que sigue: `INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md`.** Los dos commits, desplegar 0.6.56, subir los stubs a la Tienda, y en el celular del dueño desinstalar la Maps real, instalar los stubs y probar en el auto. **El orden importa: 0.6.56 tiene que estar en el celular antes que los stubs.**
+**Lo que sigue: `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md`.** El commit, medir con 0.6.56 antes de instalar, desplegar 0.6.57, y las pruebas en el celular empezando por **que ninguna restricción se haya perdido**.
 
 ---
 
@@ -1839,41 +1874,33 @@ Antigravity commiteó lo del 22/9 (`881aea1`) y lo del 23/9 (`0c87da2`), y despl
 
 ### Estado de versiones
 
-- **0.6.55 / código 118 (`e8f1d01`, 23/9 21:49):** la última desplegada. Trae lo del 22/9 (`881aea1`, B.73 a B.86) y el arreglo de Android Auto del 23/9 (`0c87da2`, B.87, confirmado en el auto el 25/9). Al 25/9, `origin/main` está ahí, y el `HEAD` del disco también: el `mtime` de `.git/COMMIT_EDITMSG` y de `.git/index` es 23/9 21:49, y no hubo commits después.
-- **En el disco del dueño hay dos commits pendientes, SIN COMMITEAR, que van en este orden:**
-  - **A — revisión del 23/9 a la noche** (B.87; solo documentación y comentarios): `KosherVpnService.kt`, este documento e `INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md`. Están en el disco desde el 23/9 a las 23:26, después del commit de Antigravity.
-  - **B — stubs de Android Auto (25/9, B.88).**
-  - Cada uno tiene **parche + mensaje** en `Claude outputs/` (`2026-09-25_A_*` y `2026-09-25_B_*`). Los dos tocan este documento, así que un `git add` los mezclaría. El procedimiento que los separa sin descartar nada (`git apply --cached` de cada parche + `git commit`) está en §0 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md`, probado en el contenedor.
-  - ⚠️ `deploy_all.ps1` hace `git add .`: si se corre antes de los dos commits, los mete adentro de "Actualizacion automatica".
+- **0.6.56 / código 119 (`80573e5`, 25/9 17:30):** la última desplegada. Trae los dos commits del 25/9: `26d2fff` (revisión de B.87, solo comentarios y documentación) y `867908f` (stubs de Android Auto, B.88). Al 27/9 `origin/main` está ahí y no hubo commits después.
+- **Pendiente: UN commit, el del 27/9 (B.89, batería).** Hecho en el clon de la nube sobre `80573e5`. Viaja como `Claude outputs/2026-09-27_bateria.patch` (formato `git format-patch`) + `Claude outputs/2026-09-27_mensaje_commit.txt`. Cómo aplicarlo, según esté o no escrito en el disco: §0 de `INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md`.
+- ⚠️ `deploy_all.ps1` hace `git add .`: si se corre antes del commit, lo mete adentro de "Actualizacion automatica".
 
-### Archivos del commit B (25/9)
+### Archivos del commit del 27/9
 
-Finales de línea como estaban en el disco: **CRLF** en `PolicyManager.kt`, `LoginActivity.kt` y este documento; **LF** en `AppController.kt`, `LocaleManager.kt` y los archivos nuevos. Con `core.autocrlf` prendido, a git le da igual.
+Con `core.autocrlf` prendido, a git le dan igual los finales de línea. En el disco, al 27/9, estaban en **CRLF** `PolicyManager.kt`, `LockSuiteAccessibilityService.kt` y este documento; en **LF** `AppController.kt`, `PrefsHelper.kt` y `DeviceCapability.kt`.
 
 ```
-app/src/main/java/com/ejemplo/locksuite/mdm/AndroidAutoStubs.kt          (NUEVO)
-app/src/main/java/com/ejemplo/locksuite/mdm/AppController.kt             (isCritical, isAppHidden, isAppSuspended)
-app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt             (auto-reparación en la reaplicación)
-app/src/main/java/com/ejemplo/locksuite/ui/auth/LoginActivity.kt         (Tienda)
-app/src/main/java/com/ejemplo/locksuite/util/LocaleManager.kt            (hebreo: letras griegas en "אפליקציות")
-app/src/test/java/com/ejemplo/locksuite/mdm/AndroidAutoStubsTest.kt      (NUEVO)
-tools/aa_stubs/{README.md, build_stubs.sh, check_stubs.py}               (NUEVOS)
-tools/aa_stubs/apk/{aa-stub-maps.apk, aa-stub-google.apk}                (NUEVOS, binarios de 8,5 KB)
+app/src/main/java/com/ejemplo/locksuite/mdm/PolicyReconciler.kt            (NUEVO: decisiones de "comparar antes de escribir")
+app/src/main/java/com/ejemplo/locksuite/mdm/DialerCodeScan.kt              (NUEVO: códigos del marcador en un recorrido)
+app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt               (re-aplicación, launcher, Lock Task, VPN, FRP, DNS, navegadores/WebView)
+app/src/main/java/com/ejemplo/locksuite/mdm/AppController.kt               (FLAG_SUSPENDED visible para PolicyManager)
+app/src/main/java/com/ejemplo/locksuite/service/LockSuiteAccessibilityService.kt  (marcador, elegibilidad de la IA)
+app/src/main/java/com/ejemplo/locksuite/service/DeviceCapability.kt        (se calcula una vez)
+app/src/main/java/com/ejemplo/locksuite/util/PrefsHelper.kt                (una instancia cifrada por proceso)
+app/src/main/java/com/ejemplo/locksuite/ui/auth/LoginActivity.kt           (bucle del bloqueo solo con la pantalla visible)
+app/src/main/java/com/ejemplo/locksuite/ui/emergency/EmergencyActivity.kt  (ídem)
+app/src/test/java/com/ejemplo/locksuite/mdm/PolicyReconcilerTest.kt        (NUEVO, 19 pruebas)
+app/src/test/java/com/ejemplo/locksuite/mdm/DialerCodeScanTest.kt          (NUEVO, 8 pruebas)
 LOCKSUITE_CONTEXTO_PARA_IA.md
-INSTRUCCIONES_ANTIGRAVITY_2026-09-25_STUBS_ANDROID_AUTO.md               (NUEVO)
-```
-
-### Archivos del commit A (revisión del 23/9)
-
-```
-app/src/main/java/com/ejemplo/locksuite/service/KosherVpnService.kt     (solo comentarios)
-LOCKSUITE_CONTEXTO_PARA_IA.md
-INSTRUCCIONES_ANTIGRAVITY_2026-09-23_ANDROID_AUTO.md
+INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md                            (NUEVO)
 ```
 
 ### Antes de desplegar
 
-Los seis chequeos de siempre, las reglas, y desde el 25/9 los stubs:
+Los chequeos de siempre (el panel, las reglas y los stubs no cambian en 0.6.57, pero cuestan segundos):
 
 ```
 python tools/check_whitelist_sync.py
@@ -1882,8 +1909,9 @@ python tools/check_command_sync.py
 python tools/check_panel_commands.py
 python tools/gen_catalog_js.py --check
 python tools/gen_policies_js.py --check
-python tools/aa_stubs/check_stubs.py                # NUEVO: los APK de los stubs == las huellas del código
+python tools/aa_stubs/check_stubs.py
+.\gradlew :app:testDebugUnitTest                     # 45 pruebas, 0 fallas
 cd tools/rules_tests && npm install && npm test      # tiene que decir TODAS VERDES (44)
 ```
 
-**0.6.56 es solo la app Android:** no cambian el panel, ni `functions`, ni las reglas, y no hay comandos FCM nuevos. Los stubs no van en el APK de LockSuite: se suben aparte a la Tienda (ver las instrucciones).
+**0.6.57 es solo la app Android:** no cambian el panel, ni `functions`, ni las reglas, y no hay comandos FCM nuevos.

@@ -33,7 +33,7 @@ class AppController(private val context: Context) {
          * llamada extra por app**: viene en los flags que ya devuelve
          * `getInstalledApplications()`.
          */
-        private const val FLAG_SUSPENDED = 1 shl 30
+        internal const val FLAG_SUSPENDED = 1 shl 30
 
         /**
          * Qué apps son candidatas a la suspensión de emergencia. Se cachea porque el

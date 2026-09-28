@@ -22,6 +22,19 @@ class PolicyManager(private val context: Context) {
         /** Guarda de una vez por proceso para autoGrantDeclaredPermissions(). Ver B.55. */
         @Volatile private var permissionsAutoGranted = false
 
+        /**
+         * Cuándo se fijó por última vez el launcher kosher como pantalla de inicio con UNA
+         * sola entrada persistente (27/9/2026, `System.currentTimeMillis()`). Ver
+         * `reafirmarHomeSiHaceFalta()`. No es configuración del administrador: es estado
+         * técnico, y se borra cada vez que LockSuite pone o saca la entrada por su cuenta
+         * (encender o apagar el launcher, suspender), para que la próxima re-aplicación la
+         * vuelva a consolidar.
+         */
+        const val KEY_HOME_PPA_TS = "kosher_home_ppa_ts_v1"
+
+        /** Cada cuánto se re-consolida igual la entrada de inicio, aunque "Inicio" ya abra la nuestra. */
+        private const val HOME_PPA_VIGENCIA_MS = 24L * 60 * 60 * 1000
+
         private const val GOOGLE_PLAY_SERVICES_PACKAGE = "com.google.android.gms"
         private const val FRP_CONFIG_CHANGED_ACTION = "com.google.android.gms.auth.FRP_CONFIG_CHANGED"
 
@@ -78,6 +91,62 @@ class PolicyManager(private val context: Context) {
     private fun saveState(restriction: String, enabled: Boolean) {
         val prefs = PrefsHelper.getMdmPrefs(context)
         prefs.edit().putBoolean(restriction, enabled).apply()
+    }
+
+    /**
+     * Igual que `setRestriction()`, pero lee primero el estado real y no escribe si ya
+     * coincide (27/9/2026, batería). La preferencia se guarda siempre, como en
+     * `setRestriction()`. Ante una lectura que falla, escribe igual que antes.
+     */
+    private fun setRestriccionSiDifiere(restriction: String, enable: Boolean): Boolean {
+        val puestaPorNosotros = try {
+            dpm.getUserRestrictions(adminComponent).getBoolean(restriction, false)
+        } catch (e: Exception) {
+            null
+        }
+        val hayQueEscribir = if (enable) {
+            val efectiva = try {
+                (context.getSystemService(Context.USER_SERVICE) as UserManager).hasUserRestriction(restriction)
+            } catch (e: Exception) {
+                null
+            }
+            PolicyReconciler.hayQueAplicar(true, puestaPorNosotros, efectiva)
+        } else {
+            PolicyReconciler.hayQueQuitar(puestaPorNosotros)
+        }
+        if (hayQueEscribir) return setRestriction(restriction, enable)
+        saveState(restriction, enable)
+        return true
+    }
+
+    /**
+     * Lo que el sistema tiene puesto AHORA, leído una vez por re-aplicación: las
+     * restricciones que puso este Device Owner y las que rigen de verdad para el usuario.
+     * Cualquiera de las dos puede venir `null` si la lectura falló; en ese caso
+     * `PolicyReconciler` contesta siempre "hay que aplicar".
+     */
+    private class RestriccionesReales(
+        private val delAdmin: Bundle?,
+        private val efectivas: Bundle?
+    ) {
+        fun puestaPorNosotros(r: String): Boolean? = delAdmin?.getBoolean(r, false)
+        fun efectiva(r: String): Boolean? = efectivas?.getBoolean(r, false)
+        fun yaPuesta(r: String): Boolean =
+            !PolicyReconciler.hayQueAplicar(true, puestaPorNosotros(r), efectiva(r))
+    }
+
+    private fun leerRestriccionesReales(): RestriccionesReales {
+        val delAdmin = try {
+            dpm.getUserRestrictions(adminComponent)
+        } catch (e: Exception) {
+            null
+        }
+        val efectivas = try {
+            (context.getSystemService(Context.USER_SERVICE) as UserManager).userRestrictions
+        } catch (e: Exception) {
+            null
+        }
+        return RestriccionesReales(delAdmin, efectivas)
     }
 
     /**
@@ -168,14 +237,18 @@ class PolicyManager(private val context: Context) {
         val hasAllowedApps = allowed.any { it != context.packageName && it != "com.ejemplo.locksuite" }
 
         val appController = AppController(context)
+        // 27/9/2026 (batería): `setRestriccionSiDifiere` en vez de `setRestriction`. Esto
+        // corre al final de cada re-aplicación (cada 15 min): poner o sacar de nuevo una
+        // restricción que ya está como corresponde reescribía el archivo de políticas del
+        // sistema igual. Ver PolicyReconciler.
         if (isBlocked) {
             if (hasAllowedApps) {
                 // Bloqueo programático: permite instalaciones, pero filtra por código
-                if (!setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)) return false
+                if (!setRestriccionSiDifiere(UserManager.DISALLOW_INSTALL_APPS, false)) return false
                 prefs.edit().putBoolean("install_blocked_programmatic", true).apply()
             } else {
                 // Bloqueo nativo estricto: bloquea a nivel de OS
-                if (!setRestriction(UserManager.DISALLOW_INSTALL_APPS, true)) return false
+                if (!setRestriccionSiDifiere(UserManager.DISALLOW_INSTALL_APPS, true)) return false
                 prefs.edit().putBoolean("install_blocked_programmatic", false).apply()
             }
             try {
@@ -187,7 +260,7 @@ class PolicyManager(private val context: Context) {
             }
         } else {
             // Sin bloqueo
-            if (!setRestriction(UserManager.DISALLOW_INSTALL_APPS, false)) return false
+            if (!setRestriccionSiDifiere(UserManager.DISALLOW_INSTALL_APPS, false)) return false
             prefs.edit().putBoolean("install_blocked_programmatic", false).apply()
             try {
                 val isPlayStoreSuspended = prefs.getBoolean("suspend_com.android.vending", false)
@@ -472,12 +545,31 @@ class PolicyManager(private val context: Context) {
      * permitidas del launcher (si no, una app recién permitida no se podría abrir).
      */
     fun applyKioskLockTask(enable: Boolean) {
+        // 27/9/2026 (batería): se lee el estado real y solo se escribe lo que difiere. Esto
+        // corre en CADA re-aplicación (cada 15 min), con el kiosco encendido o apagado, y en
+        // Android 13 `setLockTaskPackages` guarda `device_policies.xml` y avisa al
+        // ActivityManager siempre, aunque la lista sea la misma. El orden de las dos
+        // escrituras (lista primero, features después) no cambia. Ante una lectura que
+        // falla, se escribe como antes.
         try {
+            val paquetes = if (enable) lockTaskAllowedPackages() else arrayOf()
+            // `getLockTaskPackages` es pública recién desde Android 8 (API 26). En 7.x no se
+            // lee: `null` = "no se sabe" = se escribe como antes.
+            val actuales = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    dpm.getLockTaskPackages(adminComponent).toList()
+                } catch (e: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
             if (enable) {
-                dpm.setLockTaskPackages(adminComponent, lockTaskAllowedPackages())
+                if (!PolicyReconciler.mismoConjunto(actuales, paquetes.toList())) {
+                    dpm.setLockTaskPackages(adminComponent, paquetes)
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    dpm.setLockTaskFeatures(
-                        adminComponent,
+                    setLockTaskFeaturesSiDifiere(
                         DevicePolicyManager.LOCK_TASK_FEATURE_HOME or
                             DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS or
                             DevicePolicyManager.LOCK_TASK_FEATURE_KEYGUARD or
@@ -488,10 +580,11 @@ class PolicyManager(private val context: Context) {
                 // Vaciar la lista PRIMERO: con la lista vacía, cualquier tarea que siguiera
                 // anclada se suelta sola. Al revés (devolver las features y después vaciar)
                 // deja una ventana en que el equipo sigue anclado sin lista.
-                dpm.setLockTaskPackages(adminComponent, arrayOf())
+                if (!PolicyReconciler.mismoConjunto(actuales, emptyList())) {
+                    dpm.setLockTaskPackages(adminComponent, paquetes)
+                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    dpm.setLockTaskFeatures(
-                        adminComponent,
+                    setLockTaskFeaturesSiDifiere(
                         DevicePolicyManager.LOCK_TASK_FEATURE_HOME or
                             DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS or
                             DevicePolicyManager.LOCK_TASK_FEATURE_KEYGUARD or
@@ -503,6 +596,18 @@ class PolicyManager(private val context: Context) {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.P)
+    private fun setLockTaskFeaturesSiDifiere(deseadas: Int) {
+        val actuales = try {
+            dpm.getLockTaskFeatures(adminComponent)
+        } catch (e: Exception) {
+            null
+        }
+        if (actuales != deseadas) {
+            dpm.setLockTaskFeatures(adminComponent, deseadas)
         }
     }
 
@@ -519,7 +624,18 @@ class PolicyManager(private val context: Context) {
             
             if (enabled) {
                 // Registrar launcher como preferido persistente (Device Owner)
-                dpm.addPersistentPreferredActivity(adminComponent, filter, component)
+                if (openImmediately) {
+                    // Pedido explícito (panel, app, perfil): se reafirma siempre, como antes.
+                    dpm.addPersistentPreferredActivity(adminComponent, filter, component)
+                    // En Android ≤ 13 esto pudo sumar un duplicado: la próxima re-aplicación
+                    // consolida (borra todas las propias y deja una).
+                    PrefsHelper.getMdmPrefs(context).edit().remove(KEY_HOME_PPA_TS).apply()
+                } else {
+                    // Re-aplicación (Watchdog de 15 min, arranque): solo si hace falta.
+                    // En Android ≤ 13 cada llamada AGREGABA una entrada duplicada que el
+                    // sistema no borra nunca. Ver reafirmarHomeSiHaceFalta().
+                    reafirmarHomeSiHaceFalta(filter, component)
+                }
 
                 // Aplicar fondo de pantalla y pantalla de bloqueo estilo MP3 oscuro
                 applyKosherMp3Wallpaper()
@@ -544,7 +660,10 @@ class PolicyManager(private val context: Context) {
             } else {
                 // Limpiar launcher preferido
                 dpm.clearPackagePersistentPreferredActivities(adminComponent, context.packageName)
-                PrefsHelper.getMdmPrefs(context).edit().remove("kosher_wallpaper_applied").apply()
+                PrefsHelper.getMdmPrefs(context).edit()
+                    .remove("kosher_wallpaper_applied")
+                    .remove(KEY_HOME_PPA_TS)
+                    .apply()
 
                 // Detener servicio de la marca de agua
                 val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
@@ -564,6 +683,73 @@ class PolicyManager(private val context: Context) {
             e.printStackTrace()
             false
         }
+    }
+
+    /**
+     * Fija el launcher kosher como pantalla de inicio SOLO si hace falta, y sin duplicados.
+     *
+     * ⚠️ 27/9/2026 — EL DUPLICADO QUE SE ACUMULABA PARA SIEMPRE (Android ≤ 13).
+     *
+     * `reapplyAllRestrictions()` llamaba a `addPersistentPreferredActivity` en cada vuelta
+     * del Watchdog (cada 15 min) y en cada arranque. En Android 13 y anteriores el sistema NO
+     * deduplica esa lista: `IntentResolver.addFilter()` hace `mFilters.add(f)` sobre un
+     * `ArraySet`, y ni `PersistentPreferredActivity` ni `IntentFilter` redefinen `equals`, así
+     * que cada llamada suma una entrada NUEVA (verificado en el código de AOSP de Android 11
+     * y 13). Se guardan en `/data/system/users/0/package-restrictions.xml` y se vuelven a
+     * leer al arrancar: unas 96 por día, sin techo. Ese archivo se reescribe entero en cada
+     * cambio de estado de cualquier app (suspender, ocultar, instalar), y cada vez que se
+     * aprieta Inicio el sistema recorre la lista. En Android 14+ el motor de políticas ya
+     * deduplica, pero igual reescribía su propio archivo en cada llamada.
+     *
+     * Ahora se CONSOLIDA —se borran todas las entradas propias, con lo que se van también
+     * los duplicados acumulados por versiones anteriores, y se pone UNA— en estos casos:
+     *  1. La primera vez con esta versión, y cada vez que LockSuite puso o sacó la entrada
+     *     por su cuenta (encender o apagar el launcher, suspender).
+     *  2. Si "Inicio" dejó de abrir nuestro launcher. Es la misma auto-reparación de antes,
+     *     que ahora mira el resultado en vez de escribir a ciegas.
+     *  3. Una vez por día igual (`HOME_PPA_VIGENCIA_MS`). No hay forma pública de leer las
+     *     entradas persistentes: si una se perdiera por fuera de LockSuite pero "Inicio"
+     *     siguiera abriendo el nuestro por una preferencia común del usuario, el punto 2 no
+     *     lo vería. Con esto ese hueco dura como mucho un día, y en Android ≤ 13 no se
+     *     acumula nada (se borra antes de poner).
+     * Resultado: de ~96 escrituras por día a 2, sin duplicados.
+     *
+     * Es la única entrada persistente que LockSuite pone (se verificó con grep): borrar
+     * "todas las propias" no toca nada más.
+     */
+    private fun reafirmarHomeSiHaceFalta(filter: android.content.IntentFilter, component: ComponentName) {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val ahora = System.currentTimeMillis()
+        val consolidada = PolicyReconciler.consolidacionVigente(
+            prefs.getLong(KEY_HOME_PPA_TS, 0L), ahora, HOME_PPA_VIGENCIA_MS
+        )
+        if (PolicyReconciler.homeAlDia(consolidada, consolidada && homeResuelveA(component))) return
+        try {
+            dpm.clearPackagePersistentPreferredActivities(adminComponent, context.packageName)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        dpm.addPersistentPreferredActivity(adminComponent, filter, component)
+        prefs.edit().putLong(KEY_HOME_PPA_TS, ahora).apply()
+        android.util.Log.i("PolicyManager", "Launcher kosher fijado como inicio (una sola entrada).")
+    }
+
+    /** ¿"Inicio" abre hoy este componente? Ante cualquier error, `false` (o sea, se reafirma). */
+    private fun homeResuelveA(component: ComponentName): Boolean = try {
+        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.resolveActivity(
+                home,
+                PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong())
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY)
+        }
+        val ai = info?.activityInfo
+        ai != null && ai.packageName == component.packageName && ai.name == component.className
+    } catch (e: Exception) {
+        false
     }
 
     private fun applyKosherMp3Wallpaper() {
@@ -771,6 +957,20 @@ class PolicyManager(private val context: Context) {
     fun disablePrivateDns() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                // 27/9/2026 (batería): leer antes de escribir. El Watchdog llama a esto cada
+                // 60 s mientras no esté puesta la restricción de DNS privado, y cada llamada
+                // era una transacción con el DevicePolicyManager (que además registra el
+                // evento en estadísticas) y otra con el proveedor de Ajustes, para escribir
+                // el mismo "off" de siempre. La lectura sale de la caché local de Ajustes
+                // (se invalida sola cuando el valor cambia), así que en el caso normal no
+                // cuesta ninguna llamada al sistema. `private_dns_mode` es legible por apps
+                // (@Readable en AOSP). Si la lectura falla, se escribe igual que antes.
+                val actual = try {
+                    android.provider.Settings.Global.getString(context.contentResolver, "private_dns_mode")
+                } catch (e: Exception) {
+                    null
+                }
+                if (PolicyReconciler.dnsPrivadoYaApagado(actual)) return
                 dpm.setGlobalSetting(adminComponent, "private_dns_mode", "off")
                 android.util.Log.i("PolicyManager", "DNS Privado desactivado a nivel global (PRIVATE_DNS_MODE=off)")
             }
@@ -2293,6 +2493,21 @@ class PolicyManager(private val context: Context) {
             }
         }
 
+        // ── COMPARAR ANTES DE ESCRIBIR (27/9/2026, batería) ─────────────────────────────
+        //
+        // Hasta hoy esta función ORDENABA todo de nuevo en cada vuelta (cada 15 min, en cada
+        // arranque y en cada arranque del proceso), estuviera puesto o no. Y en el sistema
+        // ninguna de esas órdenes es gratis aunque no cambie nada: en Android 13 cada
+        // `addUserRestriction` reescribe `device_policies.xml` con fsync y manda dos
+        // broadcasts a todas las apps que escuchan cambios de políticas; en Android 14+
+        // reescribe `device_policy_state.xml`. Eran 20 a 40 por vuelta. Ahora se lee UNA vez
+        // lo que el sistema tiene puesto y se escribe solo lo que falta. La corrección sigue
+        // siendo la misma llamada de antes, así que la auto-reparación no pierde nada — lo
+        // único que cambia es que no se escribe cuando no hay nada que reparar. El detalle,
+        // y por qué se piden las dos lecturas (la del admin y la efectiva), en
+        // mdm/PolicyReconciler.kt.
+        val reales = leerRestriccionesReales()
+
         todas.forEach { restriction ->
             // La de instalación la decide refreshInstallRestriction() al final de esta
             // función (nativa o "programática" según haya apps permitidas). Aplicarla acá
@@ -2301,7 +2516,12 @@ class PolicyManager(private val context: Context) {
             if (isInstallInProgress && restriction == UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES) {
                 return@forEach
             }
-            if (isRestrictionEnabled(restriction)) {
+            if (PolicyReconciler.hayQueAplicar(
+                    isRestrictionEnabled(restriction),
+                    reales.puestaPorNosotros(restriction),
+                    reales.efectiva(restriction)
+                )
+            ) {
                 try {
                     dpm.addUserRestriction(adminComponent, restriction)
                 } catch (e: Exception) {
@@ -2310,16 +2530,42 @@ class PolicyManager(private val context: Context) {
             }
         }
 
-        // Bloquear desinstalación de LockSuite a nivel de sistema (H6)
-        try {
-            dpm.setUninstallBlocked(adminComponent, context.packageName, true)
-        } catch (e: Exception) {
-            e.printStackTrace()
+        // Bloquear desinstalación de LockSuite a nivel de sistema (H6).
+        // 27/9: solo si no está bloqueada ya (cada llamada reescribía package-restrictions.xml).
+        run {
+            val yaBloqueada = try {
+                dpm.isUninstallBlocked(adminComponent, context.packageName)
+            } catch (e: Exception) {
+                false
+            }
+            if (!yaBloqueada) {
+                try {
+                    dpm.setUninstallBlocked(adminComponent, context.packageName, true)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
         }
 
-        // Hardware settings
+        // Hardware settings.
+        // 27/9: cámara y captura de pantalla tienen lectura pública: se escriben solo si el
+        // sistema no las tiene. Barra de estado y bloqueo de pantalla no tienen forma pública
+        // de leerse, así que siguen como antes (y solo cuando están encendidas).
         if (isCameraDisabled()) {
-            setCameraDisabled(true)
+            val yaDeshabilitada = try {
+                dpm.getCameraDisabled(adminComponent) &&
+                    // Desde Android 14 la cámara se apaga con la restricción "no_camera"
+                    // (DISALLOW_CAMERA, que en el SDK es oculta: por eso el literal). Se pide
+                    // además que RIJA, con el mismo criterio que las restricciones de arriba
+                    // (si no rige, la llamada de siempre fuerza la re-sincronización). En
+                    // algunas versiones de Android 14 el getter lee otro lugar y da siempre
+                    // false: ahí se sigue escribiendo como antes.
+                    (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+                        reales.efectiva("no_camera") == true)
+            } catch (e: Exception) {
+                false
+            }
+            if (!yaDeshabilitada) setCameraDisabled(true)
         }
         if (isKeyguardDisabled()) {
             setKeyguardDisabled(true)
@@ -2328,7 +2574,12 @@ class PolicyManager(private val context: Context) {
             setStatusBarDisabled(true)
         }
         if (isScreenCaptureBlocked()) {
-            setScreenCaptureBlocked(true)
+            val yaBloqueada = try {
+                dpm.getScreenCaptureDisabled(adminComponent)
+            } catch (e: Exception) {
+                false
+            }
+            if (!yaBloqueada) setScreenCaptureBlocked(true)
         }
         if (isKosherLauncherEnabled()) {
             setKosherLauncherEnabled(true, openImmediately = false) // No interrumpir al usuario al re-aplicar políticas
@@ -2352,8 +2603,12 @@ class PolicyManager(private val context: Context) {
         // Al llamarse tambien desde WatchdogWorker cada 15 min, esto ademas propaga solo
         // un futuro cambio de este bloque a dispositivos ya aprovisionados sin necesitar
         // re-tocar el switch a mano.
+        //
+        // 27/9/2026: se compara antes de escribir (ver reafirmarVpnPermanente). La
+        // restricción DISALLOW_CONFIG_VPN en sí ya la aseguró el bucle de arriba, que es lo
+        // que antes volvía a hacer setVpnConfigBlocked(true) por segunda vez en la vuelta.
         if (isRestrictionEnabled(UserManager.DISALLOW_CONFIG_VPN)) {
-            setVpnConfigBlocked(true)
+            reafirmarVpnPermanente()
         }
 
         // Aplicar proxy de bloqueo de internet si está activado
@@ -2402,9 +2657,15 @@ class PolicyManager(private val context: Context) {
             e.printStackTrace()
         }
 
-        // Aplicar FRP si está activado
+        // Aplicar FRP si está activado.
+        // 27/9/2026: solo si no está ya puesta por la misma vía. Cada llamada guardaba la
+        // política Y le mandaba un broadcast a Play Services (dos en la vía vieja), cada
+        // 15 minutos. Ver frpYaAplicada() y PolicyReconciler.frpAlDia().
         if (isFrpEnabled()) {
-            setFrpPolicy(getFrpAccounts(), useDefaultFrp(), true)
+            val cuentas = frpCuentasFinales(getFrpAccounts(), useDefaultFrp(), true)
+            if (!frpYaAplicada(cuentas, reales)) {
+                setFrpPolicy(getFrpAccounts(), useDefaultFrp(), true)
+            }
         }
 
         // Reforzar el endurecimiento Knox (Samsung) de reset y flasheo tras reinicio.
@@ -2431,11 +2692,29 @@ class PolicyManager(private val context: Context) {
         // Re-aplicar suspensiones individuales de aplicaciones (solo si están suspendidas explícitamente).
         // Igual que arriba: la app que se está actualizando queda exenta mientras
         // dure el flujo, o el Watchdog la suspendería en plena instalación.
+        //
+        // 27/9/2026 (batería): se enumeran los paquetes con UNA llamada y sin nada más.
+        // Antes esto usaba `getUserApps()`, que es la lista para MOSTRAR: por cada app
+        // instalada (200-400 contando las del sistema) cargaba su nombre desde sus recursos y
+        // hacía 3-4 llamadas al sistema (¿tiene ícono?, ¿está oculta?, ¿está suspendida?)…
+        // para después usar solo el nombre del paquete y `isCritical`. Mismas apps, mismas
+        // decisiones (salvo que ahora entran también las que no se les podía leer el nombre,
+        // que antes se salteaban). Y la suspensión se lee de los flags que ya vienen en la
+        // enumeración: si ya está suspendida, no se vuelve a pedir.
         val updatingPkgNow = prefs.getString("updating_package", null)
-        val userApps = appController.getUserApps(loadIcon = false)
-        for (app in userApps) {
-            if (!app.isCritical && app.packageName != "com.android.vending" &&
-                app.packageName != updatingPkgNow) {
+        // Mismos flags que getUserApps(): con MATCH_UNINSTALLED_PACKAGES entran también las
+        // apps ocultas (setApplicationHidden), que sin él no aparecen.
+        val instaladas = try {
+            context.packageManager.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+        for (info in instaladas) {
+            val pkg = info.packageName
+            if (pkg != "com.android.vending" &&
+                pkg != updatingPkgNow &&
+                !appController.isCritical(pkg)) {
                 // ARREGLO 1/9/2026 (S-2): el ocultamiento va PRIMERO y antes faltaba
                 // entero. liftAllForSuspension() des-oculta todas las apps, y al reanudar
                 // nadie las volvía a ocultar: `hide_<paquete>` no se leía en ningún lado
@@ -2446,20 +2725,33 @@ class PolicyManager(private val context: Context) {
                 // suspenderlo después no aporta nada; además hideApp(pkg, false) ya
                 // re-suspende solo si corresponde. Por eso: primero ocultar, y suspender
                 // solo si NO quedó oculta.
-                val debeOcultarse = prefs.getBoolean("hide_${app.packageName}", false)
+                val debeOcultarse = prefs.getBoolean("hide_$pkg", false)
                 if (debeOcultarse) {
-                    appController.hideApp(app.packageName, true)
+                    appController.hideApp(pkg, true)
                     continue
                 }
 
-                val defaultSuspended = AppController.DEFAULT_BLOCKED_PACKAGES.contains(app.packageName)
-                val isIndividuallySuspended = if (!prefs.contains("suspend_${app.packageName}") && defaultSuspended) {
+                val defaultSuspended = AppController.DEFAULT_BLOCKED_PACKAGES.contains(pkg)
+                val isIndividuallySuspended = if (!prefs.contains("suspend_$pkg") && defaultSuspended) {
                     true
                 } else {
-                    prefs.getBoolean("suspend_${app.packageName}", false)
+                    prefs.getBoolean("suspend_$pkg", false)
                 }
+                // 27/9: si los flags de la enumeración ya dicen "suspendida", no se pide de
+                // nuevo: suspendApp() lo habría comprobado con otra llamada al sistema
+                // (isPackageSuspended, que mira lo mismo que este flag) y no habría tocado el
+                // sistema. Lo único que sí hacía en ese caso era dejar anotada la preferencia
+                // `suspend_<paquete>` (importa para las de DEFAULT_BLOCKED_PACKAGES, que
+                // pueden estar suspendidas sin la preferencia escrita): eso se sigue haciendo
+                // acá, y solo si falta.
                 if (isIndividuallySuspended) {
-                    appController.suspendApp(app.packageName, true)
+                    if ((info.flags and AppController.FLAG_SUSPENDED) == 0) {
+                        appController.suspendApp(pkg, true)
+                    } else if (!appController.isPartialBlockOnly(pkg) &&
+                        !prefs.getBoolean("suspend_$pkg", false)
+                    ) {
+                        prefs.edit().putBoolean("suspend_$pkg", true).apply()
+                    }
                 }
             }
         }
@@ -2481,9 +2773,105 @@ class PolicyManager(private val context: Context) {
         // Re-aplicar restricciones de instalación
         refreshInstallRestriction()
 
-        // Re-aplicar protección del servicio de accesibilidad
+        // Re-aplicar protección del servicio de accesibilidad.
+        // 27/9: solo si la lista permitida no es ya "solo LockSuite" (en Android 13 cada
+        // llamada guarda device_policies.xml y avisa a todo el sistema).
         if (isAccessibilityProtectionEnabled()) {
-            applyAccessibilityProtection(true)
+            val permitidos = try {
+                dpm.getPermittedAccessibilityServices(adminComponent)
+            } catch (e: Exception) {
+                null
+            }
+            if (!PolicyReconciler.mismoConjunto(permitidos, listOf(context.packageName))) {
+                applyAccessibilityProtection(true)
+            }
+        }
+    }
+
+    /**
+     * La VPN permanente (Always-on) tiene que ser LockSuite, sin lockdown. Se compara antes
+     * de escribir (27/9/2026): en el caso normal ya lo es, y la escritura hacía pasar al
+     * sistema por la configuración de la VPN, el registro y la notificación de Always-on
+     * cada 15 minutos. Si el sistema la perdió (reset de fabricante, etc.) se vuelve a
+     * poner exactamente como lo hacía `setVpnConfigBlocked(true)`.
+     *
+     * Ojo con un efecto lateral de la escritura vieja: si la VPN estaba caída, el sistema
+     * además intentaba arrancarla (`startAlwaysOnVpn`). Eso no se pierde: lo cubren
+     * `BootReceiver.ensureVpnRunning()`, que el WatchdogWorker llama justo después de esta
+     * función, y el ciclo de 20 s de WatchdogForegroundService (con reintento forzado cada
+     * 5 min y el chequeo de salud del túnel).
+     */
+    private fun reafirmarVpnPermanente() {
+        val actual = try {
+            dpm.getAlwaysOnVpnPackage(adminComponent)
+        } catch (e: Exception) {
+            null
+        }
+        val lockdown: Boolean? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                dpm.isAlwaysOnVpnLockdownEnabled(adminComponent)
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        if (!PolicyReconciler.vpnPermanenteAlDia(actual, lockdown, context.packageName)) {
+            try {
+                // lockdown SIEMPRE false: ver el comentario largo de setVpnConfigBlocked y B.4.
+                dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
+                android.util.Log.i("PolicyManager", "Always-on VPN reafirmada (lockdown=false) sobre ${context.packageName}")
+            } catch (e: Exception) {
+                android.util.Log.w("PolicyManager", "No se pudo configurar Always-on VPN: ${e.message}")
+            }
+        }
+        disablePrivateDns()
+    }
+
+    /**
+     * ¿La política de FRP que pide LockSuite ya está puesta? (27/9/2026) Lee lo mismo que
+     * escribe `setFrpPolicy()`: la API oficial (Android 11+) o, si esa no existe o la ROM no
+     * la soporta, las restricciones de Play Services. La decisión vive en
+     * `PolicyReconciler.frpAlDia()`, con banco de pruebas.
+     */
+    private fun frpYaAplicada(cuentas: List<String>, reales: RestriccionesReales): Boolean {
+        return try {
+            val endurecimiento = reales.yaPuesta(UserManager.DISALLOW_FACTORY_RESET) &&
+                reales.yaPuesta(UserManager.DISALLOW_SAFE_BOOT)
+            val oficial: PolicyReconciler.FrpOficial =
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                    PolicyReconciler.FrpOficial.SinApi
+                } else {
+                    try {
+                        val p = dpm.getFactoryResetProtectionPolicy(adminComponent)
+                        if (p == null) {
+                            PolicyReconciler.FrpOficial.SinPolitica
+                        } else {
+                            PolicyReconciler.FrpOficial.Politica(
+                                p.isFactoryResetProtectionEnabled,
+                                p.factoryResetProtectionAccounts.toSet()
+                            )
+                        }
+                    } catch (e: UnsupportedOperationException) {
+                        PolicyReconciler.FrpOficial.NoSoportada
+                    }
+                }
+            val vieja = if (oficial is PolicyReconciler.FrpOficial.SinApi ||
+                oficial is PolicyReconciler.FrpOficial.NoSoportada
+            ) {
+                val b = dpm.getApplicationRestrictions(adminComponent, GOOGLE_PLAY_SERVICES_PACKAGE)
+                PolicyReconciler.FrpVieja(
+                    cuentasPorClave = LEGACY_FRP_ACCOUNT_KEYS.map { k -> b.getStringArray(k)?.toSet() },
+                    habilitada = b.getBoolean("factoryResetProtectionEnabled", false),
+                    adminDeshabilitado = b.getBoolean("disableFactoryResetProtectionAdmin", true)
+                )
+            } else {
+                null
+            }
+            PolicyReconciler.frpAlDia(cuentas.toSet(), endurecimiento, oficial, vieja)
+        } catch (e: Exception) {
+            // Ante la duda, se aplica: es la escritura de siempre.
+            false
         }
     }
 
@@ -2650,6 +3038,11 @@ class PolicyManager(private val context: Context) {
 
         // Launcher Kosher: devolver el launcher nativo y parar la marca de agua
         safely { dpm.clearPackagePersistentPreferredActivities(adminComponent, context.packageName) }
+        // 27/9/2026: la entrada de "inicio" se acaba de sacar, así que al reanudar
+        // reapplyAllRestrictions() la tiene que volver a poner sin preguntar. No es una
+        // preferencia de configuración (esas no se tocan acá): es estado técnico, ver
+        // reafirmarHomeSiHaceFalta().
+        safely { PrefsHelper.getMdmPrefs(context).edit().remove(KEY_HOME_PPA_TS).apply() }
         safely {
             context.stopService(Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java))
         }
@@ -2919,18 +3312,23 @@ class PolicyManager(private val context: Context) {
     fun suspendAllKnownBrowsers(suspend: Boolean) {
         val pm = context.packageManager
         val dynamicBrowsers = getInstalledBrowserPackages()
-        val allBrowsers = (dynamicBrowsers + KNOWN_BROWSER_PACKAGES).filter { pkg ->
+        // Los instalados, con sus flags: el PackageInfo ya se pedía para saber si estaban.
+        val instalados = LinkedHashMap<String, Int>()
+        for (pkg in (dynamicBrowsers + KNOWN_BROWSER_PACKAGES)) {
+            if (pkg in instalados) continue
             try {
-                pm.getPackageInfo(pkg, 0)
-                true
+                instalados[pkg] = pm.getPackageInfo(pkg, 0).applicationInfo?.flags ?: 0
             } catch (e: Exception) {
-                false
+                // No instalado (u oculto): no se manda, igual que antes.
             }
-        }.toSet()
+        }
 
-        if (allBrowsers.isNotEmpty()) {
+        // 27/9/2026 (batería): al suspender, solo los que el sistema todavía no tiene
+        // suspendidos. Ver PolicyReconciler.paquetesAMandar().
+        val aMandar = PolicyReconciler.paquetesAMandar(instalados, suspend, AppController.FLAG_SUSPENDED)
+        if (aMandar.isNotEmpty()) {
             try {
-                dpm.setPackagesSuspended(adminComponent, allBrowsers.toTypedArray(), suspend)
+                dpm.setPackagesSuspended(adminComponent, aMandar.toTypedArray(), suspend)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -2956,18 +3354,23 @@ class PolicyManager(private val context: Context) {
     fun setSystemWebViewSuspended(suspend: Boolean): Boolean {
         val packages = listOf("com.google.android.webview", "com.android.webview")
         val pm = context.packageManager
-        val installed = packages.filter { pkg ->
+        val instalados = LinkedHashMap<String, Int>()
+        for (pkg in packages) {
             try {
-                pm.getPackageInfo(pkg, 0)
-                true
+                instalados[pkg] = pm.getPackageInfo(pkg, 0).applicationInfo?.flags ?: 0
             } catch (e: Exception) {
-                false
+                // No instalado.
             }
         }
-        if (installed.isEmpty()) return false
+        if (instalados.isEmpty()) return false
         if (deferIfSuspended("system_webview_suspended", suspend)) return true
         return try {
-            dpm.setPackagesSuspended(adminComponent, installed.toTypedArray(), suspend)
+            // 27/9/2026 (batería): al suspender, solo lo que todavía no está suspendido.
+            // Ver PolicyReconciler.paquetesAMandar().
+            val aMandar = PolicyReconciler.paquetesAMandar(instalados, suspend, AppController.FLAG_SUSPENDED)
+            if (aMandar.isNotEmpty()) {
+                dpm.setPackagesSuspended(adminComponent, aMandar.toTypedArray(), suspend)
+            }
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("system_webview_suspended", suspend).apply()
             true
         } catch (e: Exception) {
@@ -3038,13 +3441,20 @@ class PolicyManager(private val context: Context) {
     // ─────────────────────────────────────────────
     // FACTORY RESET PROTECTION (FRP)
     // ─────────────────────────────────────────────
+    /**
+     * Las cuentas que `setFrpPolicy()` va a poner. Separado el 27/9/2026 para que
+     * `reapplyAllRestrictions()` compare contra EXACTAMENTE la misma lista que se escribiría.
+     */
+    private fun frpCuentasFinales(accountsList: List<String>, useDefault: Boolean, enabled: Boolean): List<String> =
+        if (useDefault && enabled) {
+            com.ejemplo.locksuite.util.Constants.getDefaultFrpAccounts()
+        } else {
+            accountsList.map { it.trim() }.filter { it.isNotEmpty() }
+        }
+
     fun setFrpPolicy(accountsList: List<String>, useDefault: Boolean, enabled: Boolean): Boolean {
         return try {
-            val finalAccounts = if (useDefault && enabled) {
-                com.ejemplo.locksuite.util.Constants.getDefaultFrpAccounts()
-            } else {
-                accountsList.map { it.trim() }.filter { it.isNotEmpty() }
-            }
+            val finalAccounts = frpCuentasFinales(accountsList, useDefault, enabled)
 
             // Si está activado pero no usa default y la lista de cuentas está vacía, no podemos configurar
             if (enabled && !useDefault && finalAccounts.isEmpty()) {

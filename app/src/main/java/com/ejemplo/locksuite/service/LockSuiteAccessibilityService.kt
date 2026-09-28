@@ -941,9 +941,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         }
 
         // 2. Capa 2: Bloqueo por IA
+        //
+        // 27/9/2026 (batería): la elegibilidad del equipo se consulta SOLO si la IA haría
+        // falta. Antes se calculaba en cada evento aunque el bloqueo de imágenes estuviera
+        // apagado en todas las apps, y adentro hacía `ActivityManager.getMemoryInfo()`: una
+        // llamada al sistema (que además relee /proc/meminfo) varias veces por segundo con
+        // la pantalla encendida. Ahora además se cachea (ver DeviceCapability). Misma
+        // condición que antes: ((layer2|both) || maps) && IA global && equipo elegible.
         val isGlobalAi = ImageBlockManager.isGlobalAiEnabled(applicationContext)
-        val isEligible = DeviceCapability.isEligibleForAIBlocking(applicationContext)
-        val runAi = ((mode == "layer2" || mode == "both") && isGlobalAi && isEligible) || (mapsBlocking && isGlobalAi && isEligible)
+        val quiereAi = (mode == "layer2" || mode == "both" || mapsBlocking) && isGlobalAi
+        val runAi = quiereAi && DeviceCapability.isEligibleForAIBlocking(applicationContext)
 
         if (runAi) {
             scheduleAiScanIfDue(activePkg, mapsBlocking)
@@ -2340,11 +2347,26 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // ──────────────────────────────────────────────
     private fun handleDialerIntercept() {
         val root = rootInActiveWindow ?: return
-        nodeBudget = MAX_NODES_PER_SCAN
-        val isOpenCode    = searchNodeByText(root, listOf("*#*#1234#*#*", "*#*#1234#*#"), 0)
-        nodeBudget = MAX_NODES_PER_SCAN
-        val isEmergencyCode = searchNodeByText(root, listOf("*#*#9999#*#*", "*#*#9999#*#"), 0)
-        root.recycle()
+        // 27/9/2026 (batería): UN recorrido para los dos códigos y sin pasar cada texto a
+        // minúscula. Antes eran dos recorridos completos por evento, y esto corre en cada
+        // evento de la pantalla de llamada (el cronómetro cambia una vez por segundo). Mismo
+        // resultado, probado contra la versión vieja: ver mdm/DialerCodeScan.kt.
+        val resultado = try {
+            com.ejemplo.locksuite.mdm.DialerCodeScan.buscar(
+                root,
+                maxProfundidad = MAX_TREE_DEPTH,
+                maxNodos = MAX_NODES_PER_SCAN,
+                cantidadHijos = { it.childCount },
+                hijo = { nodo, i -> nodo.getChild(i) },
+                soltar = { it.recycle() },
+                texto = { it.text },
+                descripcion = { it.contentDescription }
+            )
+        } finally {
+            root.recycle()
+        }
+        val isOpenCode = resultado == com.ejemplo.locksuite.mdm.DialerCodeScan.Resultado.ABRIR
+        val isEmergencyCode = resultado == com.ejemplo.locksuite.mdm.DialerCodeScan.Resultado.EMERGENCIA
 
         if (isOpenCode) {
             performGlobalAction(GLOBAL_ACTION_HOME)
@@ -2359,23 +2381,6 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
             startActivity(intent)
         }
-    }
-
-    private fun searchNodeByText(root: AccessibilityNodeInfo, keywords: List<String>, depth: Int): Boolean {
-        if (depth > MAX_TREE_DEPTH) return false
-        if (nodeBudget-- <= 0) return false
-
-        val text = root.text?.toString()?.lowercase() ?: ""
-        val desc = root.contentDescription?.toString()?.lowercase() ?: ""
-        if (keywords.any { text.contains(it) || desc.contains(it) }) return true
-        val childCount = root.childCount
-        for (i in 0 until childCount) {
-            val child = root.getChild(i) ?: continue
-            val found = searchNodeByText(child, keywords, depth + 1)
-            child.recycle()
-            if (found) return true
-        }
-        return false
     }
 
     private fun Int.toEventName(): String = when (this) {

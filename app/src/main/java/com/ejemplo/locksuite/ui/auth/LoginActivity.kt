@@ -58,6 +58,7 @@ import com.ejemplo.locksuite.security.PinManager
 import com.ejemplo.locksuite.security.SessionManager
 import com.ejemplo.locksuite.ui.dashboard.DashboardActivity
 import kotlinx.coroutines.delay
+import androidx.lifecycle.repeatOnLifecycle
 
 class LoginActivity : ComponentActivity() {
 
@@ -173,14 +174,24 @@ fun LoginScreen(
         }
     }
 
-    // Efecto secundario optimizado con corrutinas de Kotlin (cancela el loop automáticamente al salir)
-    LaunchedEffect(Unit) {
-        while (true) {
-            updateLockoutState()
-            if (lockoutTimeRemaining > 0) {
-                delay(1000L)
-            } else {
-                delay(3000L)
+    // Refresco del bloqueo por intentos fallidos, SOLO mientras la pantalla se ve.
+    //
+    // 27/9/2026 (batería): antes era un `LaunchedEffect(Unit)` con `while (true)`, que
+    // Compose NO frena cuando la pantalla pasa a segundo plano (apretar Inicio deja la
+    // Activity viva y detenida, y el bucle sigue): despertaba el hilo principal cada 3 s
+    // durante días, y cada vuelta abría las preferencias cifradas (ver PrefsHelper).
+    // `repeatOnLifecycle(STARTED)` corta el bucle al salir de la pantalla y lo vuelve a
+    // arrancar —con un refresco inmediato— al volver. Mientras se ve, es idéntico.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                updateLockoutState()
+                if (lockoutTimeRemaining > 0) {
+                    delay(1000L)
+                } else {
+                    delay(3000L)
+                }
             }
         }
     }

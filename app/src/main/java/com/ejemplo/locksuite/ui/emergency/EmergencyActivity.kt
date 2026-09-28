@@ -33,6 +33,7 @@ import com.ejemplo.locksuite.util.LocaleManager
 import kotlinx.coroutines.delay
 import com.ejemplo.locksuite.security.LockoutState
 import com.ejemplo.locksuite.security.LockoutStatus
+import androidx.lifecycle.repeatOnLifecycle
 
 class EmergencyActivity : ComponentActivity() {
 
@@ -156,13 +157,19 @@ fun EmergencyScreen(onPurgeSuccess: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            updateLockoutState()
-            if (lockoutTimeRemaining > 0) {
-                delay(1000L)
-            } else {
-                delay(3000L)
+    // 27/9/2026 (batería): solo mientras la pantalla se ve. Mismo motivo que en
+    // LoginActivity: un `while (true)` dentro de `LaunchedEffect(Unit)` sigue corriendo con
+    // la Activity detenida en segundo plano.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                updateLockoutState()
+                if (lockoutTimeRemaining > 0) {
+                    delay(1000L)
+                } else {
+                    delay(3000L)
+                }
             }
         }
     }

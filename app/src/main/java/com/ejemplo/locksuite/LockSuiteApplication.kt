@@ -13,6 +13,9 @@ import com.google.firebase.FirebaseApp
 import com.ejemplo.locksuite.dns.DomainRuleEngine
 import com.ejemplo.locksuite.dns.DnsActivityBuffer
 import com.ejemplo.locksuite.dns.DomainRuleManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Punto de entrada del proceso.
@@ -250,19 +253,20 @@ class LockSuiteApplication : Application() {
             e.printStackTrace()
         }
 
-        // 2. Re-aplicar restricciones MDM locales.
-        // Envuelto en try/catch: Application.onCreate() es el punto de entrada de
-        // todo el proceso — antes, si esta llamada fallaba (p.ej. un fallo
-        // transitorio de Binder con DevicePolicyManager al arrancar muy temprano
-        // durante el boot), una excepción sin capturar acá aborta el resto de
-        // onCreate() y además puede tirar abajo el proceso entero (crash), de
-        // modo que ni el Watchdog ni la VPN ni la sincronización con Firebase
-        // llegan a iniciarse en ese ciclo. Exactamente lo que "no debe trabarse
-        // ni crashear" prohíbe.
-        try {
-            PolicyManager(this).reapplyAllRestrictions()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        // 2. Re-aplicar restricciones MDM locales fuera del hilo principal.
+        // En instalaciones nuevas (y en arranques con muchas apps instaladas),
+        // reapplyAllRestrictions() realiza decenas de llamadas IPC a DevicePolicyManager,
+        // escanea todos los paquetes instalados y reconcilia la lista blanca. Ejecutarlo
+        // de forma síncrona en el hilo principal de Application.onCreate() congelaba el
+        // proceso (hasta 20s en equipos de gama de entrada como Qin F21 Pro o CAT S22 Flip),
+        // manteniendo visible la ventana de splash nativa (#0B192C azul) y provocando que
+        // el sistema operativo disparara un ANR antes de mostrar la UI de bienvenida o PIN.
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                PolicyManager(this@LockSuiteApplication).reapplyAllRestrictions()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         // 2b. Activar la licencia Knox (Samsung) — no hace nada en otras marcas ni

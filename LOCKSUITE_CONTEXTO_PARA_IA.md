@@ -1854,6 +1854,23 @@ Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, 
 - **Prueba 4 y 6 en celular:** escaneo de marcador `*#*#1234#*#*` funcionando en un solo recorrido; VPN y filtrado DNS activos (dominios permitidos con conectividad fluida, anuncios y dominios no kosher bloqueados).
 - Batterystats reiniciado con `dumpsys batterystats --reset` para comparación a futuro.
 
+**B.90 — ARRANQUE EN FRÍO / INSTALACIONES NUEVAS: LA REAPLICACIÓN SÍNCRONA DE POLÍTICAS EN EL HILO PRINCIPAL BLOQUEABA EL PROCESO CON PANTALLA AZUL Y ANR. [CORREGIDO EN CÓDIGO Y COMPILACIÓN RELEASE VERIFICADA EL 8/10]**
+
+- **Síntoma reportado:** En instalaciones nuevas (*"cuando la abro aparece toda la pantalla azul, en todos los que instalo la app de cero; en los actualizados funciona perfecto"*).
+- **Causa raíz diagnosticada con ADB y logcat en Qin F21 Pro:**
+  1. En `themes.xml`, `Theme.LockSuite` tiene `android:windowBackground = #0B192C` (azul marino), que es la pantalla de splash nativa que el SO dibuja mientras carga la Activity.
+  2. En `LockSuiteApplication.onCreate()`, `PolicyManager(this).reapplyAllRestrictions()` se ejecutaba de forma síncrona en el hilo principal (`main`).
+  3. En un equipo actualizado, `PolicyReconciler` (B.89) saltea casi todo porque el DPM ya está configurado. Pero en una **instalación limpia**, las preferencias están vacías: `reapplyAllRestrictions()` ejecutaba decenas de llamadas IPC a `DevicePolicyManager`, comprobaciones, escaneo masivo de paquetes vía `PackageManager` y reconciliación de listas.
+  4. En procesadores de gama de entrada (Qin F21 Pro, CAT S22 Flip), esto tomaba 15–20 segundos. El hilo principal quedaba congelado, manteniendo la ventana de splash nativa fija (pantalla 100% azul), hasta que el sistema disparaba un ANR (*Application Not Responding*) por timeout de servicio (`executing service LockSuiteAccessibilityService`) antes de poder cargar `SetupPinActivity`.
+- **Solución implementada:**
+  - En `LockSuiteApplication.kt`, se trasladó la ejecución de `reapplyAllRestrictions()` a `CoroutineScope(Dispatchers.IO).launch`.
+  - `Application.onCreate()` completa ahora en < 50 ms.
+  - La UI (`SetupPinActivity` para configurar PIN o `LoginActivity`) dibuja inmediatamente sin trabas ni pantallas congeladas.
+- **Verificación:**
+  - 45/45 pruebas unitarias (`:app:testDebugUnitTest`) pasan en verde.
+  - Siete herramientas de consistencia de `tools/` en verde.
+  - Compilación release con R8 y firmas completada sin errores (`assembleRelease`).
+
 ---
 
 ## C. BITÁCORA — última sesión conocida

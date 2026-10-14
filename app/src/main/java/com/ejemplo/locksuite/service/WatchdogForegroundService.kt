@@ -368,9 +368,9 @@ class WatchdogForegroundService : Service() {
             e.printStackTrace()
         }
 
-        // Sincronizar información del dispositivo en segundo plano al iniciar el servicio
+        // Sincronizar información del dispositivo en segundo plano al iniciar el servicio (no bloqueante)
         try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(applicationContext)
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(applicationContext)
         } catch (e: Exception) {
             e.printStackTrace()
         }

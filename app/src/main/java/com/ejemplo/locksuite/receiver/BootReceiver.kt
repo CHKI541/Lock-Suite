@@ -9,11 +9,23 @@ import com.ejemplo.locksuite.service.WatchdogForegroundService
 import com.ejemplo.locksuite.ui.auth.LoginActivity
 import com.ejemplo.locksuite.util.Constants
 import com.ejemplo.locksuite.util.PrefsHelper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
+
+        // Alarma de respaldo: si la ventana de arranque protegido venció sin que la VPN
+        // o el Watchdog hayan podido confirmar el filtro, se libera el proxy huérfano.
+        if (action == ACTION_BOOT_GATE_TIMEOUT) {
+            android.util.Log.w("BootReceiver", "Alarma de seguridad de arranque protegido disparada. Verificando proxy huérfano.")
+            com.ejemplo.locksuite.util.BootGate.healStuckProxy(context, "alarma de seguridad")
+            return
+        }
+
         if (action != Intent.ACTION_BOOT_COMPLETED &&
             action != "android.intent.action.LOCKED_BOOT_COMPLETED" &&
             action != Intent.ACTION_MY_PACKAGE_REPLACED) return
@@ -26,65 +38,23 @@ class BootReceiver : BroadcastReceiver() {
         }
 
         // 0. ARRANQUE PROTEGIDO — lo PRIMERO de todo, antes que cualquier otra cosa.
-        //
-        // Las restricciones de red las aplica nuestra VPN de filtrado, y esa VPN tarda
-        // unos segundos en levantar después del arranque. En ese hueco el equipo tiene
-        // internet sin filtrar. Acá se cierra la red con una sola llamada al sistema
-        // (proxy global a un puerto muerto) y se vuelve a abrir recién cuando el túnel
-        // está leyendo paquetes de verdad. El porqué completo, y qué cubre y qué no,
-        // está en el comentario de cabecera de util/BootGate.kt.
-        //
-        // Va antes de reaplicar restricciones a propósito: reapplyAllRestrictions() hace
-        // decenas de llamadas al DevicePolicyManager y puede tardar cientos de ms, que es
-        // justo el tiempo que estamos tratando de cubrir.
         try {
             com.ejemplo.locksuite.util.BootGate.engage(context)
         } catch (e: Exception) {
             android.util.Log.e("BootReceiver", "Error activando el arranque protegido: ${e.message}")
         }
 
-        // 0b. Reglas DNS — segunda red del arreglo de Arranque Directo (21/8/2026).
-        //
-        // Si el proceso arrancó con LOCKED_BOOT_COMPLETED (antes del primer desbloqueo),
-        // `LockSuiteApplication` no pudo leer las reglas del disco: el almacenamiento
-        // cifrado por credencial todavía no estaba montado. Si ese mismo proceso sigue
-        // vivo cuando llega BOOT_COMPLETED, el motor de reglas seguiría VACÍO y el
-        // filtro DNS correría sin ninguna regla personalizada, en silencio, durante toda
-        // la vida del proceso. Es idempotente: si ya se cargaron, no hace nada.
-        // Ver la cabecera de LockSuiteApplication.kt y B.20.
+        // 0b. Reglas DNS
         try {
             com.ejemplo.locksuite.LockSuiteApplication.ensureDomainRulesLoaded(context)
         } catch (e: Exception) {
             android.util.Log.w("BootReceiver", "No se pudieron cargar las reglas DNS: ${e.message}")
         }
 
-        // 1. Re-aplicar restricciones MDM de inmediato
-        try {
-            val policyManager = PolicyManager(context)
-            policyManager.reapplyAllRestrictions()
-        } catch (e: Exception) {
-            android.util.Log.e("BootReceiver", "Error re-aplicando restricciones: ${e.message}")
-        }
-
-        // Período de gracia: cerrar acá si venció mientras el equipo estaba apagado.
-        // Va DESPUÉS de reaplicar restricciones, no antes: si cerrara primero, aplicaría
-        // el perfil de cierre y `reapplyAllRestrictions()` lo pisaría a continuación con
-        // las preferencias viejas. El orden es el que hace que el cierre sobreviva al
-        // arranque. Ver mdm/GracePeriodManager.kt.
-        try {
-            com.ejemplo.locksuite.mdm.GracePeriodManager.checkAndHarden(context)
-        } catch (e: Exception) {
-            android.util.Log.e("BootReceiver", "Error chequeando el período de gracia: ${e.message}")
-        }
-        
-        // Sincronizar el estado del dispositivo con Firebase
-        try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // 2. Iniciar el servicio Watchdog
+        // 1. Iniciar los servicios INMEDIATAMENTE (Watchdog, VPN, Watermark)
+        // No postergamos esto detrás de la reconciliación pesada de políticas: el proceso
+        // necesita que el Watchdog y la VPN arranquen de inmediato para no arriesgar
+        // que el arranque protegido quede clavado ni que Android cierre el proceso por ANR.
         try {
             val serviceIntent = Intent(context, WatchdogForegroundService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -96,15 +66,10 @@ class BootReceiver : BroadcastReceiver() {
             android.util.Log.e("BootReceiver", "Error iniciando Watchdog: ${e.message}")
         }
 
-        // 3. Iniciar el servicio Watermark si el modo Kosher Launcher está activo y tiene permisos de overlay
+        ensureVpnRunning(context)
+
         try {
             val policyManager = PolicyManager(context)
-            // ARREGLO 1/9/2026 (S-1): faltaba mirar la suspensión. Con LockSuite
-            // suspendido el equipo tiene que quedar como si la app no estuviera
-            // instalada, y la marca de agua es lo más visible de todo. El mismo chequeo
-            // en WatchdogForegroundService.checkRunnable SÍ la miraba: eran dos lugares
-            // haciendo lo mismo con criterios distintos. Y como el Watchdog solo ARRANCA
-            // el servicio y nunca lo para, una vez que aparecía se quedaba.
             if (!policyManager.isLockSuiteSuspended() &&
                 policyManager.isKosherLauncherEnabled() && android.provider.Settings.canDrawOverlays(context)) {
                 val watermarkIntent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
@@ -118,12 +83,31 @@ class BootReceiver : BroadcastReceiver() {
             android.util.Log.e("BootReceiver", "Error iniciando WatermarkService en boot: ${e.message}")
         }
 
-        // 4. Garantizar que la VPN se inicie inmediatamente si está activa cualquier política que la requiera
-        ensureVpnRunning(context)
-
+        // 2. Re-aplicar restricciones MDM y sincronizar FUERA del hilo principal.
+        // reapplyAllRestrictions() realiza decenas de llamadas IPC a DevicePolicyManager
+        // y chequeos en disco. Ejecutarlo síncrono en onReceive() bloqueaba el hilo principal
+        // de la app durante varios segundos en equipos modestos (como Qin F21 Pro), arriesgando
+        // un ANR de broadcast. goAsync() mantiene vivo el receptor hasta completar el trabajo.
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val policyManager = PolicyManager(context)
+                policyManager.reapplyAllRestrictions()
+                com.ejemplo.locksuite.mdm.GracePeriodManager.checkAndHarden(context)
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(context)
+            } catch (e: Exception) {
+                android.util.Log.e("BootReceiver", "Error en tareas asíncronas de boot: ${e.message}")
+            } finally {
+                try {
+                    pendingResult.finish()
+                } catch (ignored: Exception) { }
+            }
+        }
     }
 
     companion object {
+        const val ACTION_BOOT_GATE_TIMEOUT = "com.ejemplo.locksuite.action.BOOT_GATE_TIMEOUT"
+
         /**
          * Determina si alguna política activa requiere que la VPN Kosher esté
          * corriendo. Extraído a una función compartida (antes esta condición

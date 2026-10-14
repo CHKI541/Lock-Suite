@@ -1,6 +1,10 @@
 package com.ejemplo.locksuite.util
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.SystemClock
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.receiver.BootReceiver
@@ -305,6 +309,8 @@ object BootGate {
                 .putString(KEY_LAST_RESULT, "proxy huerfano liberado ($reason)")
                 .apply()
 
+            cancelSafetyAlarm(context)
+
             // Que no queden apps suspendidas por una ventana que ya no existe.
             try {
                 AccessibilityEnforcer.reconcileNow(context)
@@ -359,6 +365,14 @@ object BootGate {
                 .getBoolean(KEY_WAIT_ACCESSIBILITY, false)
             if (!BootReceiver.shouldVpnBeRunning(context) && !waitAccessibility) return
 
+            // Si el túnel VPN ya está corriendo y leyendo paquetes en este proceso
+            // (ej. reinicio rápido o reemplazo de paquete con VPN ya arriba) y no esperamos
+            // accesibilidad, no tiene sentido clavar un proxy a puerto muerto.
+            if (com.ejemplo.locksuite.service.KosherVpnService.isTunnelRunning && !waitAccessibility) {
+                android.util.Log.i(TAG, "Túnel VPN ya activo y filtrando: omitiendo bloqueo preventivo de red.")
+                return
+            }
+
             val prefs = PrefsHelper.getMdmPrefs(context)
             prefs.edit()
                 .putBoolean(KEY_ACTIVE, true)
@@ -368,6 +382,7 @@ object BootGate {
                 .apply()
 
             policy.setNetworkGateBlocked(true)
+            armSafetyAlarm(context)
 
             // ⚠️ CAMBIO DEL 18/8/2026 — por qué acá se suspenden apps.
             //
@@ -503,7 +518,8 @@ object BootGate {
 
             // Llegados acá, la accesibilidad ya no es un impedimento. Se libera si el
             // filtro de red no hace falta, o si ya confirmó que está funcionando.
-            val filterReady = PrefsHelper.getMdmPrefs(context).getBoolean(KEY_FILTER_READY, false)
+            val filterReady = PrefsHelper.getMdmPrefs(context).getBoolean(KEY_FILTER_READY, false) ||
+                com.ejemplo.locksuite.service.KosherVpnService.isTunnelRunning
             if (!BootReceiver.shouldVpnBeRunning(context)) {
                 release(context, "sin filtro de red pendiente")
             } else if (filterReady) {
@@ -546,6 +562,8 @@ object BootGate {
             .putString(KEY_LAST_RESULT, reason)
             .apply()
 
+        cancelSafetyAlarm(context)
+
         try {
             val policy = PolicyManager(context)
             // No pisar un bloqueo de internet puesto por el administrador a propósito.
@@ -569,6 +587,62 @@ object BootGate {
             android.util.Log.e(TAG, "Fallo liberando el arranque protegido: ${e.message}")
         }
         android.util.Log.i(TAG, "Arranque protegido LIBERADO ($reason).")
+    }
+
+    /**
+     * Programa una alarma exacta (o de alta prioridad en Doze) en el AlarmManager del sistema.
+     * Esta es la red de seguridad de hardware/sistema: si el proceso de LockSuite muere, es
+     * cerrado por el usuario o sufre un ANR durante el arranque antes de liberar el proxy,
+     * el AlarmManager despertará a BootReceiver para que healStuckProxy() libere la red.
+     */
+    fun armSafetyAlarm(context: Context) {
+        try {
+            val am = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+            val triggerAt = SystemClock.elapsedRealtime() + MAX_WINDOW_MS
+            val intent = Intent(context, BootReceiver::class.java).apply {
+                action = BootReceiver.ACTION_BOOT_GATE_TIMEOUT
+            }
+            val pi = PendingIntent.getBroadcast(
+                context,
+                9922,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()
+                if (canExact) {
+                    am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+                } else {
+                    am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+                }
+            } else {
+                am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
+            }
+            android.util.Log.i(TAG, "Alarma de seguridad de arranque programada a ${MAX_WINDOW_MS / 1000}s.")
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "No se pudo armar alarma de seguridad de arranque: ${e.message}")
+        }
+    }
+
+    /**
+     * Cancela la alarma de seguridad si la red fue liberada normalmente.
+     */
+    fun cancelSafetyAlarm(context: Context) {
+        try {
+            val am = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+            val intent = Intent(context, BootReceiver::class.java).apply {
+                action = BootReceiver.ACTION_BOOT_GATE_TIMEOUT
+            }
+            val pi = PendingIntent.getBroadcast(
+                context,
+                9922,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            am.cancel(pi)
+        } catch (e: Exception) {
+            // ignorar
+        }
     }
 
     /**

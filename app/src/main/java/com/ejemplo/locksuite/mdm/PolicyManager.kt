@@ -19,6 +19,9 @@ class PolicyManager(private val context: Context) {
     private val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
 
     companion object {
+        /** Lock para evitar ejecuciones concurrentes de reapplyAllRestrictions (boot, app init, watchdog). */
+        private val reapplyLock = Any()
+
         /** Guarda de una vez por proceso para autoGrantDeclaredPermissions(). Ver B.55. */
         @Volatile private var permissionsAutoGranted = false
 
@@ -2415,6 +2418,7 @@ class PolicyManager(private val context: Context) {
     }
 
     fun reapplyAllRestrictions() {
+        synchronized(reapplyLock) {
         // Mientras LockSuite está suspendido nadie vuelve a aplicar nada: ni el
         // arranque, ni el Watchdog de 15 min, ni un comando del panel. La única
         // forma de volver a aplicar es quitar la suspensión, que llama a esta
@@ -2785,6 +2789,7 @@ class PolicyManager(private val context: Context) {
             if (!PolicyReconciler.mismoConjunto(permitidos, listOf(context.packageName))) {
                 applyAccessibilityProtection(true)
             }
+        }
         }
     }
 

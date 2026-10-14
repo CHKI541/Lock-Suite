@@ -749,6 +749,7 @@ object FirebaseDeviceSync {
                 // desde la misma lista que las aplica, así una restricción nueva aparece en
                 // el panel sin tocar este archivo.
                     + policyManager.extraRestrictionsStatus()
+                    + getLatestProcessExitInfo(context)
             )
             syncAppsListInternal(context)
         }
@@ -800,6 +801,53 @@ object FirebaseDeviceSync {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    /**
+     * Reporte del último motivo de salida del proceso anterior (API 30+).
+     * Permite detectar en el panel Firebase si el proceso anterior sufrió un ANR (REASON_ANR),
+     * Crash, Out-of-memory o cierre forzado, con su descripción y timestamp.
+     */
+    private fun getLatestProcessExitInfo(context: Context): Map<String, Any> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyMap()
+        return try {
+            getLatestProcessExitInfoApi30(context)
+        } catch (e: Throwable) {
+            emptyMap()
+        }
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.R)
+    private fun getLatestProcessExitInfoApi30(context: Context): Map<String, Any> {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            ?: return emptyMap()
+        val exits = am.getHistoricalProcessExitReasons(context.packageName, 0, 1)
+        if (exits.isNullOrEmpty()) return emptyMap()
+        val exit = exits[0]
+        val reasonStr = when (exit.reason) {
+            android.app.ApplicationExitInfo.REASON_ANR -> "ANR"
+            android.app.ApplicationExitInfo.REASON_CRASH -> "CRASH"
+            android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
+            android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "LOW_MEMORY"
+            android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "USER_REQUESTED"
+            android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "USER_STOPPED"
+            android.app.ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "PERMISSION_CHANGE"
+            android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "EXCESSIVE_RESOURCE_USAGE"
+            android.app.ApplicationExitInfo.REASON_SIGNALED -> "SIGNALED"
+            android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "INITIALIZATION_FAILURE"
+            android.app.ApplicationExitInfo.REASON_OTHER -> "OTHER"
+            else -> "REASON_${exit.reason}"
+        }
+        val res = mutableMapOf<String, Any>(
+            "lastExitReason" to reasonStr,
+            "lastExitTimestamp" to exit.timestamp,
+            "lastExitImportance" to exit.importance
+        )
+        val desc = exit.description
+        if (!desc.isNullOrBlank()) {
+            res["lastExitDetail"] = desc.take(250)
+        }
+        return res
     }
 
     // ─────────────────────────────────────────────────────────────────────────

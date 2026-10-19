@@ -978,6 +978,23 @@ fun PoliciesTabContent(context: Context) {
                     }
                 )
                 PolicySwitchRow(
+                    label = "Activar modo teléfono de teclas (Nokia)",
+                    isChecked = remember(refreshKey) { policyManager.isNokiaKeypadMode() },
+                    onCheckedChange = { isChecked ->
+                        if (isChecked && !policyManager.isKosherLauncherEnabled()) {
+                            policyManager.setKosherLauncherEnabled(true)
+                        }
+                        policyManager.setNokiaKeypadMode(isChecked).also { refreshKey++ }
+                    }
+                )
+                if (policyManager.isNokiaKeypadMode()) {
+                    PolicySwitchRow(
+                        label = "  ↳ Habilitar pantalla táctil en modo teclas",
+                        isChecked = remember(refreshKey) { policyManager.isNokiaTouchEnabled() },
+                        onCheckedChange = { policyManager.setNokiaTouchEnabled(it).also { refreshKey++ } }
+                    )
+                }
+                PolicySwitchRow(
                     label = "Deshabilitar Pantalla de Bloqueo (Keyguard)",
                     isChecked = remember(refreshKey) { policyManager.isKeyguardDisabled() },
                     onCheckedChange = { policyManager.setKeyguardDisabled(it).also { refreshKey++ } }

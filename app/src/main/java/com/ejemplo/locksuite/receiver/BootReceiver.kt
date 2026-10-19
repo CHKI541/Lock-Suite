@@ -42,9 +42,16 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
 
-        // 0. ARRANQUE PROTEGIDO — lo PRIMERO de todo, antes que cualquier otra cosa.
+        // 0. ARRANQUE PROTEGIDO — lo PRIMERO de todo al encender el equipo. En una
+        // actualización en caliente (ACTION_MY_PACKAGE_REPLACED) el sistema ya está
+        // arriba y Always-On VPN + ensureVpnRunning() levantan el túnel en milisegundos;
+        // poner y sacar el proxy global ahí solo sacude ConnectivityService sin necesidad.
         try {
-            com.ejemplo.locksuite.util.BootGate.engage(context)
+            if (action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+                com.ejemplo.locksuite.util.BootGate.healStuckProxy(context, "actualizacion de paquete")
+            } else {
+                com.ejemplo.locksuite.util.BootGate.engage(context)
+            }
         } catch (e: Exception) {
             android.util.Log.e("BootReceiver", "Error activando el arranque protegido: ${e.message}")
         }

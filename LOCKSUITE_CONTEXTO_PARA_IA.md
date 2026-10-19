@@ -1898,17 +1898,15 @@ Pedido del dueño: actuar como un equipo de agentes especializados para revisar 
 
 2. **Capa 2 — Red, VPN DNS Split-Tunnel, BootGate, Parsers y Lista Blanca:**
    - **`KosherVpnService.kt`:**
-     - **Protección contra carreras al reiniciar el túnel (`tun0`):** `restartRunnable` guardado y cancelado explícitamente en `stopVpn()` y `onDestroy()`; generación `tunnelGeneration` (`AtomicInteger`) para que el cierre de un `runFilterLoop` viejo en su `finally` jamás pise ni ponga en `null` un `vpnInterface` nuevo recién creado.
-     - **Salud del túnel en redes IPv6/464XLAT (`CLAT`):** `findTunInterfaceIndex()` ignora interfaces `v4-wlan0`/`clat4` al buscar el índice de `tun0`.
-     - **Android 14+ (`UPSIDE_DOWN_CAKE`):** `startForeground()` pasa `ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE` en API 34+.
-     - **Executor acotado (`ThreadPoolExecutor` con cola de 256 y `DiscardOldestPolicy`):** evita acumulación ilimitada de hilos o memoria ante tormentas de consultas DNS sin internet.
+     - **Corrección del bucle de la notificación *"Desconectado de la VPN siempre activa"* (0.6.61):** en 0.6.60, dentro de `restartVpn()` se había cambiado el enfriamiento de 8 s (`if (now - lastNetworkRestartAtMs < 8000) return false`) para llamar igualmente a `scheduleRestart(remaining, ...)` cuando llegaba un callback dentro de la ventana, lo que ejecutaba `stopVpn()` de inmediato, cerraba `tun0` recién levantado y hacía que Android volviera a mostrar *"Desconectado de la VPN siempre activa"* en bucle. En 0.6.61: (a) se restauró el enfriamiento estricto de 8 s (`return false`), (b) `startVpn()` inicializa `lastNetworkRestartAtMs = elapsedRealtime()` al establecer `tun0` para que ningún callback rezagado del propio arranque o actualización tire abajo el túnel recién conectado, (c) `onLost()` solo limpia `lastNetworkHandle = 0L` si la red perdida coincide con `lastNetworkHandle`, (d) se restauró `TUNNEL_MTU = 4000` y el cierre limpio en el `finally` de `runFilterLoop()`, y (e) en `BootReceiver.kt`, `ACTION_MY_PACKAGE_REPLACED` ejecuta `BootGate.healStuckProxy()` en vez de `BootGate.engage()` para no conmutar el proxy global durante una actualización en caliente.
+     - **Contadores de salud del túnel (`tunnelDnsQueriesIn`):** `tunnelHealth()` y `windowedUpstreamBroken()` comparan respuestas contra consultas DNS UDP/53 reales en lugar de paquetes no-DNS descartados.
    - **`NetworkForwarder.kt`:**
      - Filtra direcciones IPv6 link-local (`fe80:...`) de `LinkProperties.dnsServers` que fallan al enviar desde un `DatagramSocket` sin `scope_id`.
      - Valida que el TXID DNS de la respuesta upstream (en los 2 primeros bytes) coincida con el TXID de la consulta antes de devolverla al túnel.
    - **`DnsPacketParser.kt` & `IpPacketParser.kt`:**
      - `buildBlockedResponse()` calcula dinámicamente el fin de la sección Question y construye un header limpio de 12 bytes + Question única (`QDCOUNT=1`, `ANCOUNT=0`, `NSCOUNT=0`, `ARCOUNT=0`) sin arrastrar registros EDNS0 (`ARCOUNT`) corruptos, respetando el límite de 512 bytes de UDP DNS.
      - `IpPacketParser.buildUdpIpv4Response()` retorna `ByteArray(0)` si el datagrama supera `65535` bytes (y `KosherVpnService` verifica `responsePacket.isNotEmpty()` antes de escribir en `tun0`).
-   - **`BootGate.kt`:** si la VPN está desactivada por el administrador (`!isVpnEnabled()`), `engageIfNeeded()` libera cualquier proxy residual `127.0.0.1:9999` en lugar de activarlo.
+   - **`BootGate.kt`:** alarma de respaldo `armSafetyAlarm()` / `cancelSafetyAlarm()` vía `AlarmManager` para garantizar la liberación de `127.0.0.1:9999` aun si el proceso muere durante la ventana de arranque.
    - **`WhitelistCatalog.kt`, `WebViewPolicy.kt`, `WhitelistManager.kt` y `AdBlocker.kt`:**
      - Sincronizado `com.mercadopago.wallet` entre `WhitelistCatalog.kt`, `app.js` y `catalog.js` (agregado `mercadopago.com` en permitidos y `mobile.mercadolibre.com.*` en bloqueados).
      - `WebViewPolicy.resolvePackage()`: cuando el evento de accesibilidad viene de `com.google.android.webview` o `com.android.webview`, resuelve el paquete anfitrión desde `recentAppPackages` para que las reglas por app funcionen también cuando el WebView reporta su propio paquete.
@@ -1933,7 +1931,7 @@ Pedido del dueño: actuar como un equipo de agentes especializados para revisar 
      - Cuando `AccessibilityEnforcer.check()` da `Verdict.OK` y `browsers_suspended_by_watchdog` estaba activo, el Watchdog restaura automáticamente los navegadores.
    - **`PackageReceiver.kt`, `PackageInstallStatusReceiver.kt`, `SelfUpdater.kt`, `ApkInstaller.kt`, `ApkChecksum.kt`, `UpdateFlowManager.kt`:**
      - Ventana de instalación de Tienda por paquete (`markStoreInstall(context, pkg)` / `isStoreInstalling(context, pkg)`): impide que un APK no autorizado se instale aprovechando la ventana de instalación de otra app de la Tienda.
-     - `PackageReceiver` nunca desinstala apps del sistema (`FLAG_SYSTEM` / `FLAG_updated_system_app`), el paquete WebView activo del sistema, ni paquetes recién actualizados por `UpdateFlowManager.wasRecentlyUpdated()`.
+     - `PackageReceiver` nunca desinstala apps del sistema (`FLAG_SYSTEM` / `FLAG_UPDATED_SYSTEM_APP`), el paquete WebView activo del sistema, ni paquetes recién actualizados por `UpdateFlowManager.wasRecentlyUpdated()`.
      - Si una app en `PopularNonKosherApps` con `hide_<pkg>=true` recibe actualización, se re-oculta al instante.
      - Cierre de **B.86**: `UpdateFlowManager.finish()` y `healStaleInstall()` ejecutan `restorePreviousUninstallBlock()` de forma síncrona.
      - `SelfUpdater.kt` y `ApkInstaller.kt`: abandonan la sesión `PackageInstaller.Session` en caso de error para no agotar el límite de sesiones del sistema y borran el APK temporal en `finally`.
@@ -1975,13 +1973,14 @@ Pedido del dueño: actuar como un equipo de agentes especializados para revisar 
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**19/10 — Antigravity: Auditoría integral de producción con equipo de 6 agentes (Capas 1–6), aplicación de todos los parches, verificación de pruebas/herramientas y despliegue de 0.6.60 (código 123).**
+**19/10 — Antigravity: Auditoría integral de producción con equipo de 6 agentes (Capas 1–6), corrección del bucle de reconexión de VPN Always-On tras actualizar y despliegue de 0.6.61 (código 124).**
 
 - **Plan y auditoría por agentes:** se elaboró `PLAN_AUDITORIA_PRODUCCION_AGENTES.md` y se ejecutaron 6 subagentes auditores especializados cubriendo los ~75 archivos de `:app`, `:admin-app`, `admin-backend` y `tools/`.
 - **Correcciones aplicadas (B.91):** se aplicaron las mejoras de estabilidad, anti-evasión, red/VPN, Direct Boot, ciclo de vida de actualizaciones (incluido B.86), seguridad del canal FCM (incluido B.40 punto 3), UI/Launchers/PIN y panel web (`celular.js`, `app.js`, `catalog.js`, `functions/index.js`).
+- **Corrección inmediata del síntoma *"Desconectado de la VPN siempre activa"* al actualizar (0.6.61):** se corrigió `KosherVpnService.kt` y `BootReceiver.kt` para restaurar el enfriamiento estricto de 8 s en `restartVpn()`, inicializar `lastNetworkRestartAtMs` al levantar `tun0` en `startVpn()`, filtrar `onLost()` solo por la red activa, y evitar que `ACTION_MY_PACKAGE_REPLACED` conmute el proxy de `BootGate`.
 - **Verificación completa en verde:**
   - Los 7 scripts de consistencia (`check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`, `aa_stubs/check_stubs.py`) en verde.
   - Pruebas unitarias de `:app` (`:app:testDebugUnitTest`) y compilación de `:admin-app` en verde.
   - Pruebas de reglas de Firebase Realtime Database (`tools/rules_tests`) en verde.
-- **Commit y despliegue:** cambios comiteados en `main` y desplegados a producción mediante `deploy_all.ps1`.
+- **Commit y despliegue:** cambios comiteados en `main` y desplegados a producción (`0.6.61`, código `124`) mediante `deploy_all.ps1`.
 

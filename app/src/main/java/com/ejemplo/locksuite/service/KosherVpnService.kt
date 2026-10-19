@@ -47,7 +47,7 @@ class KosherVpnService : VpnService() {
          * Subir el MTU no afecta a ningún otro tráfico porque ningún otro tráfico pasa
          * por acá. Si `establish()` lo rechaza en algún equipo, se cae a 1500.
          */
-        private const val TUNNEL_MTU = 4200
+        private const val TUNNEL_MTU = 4000
         private const val TUNNEL_MTU_FALLBACK = 1500
 
         // ──────────────────────────────────────────────────────────────────────────
@@ -645,6 +645,7 @@ class KosherVpnService : VpnService() {
                 running = true
                 isTunnelRunning = true
             }
+            lastNetworkRestartAtMs = android.os.SystemClock.elapsedRealtime()
             Thread({ runFilterLoop() }, "LockSuiteDnsFilter").start()
             android.util.Log.i("KosherVPN", "Servicio VPN iniciado exitosamente.")
         } catch (e: Exception) {
@@ -841,17 +842,8 @@ class KosherVpnService : VpnService() {
                 } catch (e: Exception) { }
             }
             if (shouldStopService) {
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (restartPendingUntilMs > now) {
-                    // Ya hay un reestablecimiento programado: no matar el servicio.
-                } else if (!policyManager.isLockSuiteSuspended()) {
-                    restartHandler.post {
-                        scheduleRestart(RESTART_SETTLE_MS, "cierre inesperado del bucle TUN")
-                    }
-                } else {
-                    stopForeground(true)
-                    stopSelf()
-                }
+                stopForeground(true)
+                stopSelf()
             }
         }
     }
@@ -1334,7 +1326,10 @@ class KosherVpnService : VpnService() {
                 override fun onLost(network: Network) {
                     // Al perder la red, el resolutor cacheado deja de servir.
                     NetworkForwarder.invalidateUpstreamCache()
-                    lastNetworkHandle = 0L
+                    val lostHandle = try { network.networkHandle } catch (e: Exception) { 0L }
+                    if (lostHandle == 0L || lostHandle == lastNetworkHandle) {
+                        lastNetworkHandle = 0L
+                    }
                 }
             }
             connectivityManager.registerDefaultNetworkCallback(callback)
@@ -1360,19 +1355,13 @@ class KosherVpnService : VpnService() {
      */
     private fun restartVpn(): Boolean {
         val isCurrentlyRunning = synchronized(lifecycleLock) { running }
-        if (!isCurrentlyRunning && restartPendingUntilMs == 0L) return false // La VPN no esta activa; no reiniciar por cuenta propia.
+        if (!isCurrentlyRunning) return false // La VPN no esta activa; no reiniciar por cuenta propia.
 
         // Debounce de 8 s (antes 3 s). Un handoff de Wi-Fi a datos móviles genera una
-        // ráfaga de callbacks durante varios segundos; si cae dentro de los 8 s, no
-        // descartamos el cambio en silencio sino que aseguramos un único reestablecimiento
-        // al terminar la ventana de enfriamiento.
+        // ráfaga de callbacks durante varios segundos; con 3 s se alcanzaban a encadenar
+        // dos o tres reestablecimientos seguidos, y cada uno es un hueco sin resolver.
         val now = android.os.SystemClock.elapsedRealtime()
-        val elapsed = now - lastNetworkRestartAtMs
-        if (elapsed < 8000) {
-            val remaining = (8000 - elapsed).coerceAtLeast(RESTART_SETTLE_MS)
-            scheduleRestart(remaining, "cambio de conectividad (agrupado)")
-            return true
-        }
+        if (now - lastNetworkRestartAtMs < 8000) return false
         lastNetworkRestartAtMs = now
 
         // 6/9/2026: antes acá había un `stopVpn(); startVpn()` pegados. Ese par era la

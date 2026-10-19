@@ -403,14 +403,9 @@ object BootGate {
             val suspendApps = prefs.getBoolean(KEY_SUSPEND_APPS, false) || waitAccessibility
             if (suspendApps) {
                 try {
-                    policy.setBrowsersSuspended(true)
-                    if (waitAccessibility) {
-                        // Se delega en el reconciliador en vez de suspender a mano: él
-                        // sabe combinar este motivo con el del interruptor, y evita que
-                        // los dos se pisen (uno suspendía y el otro liberaba en el ciclo
-                        // siguiente — parte del vaivén que reportó el dueño).
-                        AccessibilityEnforcer.reconcileNow(context)
-                    }
+                    // Se delega en el reconciliador en vez de llamar a setBrowsersSuspended(true)
+                    // (que pisaría la preferencia permanente `browsers_suspended` del admin).
+                    AccessibilityEnforcer.reconcileNow(context)
                 } catch (e: Exception) {
                     android.util.Log.w(TAG, "No se pudieron suspender apps en el arranque: ${e.message}")
                 }
@@ -570,18 +565,10 @@ object BootGate {
             if (!policy.isInternetBlocked()) {
                 policy.setNetworkGateBlocked(false)
             }
-            // Levantar la suspensión de emergencia si la puso el arranque protegido.
-            // Se consulta la preferencia, no un campo en memoria: quien libera puede ser
-            // un proceso distinto del que suspendió (el Watchdog tras un reinicio).
-            if (prefs.getBoolean(KEY_SUSPEND_APPS, false) &&
-                !prefs.getBoolean("browsers_suspended_by_watchdog", false)
-            ) {
-                policy.setBrowsersSuspended(false)
-            }
             // La suspensión de apps la resuelve el reconciliador: ya no hay una ventana
             // de arranque activa, así que si el interruptor tampoco la pide, las libera
-            // él. Si el interruptor SÍ la pide (accesibilidad todavía apagada), las
-            // mantiene. Un solo lugar decide, y por eso no pueden pelearse.
+            // él respetando las políticas permanentes del administrador (`browsers_suspended`,
+            // `system_webview_suspended`, `suspend_<pkg>`).
             AccessibilityEnforcer.reconcileNow(context)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Fallo liberando el arranque protegido: ${e.message}")
@@ -598,7 +585,12 @@ object BootGate {
     fun armSafetyAlarm(context: Context) {
         try {
             val am = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
-            val triggerAt = SystemClock.elapsedRealtime() + MAX_WINDOW_MS
+            val timeoutMs = if (stillWaitingForAccessibility(context)) {
+                MAX_ACCESSIBILITY_WINDOW_MS
+            } else {
+                MAX_WINDOW_MS
+            }
+            val triggerAt = SystemClock.elapsedRealtime() + timeoutMs
             val intent = Intent(context, BootReceiver::class.java).apply {
                 action = BootReceiver.ACTION_BOOT_GATE_TIMEOUT
             }
@@ -618,7 +610,7 @@ object BootGate {
             } else {
                 am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pi)
             }
-            android.util.Log.i(TAG, "Alarma de seguridad de arranque programada a ${MAX_WINDOW_MS / 1000}s.")
+            android.util.Log.i(TAG, "Alarma de seguridad de arranque programada a ${timeoutMs / 1000}s.")
         } catch (e: Exception) {
             android.util.Log.w(TAG, "No se pudo armar alarma de seguridad de arranque: ${e.message}")
         }

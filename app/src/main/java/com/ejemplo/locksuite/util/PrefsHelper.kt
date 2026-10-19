@@ -57,8 +57,10 @@ object PrefsHelper {
                 prefs
             } catch (e: Exception) {
                 // Fallback en caso de que falle la inicialización del keystore del sistema.
+                // Se usa un archivo separado para NUNCA mezclar claves en texto plano dentro
+                // del XML cifrado de Tink (`Constants.PREFS_NAME`), lo cual corrompería el Keyset.
                 // No se guarda en `cifradas`: el próximo llamado reintenta.
-                context.getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE)
+                context.getSharedPreferences("${Constants.PREFS_NAME}_fallback", Context.MODE_PRIVATE)
             }
         }
     }

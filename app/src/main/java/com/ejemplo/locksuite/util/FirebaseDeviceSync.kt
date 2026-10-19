@@ -841,12 +841,9 @@ object FirebaseDeviceSync {
         val res = mutableMapOf<String, Any>(
             "lastExitReason" to reasonStr,
             "lastExitTimestamp" to exit.timestamp,
-            "lastExitImportance" to exit.importance
+            "lastExitImportance" to exit.importance,
+            "lastExitDetail" to (exit.description?.take(250) ?: "")
         )
-        val desc = exit.description
-        if (!desc.isNullOrBlank()) {
-            res["lastExitDetail"] = desc.take(250)
-        }
         return res
     }
 
@@ -965,7 +962,10 @@ object FirebaseDeviceSync {
                     android.util.Log.w("FirebaseDeviceSync", "Lista blanca: reconcile falló: ${e.message}")
                 }
             }
-            if (ok) syncWhitelistState(ctx)
+            if (ok) {
+                syncWhitelistState(ctx, force = true)
+                requestSync(ctx)
+            }
             ok
         } catch (e: Exception) {
             android.util.Log.e("FirebaseDeviceSync", "Lista blanca: pullWhitelistConfig falló: ${e.message}", e)

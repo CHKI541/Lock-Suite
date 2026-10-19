@@ -20,7 +20,8 @@ object IpPacketParser {
      * Ignora cualquier otro protocolo (ej. TCP) para mayor eficiencia del túnel.
      */
     fun parse(buffer: ByteArray, length: Int): ParsedPacket? {
-        if (length < 20) return null
+        val safeLen = length.coerceAtMost(buffer.size)
+        if (safeLen < 20) return null
 
         val versionAndIhl = buffer[0].toInt() and 0xFF
         val version = versionAndIhl shr 4
@@ -28,7 +29,7 @@ object IpPacketParser {
         if (version == 4) {
             val ihl = versionAndIhl and 0x0F
             val ipHeaderLength = ihl * 4
-            if (ipHeaderLength < 20 || length < ipHeaderLength) return null
+            if (ipHeaderLength < 20 || safeLen < ipHeaderLength) return null
 
             val protocol = buffer[9].toInt() and 0xFF
             if (protocol != PROTO_UDP) return null // Solo UDP
@@ -37,20 +38,28 @@ object IpPacketParser {
             val destIp = InetAddress.getByAddress(buffer.copyOfRange(16, 20))
 
             val udpHeaderLength = 8
-            if (length < ipHeaderLength + udpHeaderLength) return null
+            if (safeLen < ipHeaderLength + udpHeaderLength) return null
 
             val sourcePort = ((buffer[ipHeaderLength].toInt() and 0xFF) shl 8) or
                               (buffer[ipHeaderLength + 1].toInt() and 0xFF)
             val destPort = ((buffer[ipHeaderLength + 2].toInt() and 0xFF) shl 8) or
                             (buffer[ipHeaderLength + 3].toInt() and 0xFF)
+            val udpLength = ((buffer[ipHeaderLength + 4].toInt() and 0xFF) shl 8) or
+                             (buffer[ipHeaderLength + 5].toInt() and 0xFF)
 
             val payloadStart = ipHeaderLength + udpHeaderLength
-            if (payloadStart > length) return null
-            val payload = buffer.copyOfRange(payloadStart, length)
+            if (payloadStart > safeLen) return null
+            val payloadEnd = if (udpLength >= udpHeaderLength) {
+                (ipHeaderLength + udpLength).coerceAtMost(safeLen)
+            } else {
+                safeLen
+            }
+            if (payloadEnd < payloadStart) return null
+            val payload = buffer.copyOfRange(payloadStart, payloadEnd)
 
             return ParsedPacket(protocol, sourceIp, sourcePort, destIp, destPort, payload, isIpv6 = false)
         } else if (version == 6) {
-            if (length < 40) return null
+            if (safeLen < 40) return null
 
             val nextHeader = buffer[6].toInt() and 0xFF
             if (nextHeader != PROTO_UDP) return null // Solo UDP
@@ -60,16 +69,24 @@ object IpPacketParser {
 
             val ipHeaderLength = 40
             val udpHeaderLength = 8
-            if (length < ipHeaderLength + udpHeaderLength) return null
+            if (safeLen < ipHeaderLength + udpHeaderLength) return null
 
             val sourcePort = ((buffer[ipHeaderLength].toInt() and 0xFF) shl 8) or
                               (buffer[ipHeaderLength + 1].toInt() and 0xFF)
             val destPort = ((buffer[ipHeaderLength + 2].toInt() and 0xFF) shl 8) or
                             (buffer[ipHeaderLength + 3].toInt() and 0xFF)
+            val udpLength = ((buffer[ipHeaderLength + 4].toInt() and 0xFF) shl 8) or
+                             (buffer[ipHeaderLength + 5].toInt() and 0xFF)
 
             val payloadStart = ipHeaderLength + udpHeaderLength
-            if (payloadStart > length) return null
-            val payload = buffer.copyOfRange(payloadStart, length)
+            if (payloadStart > safeLen) return null
+            val payloadEnd = if (udpLength >= udpHeaderLength) {
+                (ipHeaderLength + udpLength).coerceAtMost(safeLen)
+            } else {
+                safeLen
+            }
+            if (payloadEnd < payloadStart) return null
+            val payload = buffer.copyOfRange(payloadStart, payloadEnd)
 
             return ParsedPacket(PROTO_UDP, sourceIp, sourcePort, destIp, destPort, payload, isIpv6 = true)
         }

@@ -63,6 +63,11 @@ import com.ejemplo.locksuite.LockSuiteApplication
 
 class DashboardActivity : ComponentActivity() {
 
+    companion object {
+        @Volatile
+        var isLaunchingInternalFlow: Boolean = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -92,12 +97,14 @@ class DashboardActivity : ComponentActivity() {
             val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
                 try {
+                    isLaunchingInternalFlow = true
                     @Suppress("BatteryLife")
                     val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                         data = Uri.parse("package:$packageName")
                     }
                     startActivity(intent)
                 } catch (e: Exception) {
+                    isLaunchingInternalFlow = false
                     e.printStackTrace()
                 }
             }
@@ -134,6 +141,7 @@ class DashboardActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        isLaunchingInternalFlow = false
         if (!SessionManager.isActive()) {
             finish()
         } else {
@@ -148,8 +156,12 @@ class DashboardActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        if (isLaunchingInternalFlow) {
+            isLaunchingInternalFlow = false
+            return
+        }
         // Cerrar sesión solo cuando el usuario minimiza intencionalmente la app
-        // (no cuando rota la pantalla ni cambia a otra actividad interna)
+        // (no cuando rota la pantalla ni cambia a un selector de archivos o permiso interno)
         if (!isChangingConfigurations) {
             SessionManager.closeSession()
             finish()
@@ -793,8 +805,10 @@ fun PoliciesTabContent(context: Context) {
                     Button(
                         onClick = {
                             try {
+                                DashboardActivity.isLaunchingInternalFlow = true
                                 launcher.launch("application/vnd.android.package-archive")
                             } catch (e: Exception) {
+                                DashboardActivity.isLaunchingInternalFlow = false
                                 Toast.makeText(context, "Error al abrir selector de archivos: ${e.message}", Toast.LENGTH_LONG).show()
                             }
                         },
@@ -942,6 +956,7 @@ fun PoliciesTabContent(context: Context) {
                     onCheckedChange = { isChecked ->
                         if (isChecked && !android.provider.Settings.canDrawOverlays(context)) {
                             try {
+                                DashboardActivity.isLaunchingInternalFlow = true
                                 val intent = Intent(
                                     android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                     Uri.parse("package:${context.packageName}")
@@ -950,9 +965,11 @@ fun PoliciesTabContent(context: Context) {
                                 Toast.makeText(context, "Por favor, concede el permiso de superposición para la marca de agua", Toast.LENGTH_LONG).show()
                             } catch (e: Exception) {
                                 try {
+                                    DashboardActivity.isLaunchingInternalFlow = true
                                     val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
                                     context.startActivity(intent)
                                 } catch (ex: Exception) {
+                                    DashboardActivity.isLaunchingInternalFlow = false
                                     ex.printStackTrace()
                                 }
                             }
@@ -1945,6 +1962,8 @@ fun AppRowItem(
 @Composable
 fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isApplying by remember { mutableStateOf(false) }
     var pendingProfile by remember { mutableStateOf<EnrollmentProfiles.MasterProfile?>(null) }
     var appliedId by remember { mutableStateOf(policyManager.getAppliedMasterProfileId()) }
     // Solo lo usa el Nivel 4. Índice dentro de GracePeriodManager.DURACIONES; arranca en
@@ -2061,10 +2080,16 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
                     }
                     Button(
                         onClick = { pendingProfile = profile },
+                        enabled = !isApplying,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Aplicar", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(
+                            if (isApplying) "Aplicando..." else "Aplicar",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
                     }
                 }
             }
@@ -2073,7 +2098,7 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
 
     pendingProfile?.let { profile ->
         AlertDialog(
-            onDismissRequest = { pendingProfile = null },
+            onDismissRequest = { if (!isApplying) pendingProfile = null },
             containerColor = Color(0xFF0B2447),
             title = {
                 Text(profile.label, color = Color(0xFFF1C40F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
@@ -2099,26 +2124,38 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    val duracionMs = if (profile.id == EnrollmentProfiles.LEVEL_GRACE) {
-                        com.ejemplo.locksuite.mdm.GracePeriodManager.DURACIONES[graceIdx].second
-                    } else 0L
-                    val ok = policyManager.applyMasterProfile(profile.id, duracionMs)
-                    pendingProfile = null
-                    if (ok) {
-                        appliedId = policyManager.getAppliedMasterProfileId()
-                        graceActive = com.ejemplo.locksuite.mdm.GracePeriodManager.isActive(context)
-                        onApplied()
-                        Toast.makeText(context, "✅ ${profile.label} aplicado.", Toast.LENGTH_LONG).show()
-                    } else {
-                        Toast.makeText(context, "❌ No se pudo aplicar el perfil.", Toast.LENGTH_LONG).show()
+                TextButton(
+                    enabled = !isApplying,
+                    onClick = {
+                        val duracionMs = if (profile.id == EnrollmentProfiles.LEVEL_GRACE) {
+                            com.ejemplo.locksuite.mdm.GracePeriodManager.DURACIONES[graceIdx].second
+                        } else 0L
+                        isApplying = true
+                        pendingProfile = null
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                policyManager.applyMasterProfile(profile.id, duracionMs)
+                            }
+                            isApplying = false
+                            if (ok) {
+                                appliedId = policyManager.getAppliedMasterProfileId()
+                                graceActive = com.ejemplo.locksuite.mdm.GracePeriodManager.isActive(context)
+                                onApplied()
+                                Toast.makeText(context, "✅ ${profile.label} aplicado.", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "❌ No se pudo aplicar el perfil.", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
-                }) {
+                ) {
                     Text("Aplicar", color = Color(0xFF2ECC71), fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingProfile = null }) {
+                TextButton(
+                    enabled = !isApplying,
+                    onClick = { pendingProfile = null }
+                ) {
                     Text("Cancelar", color = Color.White.copy(alpha = 0.7f))
                 }
             }
@@ -2129,6 +2166,7 @@ fun MasterProfilesCard(policyManager: PolicyManager, onApplied: () -> Unit) {
 @Composable
 fun PresetsTabContent(context: Context) {
     val policyManager = remember { PolicyManager(context) }
+    val scope = rememberCoroutineScope()
     var presetNameInput by remember { mutableStateOf("") }
     var refreshKey by remember { mutableIntStateOf(0) }
     val presetsMap = remember(refreshKey) { policyManager.getLocalPresets() }
@@ -2160,29 +2198,37 @@ fun PresetsTabContent(context: Context) {
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            try {
-                val inputStream = context.contentResolver.openInputStream(it)
-                val jsonString = inputStream?.bufferedReader()?.use { reader -> reader.readText() } ?: ""
-                if (jsonString.isNotEmpty()) {
-                    val success = policyManager.importPolicyPresetJson(jsonString)
-                    if (success) {
-                        val importedName = try {
-                            val obj = org.json.JSONObject(jsonString)
-                            obj.optString("presetName", "Perfil Importado")
-                        } catch (e: Exception) {
-                            "Perfil Importado"
-                        }
-                        policyManager.saveLocalPreset(importedName, jsonString)
-                        Toast.makeText(context, "✅ Backup (.locksuite) importado, guardado y aplicado con éxito.", Toast.LENGTH_LONG).show()
-                        refreshKey++
-                    } else {
-                        Toast.makeText(context, "❌ Error al aplicar el backup.", Toast.LENGTH_LONG).show()
+            scope.launch {
+                try {
+                    val jsonString = withContext(Dispatchers.IO) {
+                        val inputStream = context.contentResolver.openInputStream(it)
+                        inputStream?.bufferedReader()?.use { reader -> reader.readText() } ?: ""
                     }
+                    if (jsonString.isNotEmpty()) {
+                        val success = withContext(Dispatchers.IO) {
+                            policyManager.importPolicyPresetJson(jsonString)
+                        }
+                        if (success) {
+                            val importedName = try {
+                                val obj = org.json.JSONObject(jsonString)
+                                obj.optString("presetName", "Perfil Importado")
+                            } catch (e: Exception) {
+                                "Perfil Importado"
+                            }
+                            withContext(Dispatchers.IO) {
+                                policyManager.saveLocalPreset(importedName, jsonString)
+                            }
+                            Toast.makeText(context, "✅ Backup (.locksuite) importado, guardado y aplicado con éxito.", Toast.LENGTH_LONG).show()
+                            refreshKey++
+                        } else {
+                            Toast.makeText(context, "❌ Error al aplicar el backup.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                } catch (e: SecurityException) {
+                    Toast.makeText(context, "🚨 ALERTA: ${e.message}", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Error al leer archivo: ${e.message}", Toast.LENGTH_LONG).show()
                 }
-            } catch (e: SecurityException) {
-                Toast.makeText(context, "🚨 ALERTA: ${e.message}", Toast.LENGTH_LONG).show()
-            } catch (e: Exception) {
-                Toast.makeText(context, "Error al leer archivo: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -2237,11 +2283,16 @@ fun PresetsTabContent(context: Context) {
                                     Toast.makeText(context, "Ingresa un nombre para el perfil", Toast.LENGTH_SHORT).show()
                                     return@Button
                                 }
-                                val jsonStr = policyManager.exportPolicyPresetJson(presetNameInput.trim())
-                                policyManager.saveLocalPreset(presetNameInput.trim(), jsonStr)
-                                presetNameInput = ""
-                                refreshKey++
-                                Toast.makeText(context, "Perfil guardado con éxito.", Toast.LENGTH_SHORT).show()
+                                val nameToSave = presetNameInput.trim()
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        val jsonStr = policyManager.exportPolicyPresetJson(nameToSave)
+                                        policyManager.saveLocalPreset(nameToSave, jsonStr)
+                                    }
+                                    presetNameInput = ""
+                                    refreshKey++
+                                    Toast.makeText(context, "Perfil guardado con éxito.", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF1C40F), contentColor = Color(0xFF0B192C)),
                             modifier = Modifier.weight(1f)
@@ -2251,10 +2302,15 @@ fun PresetsTabContent(context: Context) {
                         Button(
                             onClick = {
                                 val name = if (presetNameInput.isNotBlank()) presetNameInput.trim() else "Perfil_LockSuite"
-                                val jsonStr = policyManager.exportPolicyPresetJson(name)
-                                pendingExportJson = jsonStr
-                                pendingExportName = name
-                                exportLauncher.launch("${name.replace("\\s+".toRegex(), "_")}.locksuite")
+                                scope.launch {
+                                    val jsonStr = withContext(Dispatchers.IO) {
+                                        policyManager.exportPolicyPresetJson(name)
+                                    }
+                                    pendingExportJson = jsonStr
+                                    pendingExportName = name
+                                    DashboardActivity.isLaunchingInternalFlow = true
+                                    exportLauncher.launch("${name.replace("\\s+".toRegex(), "_")}.locksuite")
+                                }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2980B9), contentColor = Color.White),
                             modifier = Modifier.weight(1f)
@@ -2282,6 +2338,7 @@ fun PresetsTabContent(context: Context) {
                     Button(
                         onClick = {
                             try {
+                                DashboardActivity.isLaunchingInternalFlow = true
                                 importLauncher.launch("*/*")
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -2323,15 +2380,19 @@ fun PresetsTabContent(context: Context) {
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(
                                 onClick = {
-                                    try {
-                                        val success = policyManager.importPolicyPresetJson(jsonStr)
-                                        if (success) {
-                                            Toast.makeText(context, "Perfil '$name' aplicado con éxito.", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "❌ Error al aplicar el perfil '$name'.", Toast.LENGTH_LONG).show()
+                                    scope.launch {
+                                        try {
+                                            val success = withContext(Dispatchers.IO) {
+                                                policyManager.importPolicyPresetJson(jsonStr)
+                                            }
+                                            if (success) {
+                                                Toast.makeText(context, "Perfil '$name' aplicado con éxito.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "❌ Error al aplicar el perfil '$name'.", Toast.LENGTH_LONG).show()
+                                            }
+                                        } catch (e: SecurityException) {
+                                            Toast.makeText(context, "🚨 ALERTA: ${e.message}", Toast.LENGTH_LONG).show()
                                         }
-                                    } catch (e: SecurityException) {
-                                        Toast.makeText(context, "🚨 ALERTA: ${e.message}", Toast.LENGTH_LONG).show()
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60)),
@@ -2343,6 +2404,7 @@ fun PresetsTabContent(context: Context) {
                                 onClick = {
                                     pendingExportJson = jsonStr
                                     pendingExportName = name
+                                    DashboardActivity.isLaunchingInternalFlow = true
                                     exportLauncher.launch("${name.replace("\\s+".toRegex(), "_")}.locksuite")
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2980B9)),
@@ -2952,6 +3014,7 @@ fun ServicesTabContent(
                         Button(
                             onClick = {
                                 try {
+                                    DashboardActivity.isLaunchingInternalFlow = true
                                     val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
                                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     }
@@ -2977,22 +3040,23 @@ fun ServicesTabContent(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Comprobar si la interfaz virtual tun de VPN está arriba (Evaluación en recomposición)
-                        var isVpnOn = false
-                        try {
-                            val nis = java.net.NetworkInterface.getNetworkInterfaces()
-                            if (nis != null) {
-                                for (ni in nis) {
-                                    if (ni.isUp && (ni.name.contains("tun") || ni.name.contains("ppp") || ni.name.contains("p2p"))) {
-                                        isVpnOn = true
-                                        break
+                        val vpnActive = remember {
+                            var isVpnOn = false
+                            try {
+                                val nis = java.net.NetworkInterface.getNetworkInterfaces()
+                                if (nis != null) {
+                                    for (ni in nis) {
+                                        if (ni.isUp && (ni.name.contains("tun") || ni.name.contains("ppp") || ni.name.contains("p2p"))) {
+                                            isVpnOn = true
+                                            break
+                                        }
                                     }
                                 }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
                             }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                            isVpnOn
                         }
-                        val vpnActive = isVpnOn
 
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3026,6 +3090,7 @@ fun ServicesTabContent(
                                 val prepareIntent = android.net.VpnService.prepare(context)
                                 if (prepareIntent != null) {
                                     try {
+                                        DashboardActivity.isLaunchingInternalFlow = true
                                         (context as? Activity)?.startActivityForResult(prepareIntent, 1024)
                                     } catch (e: Exception) {
                                         e.printStackTrace()

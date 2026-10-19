@@ -143,7 +143,11 @@ object GoogleAccountWebPolicy {
         "adssettings",
         // Uso y diagnóstico. Misma familia de módulos, Activity propia, rebotarlo no
         // cuesta nada y no es parte de administrar la cuenta.
-        "usagereporting"
+        "usagereporting",
+        // Pantallas dedicadas de Mi Actividad o Historial de ubicaciones cuando abren
+        // su propia Activity (sin tocar `accountsettings`, que aloja la cuenta entera).
+        "myactivity",
+        "locationhistory"
     )
 
     /**
@@ -166,8 +170,7 @@ object GoogleAccountWebPolicy {
     private val CLASS_MARKERS_STRICT = listOf(
         "accountsettings",
         "googlesettings",
-        "myaccount",
-        "myactivity"
+        "myaccount"
     )
 
     /**

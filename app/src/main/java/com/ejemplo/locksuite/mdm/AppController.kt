@@ -181,6 +181,16 @@ class AppController(private val context: Context) {
             // una reconciliación durante la suspensión reimponía `suspend_<paquete>` y
             // pisaba lo que acababa de hacer liftAllForSuspension().
             val locksuiteSuspendido = prefs.getBoolean("locksuite_suspended", false)
+            val browsersSuspended = prefs.getBoolean("browsers_suspended", false)
+            val webViewSuspended = prefs.getBoolean("system_webview_suspended", false)
+            val installInProgress = prefs.getBoolean("mdm_install_in_progress", false)
+            val playStoreSuspended = !installInProgress &&
+                prefs.getBoolean("suspend_com.android.vending", prefs.getBoolean("install_apps_blocked_admin", false))
+            val browserPackages = if (browsersSuspended) {
+                PolicyManager(context).getBrowserPackagesForReconcile()
+            } else {
+                emptySet()
+            }
 
             val installed = pm.getInstalledApplications(0)
             val elegibles = eligiblePackages(installed)
@@ -192,12 +202,17 @@ class AppController(private val context: Context) {
                 if (pkg !in elegibles) continue
 
                 // Estado que DEBERÍA tener: durante la emergencia, suspendida; fuera de
-                // la emergencia, lo que el administrador haya decidido para esa app.
-                // Si la app está en DEFAULT_BLOCKED_PACKAGES y no fue configurada explícitamente, va suspendida.
-                // Con LockSuite suspendido, nada: ver la guarda de arriba.
+                // la emergencia, lo que el administrador haya decidido para esa app
+                // (incluyendo las políticas globales de navegadores, WebView y Play Store).
+                val policySuspended = (browsersSuspended && pkg in browserPackages) ||
+                    (webViewSuspended && (pkg == "com.google.android.webview" || pkg == "com.android.webview")) ||
+                    (pkg == "com.android.vending" && playStoreSuspended)
                 val defaultSuspended = DEFAULT_BLOCKED_PACKAGES.contains(pkg)
-                val prefValue = if (!prefs.contains("suspend_$pkg") && defaultSuspended) true
-                                else prefs.getBoolean("suspend_$pkg", false)
+                val prefValue = when {
+                    policySuspended -> true
+                    !prefs.contains("suspend_$pkg") && defaultSuspended -> true
+                    else -> prefs.getBoolean("suspend_$pkg", false)
+                }
                 val deberia = !locksuiteSuspendido && (emergencyActive || prefValue)
 
                 // Estado REAL, sin una llamada extra: viene en los flags.
@@ -325,6 +340,9 @@ class AppController(private val context: Context) {
                 } else {
                     // Solo reflejar como aplicada una politica que el SO confirmo.
                     prefs.edit().putBoolean("suspend_$packageName", true).apply()
+                    if (prefs.getBoolean("hide_suspended_apps", false)) {
+                        hideApp(packageName, true)
+                    }
                     true
                 }
             } else {
@@ -358,15 +376,20 @@ class AppController(private val context: Context) {
     }
 
     fun isAppSuspended(packageName: String): Boolean {
+        val osSuspended = try {
+            dpm.isPackageSuspended(adminComponent, packageName)
+        } catch (e: Exception) {
+            false
+        }
+        return isAppSuspendedWithOsFlag(packageName, osSuspended)
+    }
+
+    private fun isAppSuspendedWithOsFlag(packageName: String, osSuspended: Boolean): Boolean {
         // Stub de Android Auto (B.88): el de Google se llama como una app de
         // DEFAULT_BLOCKED_PACKAGES, así que por las preferencias figuraría "suspendida"
         // sin estarlo. Para los stubs vale solo el estado real del sistema.
         if (AndroidAutoStubs.isStub(context, packageName)) {
-            return try {
-                dpm.isPackageSuspended(adminComponent, packageName)
-            } catch (e: Exception) {
-                false
-            }
+            return osSuspended
         }
         val prefs = PrefsHelper.getMdmPrefs(context)
         val defaultSuspended = DEFAULT_BLOCKED_PACKAGES.contains(packageName)
@@ -382,11 +405,6 @@ class AppController(private val context: Context) {
             return false
         }
 
-        val osSuspended = try {
-            dpm.isPackageSuspended(adminComponent, packageName)
-        } catch (e: Exception) {
-            false
-        }
         return prefsSuspended || osSuspended
     }
 
@@ -404,11 +422,16 @@ class AppController(private val context: Context) {
         return try {
             val packageInstaller = pm.packageInstaller
             val intent = Intent(context, com.ejemplo.locksuite.receiver.UninstallReceiver::class.java)
+            val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                0,
+                packageName.hashCode(),
                 intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                piFlags
             )
             packageInstaller.uninstall(packageName, pendingIntent.intentSender)
             true
@@ -427,6 +450,12 @@ class AppController(private val context: Context) {
         }
         val installedApps = pm.getInstalledApplications(flags)
         val policyManager = PolicyManager(context)
+        val launcherPkgs = try {
+            val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            pm.queryIntentActivities(launcherIntent, 0).mapNotNull { it.activityInfo?.packageName }.toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
 
         return installedApps
             .mapNotNull { app ->
@@ -444,8 +473,9 @@ class AppController(private val context: Context) {
 
                     val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
                     val isUpdatedSystem = (app.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-                    val hasLauncher = pm.getLaunchIntentForPackage(app.packageName) != null
+                    val hasLauncher = app.packageName in launcherPkgs
                     val isHiddenNow = isAppHidden(app.packageName)
+                    val osSuspended = (app.flags and FLAG_SUSPENDED) != 0
 
                     // Clasificación de la aplicación.
                     // "isHiddenNow" se agrega como tercer criterio para "Preinstalada":
@@ -468,7 +498,7 @@ class AppController(private val context: Context) {
                         label = label,
                         icon = bitmap,
                         isHidden = isHiddenNow,
-                        isSuspended = isAppSuspended(app.packageName),
+                        isSuspended = isAppSuspendedWithOsFlag(app.packageName, osSuspended),
                         appType = appType,
                         isWebViewBlocked = WebViewBlockManager.isBlocked(context, app.packageName),
                         isInternetBlocked = policyManager.isPerAppInternetBlocked(app.packageName),
@@ -484,8 +514,13 @@ class AppController(private val context: Context) {
 
     private fun queryLauncherPackages(): Set<String> {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        val list = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
-        return list.map { it.activityInfo.packageName }.toSet()
+        val list = pm.queryIntentActivities(
+            intent,
+            PackageManager.MATCH_DEFAULT_ONLY or PackageManager.MATCH_SYSTEM_ONLY
+        )
+        return list.mapNotNull { it.activityInfo?.packageName }
+            .filterNot { PopularNonKosherApps.isPopularNonKosher(it) }
+            .toSet()
     }
 }
 

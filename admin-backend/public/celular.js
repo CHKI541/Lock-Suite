@@ -698,10 +698,16 @@
   function pintarResumen() {
     const kv = (k, v) => '<div class="ls-kv"><span>' + esc(k) + "</span><span>" + v + "</span></div>";
 
+    const vName = campo("versionName", campo("appVersionName", "—"));
+    const vCode = campo("versionCode", campo("appVersionCode", "—"));
+    const accActiva = campo("accessibilityRunning", campo("accessibilityActive", null));
+    const exitReason = campo("lastExitReason", null);
+    const exitTs = campo("lastExitTimestamp", 0);
+
     $("c-ident").innerHTML =
       kv("Modelo", esc(campo("model", "—"))) +
       kv("Android", esc(String(campo("androidVersion", campo("androidSdkInt", "—"))))) +
-      kv("LockSuite", esc(String(campo("appVersionName", "—"))) + " (" + esc(String(campo("appVersionCode", "—"))) + ")") +
+      kv("LockSuite", esc(String(vName)) + " (" + esc(String(vCode)) + ")") +
       kv("Última vez", LS.fecha(campo("lastSeen", 0))) +
       kv("Batería", campo("batteryLevel", null) != null ? esc(String(campo("batteryLevel"))) + " %" : "—");
 
@@ -713,11 +719,12 @@
       kv("Túnel DNS", chipSalud) +
       kv("Paquetes filtrados", esc(String(campo("dnsTunnelPacketsIn", "—")))) +
       kv("Auto-reparaciones", esc(String(campo("dnsTunnelHeals", 0)))) +
-      kv("Accesibilidad", campo("accessibilityActive", null) === true
+      kv("Accesibilidad", accActiva === true
         ? '<span class="ls-chip ok">activa</span>'
-        : campo("accessibilityActive", null) === false
+        : accActiva === false
           ? '<span class="ls-chip bad">caída</span>' : "—") +
-      kv("Dominios en el filtro", esc(String(campo("whitelistDomainCount", "—"))));
+      kv("Dominios en el filtro", esc(String(campo("whitelistDomainCount", "—")))) +
+      (exitReason ? kv("Última salida", esc(String(exitReason)) + (exitTs ? " · " + LS.fecha(exitTs) : "")) : "");
 
     const m = MODOS.find((x) => x.id === modoActual());
     const perfil = campo("masterProfileId", null);
@@ -733,7 +740,7 @@
     if (campo("locksuiteSuspended", false)) {
       avisos.push(["bad", "LockSuite está SUSPENDIDO en este equipo: no hay ninguna protección activa."]);
     }
-    if (campo("accessibilityActive", null) === false) {
+    if (accActiva === false) {
       avisos.push(["bad", "El servicio de Accesibilidad está caído: el filtro visual (Capa 3) no está funcionando."]);
     }
     if (salud && salud !== "OK" && salud !== "SIN_DATOS") {
@@ -747,6 +754,11 @@
     }
     if (modoActual() === "simulacion") {
       avisos.push(["warn", "La lista blanca está en simulación: registra, pero no bloquea nada todavía."]);
+    }
+    if (exitReason === "ANR" || exitReason === "CRASH" || exitReason === "CRASH_NATIVE") {
+      const det = campo("lastExitDetail", "");
+      avisos.push(["warn", "Último cierre anormal del proceso: " + exitReason +
+        (exitTs ? " (" + LS.fecha(exitTs) + ")" : "") + (det ? " — " + det : "")]);
     }
     $("c-alertas").innerHTML = avisos.map(([cls, txt]) =>
       '<div class="ls-card" style="border-left:4px solid var(--' +
@@ -766,7 +778,7 @@
     $("c-conexion").innerHTML = '<span class="ls-dot ' + con.cls + '"></span>' + esc(con.txt);
     const bat = campo("batteryLevel", null);
     $("c-bateria").textContent = "🔋 " + (bat != null ? bat + " %" : "—");
-    $("c-version").textContent = campo("appVersionName", "—");
+    $("c-version").textContent = vName;
     document.title = nombreDispositivo() + " — LockSuite";
   }
 
@@ -845,14 +857,14 @@
    * CONFIGURACIÓN RÁPIDA
    * ═══════════════════════════════════════════════════════════════════════ */
   const NIVELES = [
-    { id: "1", nombre: "Nivel 1 — Kosher estricto",
+    { id: "kosher_estricto", nombre: "Nivel 1 — Kosher estricto",
       desc: "Todo cerrado. Bloquea el cambio de cuentas y de idioma.",
       aviso: "⚠️ Aplicalo DESPUÉS de agregar la cuenta de Google y fijar el idioma: bloquea las dos cosas. Si lo aplicás antes, el equipo no se puede terminar de dar de alta." },
-    { id: "2", nombre: "Nivel 2 — Trabajo",
+    { id: "trabajo", nombre: "Nivel 2 — Trabajo",
       desc: "Restricciones fuertes, pero deja trabajar.", aviso: "" },
-    { id: "3", nombre: "Nivel 3 — Base mínima",
+    { id: "base_minima", nombre: "Nivel 3 — Base mínima",
       desc: "Solo el piso anti-manipulación.", aviso: "" },
-    { id: "4", nombre: "Nivel 4 — Período de gracia",
+    { id: "gracia", nombre: "Nivel 4 — Período de gracia",
       desc: "Cierra lo claramente no kosher y deja lo dudoso abierto por un plazo. Mientras tanto, anota qué usa esta persona para completar el catálogo.",
       aviso: "Al vencer, se cierra solo. El plazo lo aguantan dos relojes, así que atrasar la hora del equipo no lo estira." }
   ];
@@ -862,7 +874,7 @@
       '<div class="ls-card">' +
         "<h3>" + esc(n.nombre) + "</h3>" +
         '<p class="ls-hint">' + esc(n.desc) + (n.aviso ? "<br><b>" + esc(n.aviso) + "</b>" : "") + "</p>" +
-        (n.id === "4"
+        (n.id === "gracia"
           ? '<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">' +
             '<label style="font-size:12.5px; color:var(--text-gray)">Plazo:</label>' +
             '<select class="ls-select" id="gracia-horas">' +
@@ -870,7 +882,7 @@
               '<option value="24">1 día</option>' +
               '<option value="48" selected>2 días</option>' +
               '<option value="168">1 semana</option></select>' +
-            '<button class="ls-btn ls-btn-primary" data-nivel="4">Aplicar a ' + esc(nombreDispositivo()) + "</button></div>"
+            '<button class="ls-btn ls-btn-primary" data-nivel="gracia">Aplicar a ' + esc(nombreDispositivo()) + "</button></div>"
           : '<button class="ls-btn ls-btn-primary" data-nivel="' + n.id + '">Aplicar a ' +
             esc(nombreDispositivo()) + "</button>") +
       "</div>").join("");
@@ -880,15 +892,17 @@
     const b = e.target.closest("[data-nivel]");
     if (!b) return;
     const n = NIVELES.find((x) => x.id === b.dataset.nivel);
-    let extra = null;
-    if (n.id === "4") {
+    if (!n) return;
+    const extra = { level: n.id };
+    if (n.id === "gracia") {
       const h = parseInt($("gracia-horas").value, 10) || 48;
-      extra = { graceHours: h };
+      extra.graceMs = String(h * 3600000);
+      extra.graceTarget = "kosher_estricto";
     }
     if (!confirm("¿Aplicar «" + n.nombre + "» a " + nombreDispositivo() + "?\n\n" +
       n.desc + (n.aviso ? "\n\n" + n.aviso : ""))) return;
     b.disabled = true;
-    const r = await LS.sendCommand(deviceId, "APPLY_MASTER_PROFILE", n.id, extra,
+    const r = await LS.sendCommand(deviceId, "APPLY_MASTER_PROFILE", null, extra,
       { nombre: nombreDispositivo(), timeoutMs: 20000 });
     b.disabled = false;
     if (r.ok) LS.toast("Perfil aplicado.", "ok");
@@ -896,15 +910,18 @@
   });
 
   function pintarGracia() {
-    const hasta = campo("graceEndsAt", 0);
-    if (!hasta || hasta < Date.now()) { $("c-gracia").innerHTML = ""; return; }
-    const faltan = Math.max(0, hasta - Date.now());
+    const activa = campo("graceActive", false);
+    const hasta = campo("graceDeadline", campo("graceEndsAt", 0));
+    const rem = campo("graceRemainingMs", hasta ? Math.max(0, hasta - Date.now()) : 0);
+    if (!activa && (!hasta || hasta < Date.now())) { $("c-gracia").innerHTML = ""; return; }
+    const faltan = Math.max(0, rem || (hasta - Date.now()));
     const h = Math.floor(faltan / 3600000);
     const m = Math.floor((faltan % 3600000) / 60000);
     $("c-gracia").innerHTML =
       '<div class="ls-card" style="border-left:4px solid var(--accent)">' +
       "<h3>⏳ Período de gracia activo</h3>" +
-      '<p class="ls-hint">Faltan <b>' + h + " h " + m + " min</b> (vence " + LS.fecha(hasta) + "). " +
+      '<p class="ls-hint">Faltan <b>' + h + " h " + m + " min</b>" +
+      (hasta ? " (vence " + LS.fecha(hasta) + ")" : "") + ". " +
       "Al vencer se aplica el perfil de cierre y la Tienda se cierra.</p>" +
       '<button class="ls-btn" id="c-gracia-cancelar">Cancelar el vencimiento</button></div>';
     $("c-gracia-cancelar").addEventListener("click", async function () {
@@ -925,7 +942,8 @@
     }
     $("c-presets").innerHTML = keys.map((k) => {
       const p = S.presets[k] || {};
-      return '<div class="ls-polrow"><label>' + esc(p.name || k) +
+      const nombre = p.presetName || p.name || k;
+      return '<div class="ls-polrow"><label>' + esc(nombre) +
         '<br><small style="color:var(--text-muted)">' + LS.fecha(p.createdAt || 0) + "</small></label>" +
         '<button class="ls-btn ls-btn-sm" data-preset="' + esc(k) + '">Aplicar</button></div>';
     }).join("");
@@ -934,13 +952,25 @@
   $("c-presets").addEventListener("click", async (e) => {
     const b = e.target.closest("[data-preset]");
     if (!b) return;
-    const p = S.presets[b.dataset.preset] || {};
-    if (!confirm("¿Aplicar el perfil «" + (p.name || b.dataset.preset) + "» a " + nombreDispositivo() + "?")) return;
+    const presetId = b.dataset.preset;
+    const p = S.presets[presetId] || {};
+    const nombre = p.presetName || p.name || presetId;
+    if (!confirm("¿Aplicar el perfil «" + nombre + "» a " + nombreDispositivo() + "?")) return;
     b.disabled = true;
-    const r = await LS.sendCommand(deviceId, "APPLY_PROFILE", null, { profileId: b.dataset.preset },
-      { nombre: nombreDispositivo(), timeoutMs: 20000 });
+    try {
+      const cloudId = /^[A-Za-z0-9_-]{1,128}$/.test(presetId) ? presetId : "p" + Date.now().toString(36);
+      await LS.db.ref("globalSettings/profiles/" + cloudId).set({
+        name: nombre,
+        createdAt: Date.now(),
+        json: JSON.stringify(p)
+      });
+      const r = await LS.sendCommand(deviceId, "APPLY_PROFILE", null, { profileId: cloudId },
+        { nombre: nombreDispositivo(), timeoutMs: 20000 });
+      LS.toast(r.ok ? "Perfil aplicado." : "No se pudo: " + (r.reason || r.status), r.ok ? "ok" : "error");
+    } catch (err) {
+      LS.toast("No se pudo publicar el perfil: " + err.message, "error");
+    }
     b.disabled = false;
-    LS.toast(r.ok ? "Perfil aplicado." : "No se pudo: " + (r.reason || r.status), r.ok ? "ok" : "error");
   });
 
   /* ═════════════════════════════════════════════════════════════════════════
@@ -1076,31 +1106,47 @@
       return '<div class="ls-polrow"><label><b>' + esc(p.label || pkg) + "</b><br>" +
         '<span class="ls-apppkg">' + esc(pkg) + "</span> · " + esc(p.status || "pendiente") +
         "</label>" +
-        '<span><button class="ls-btn ls-btn-sm" data-aprobar="' + esc(pkg) + '">Aprobar</button> ' +
+        '<span><button class="ls-btn ls-btn-sm" data-aprobar="' + esc(pkg) + '" data-key="' + esc(k) + '">Aprobar</button> ' +
         '<button class="ls-btn ls-btn-sm ls-btn-danger" data-rechazar="' + esc(k) + '">Rechazar</button></span></div>';
     }).join("");
   }
 
-  $("c-pedidos").addEventListener("click", (e) => {
+  $("c-pedidos").addEventListener("click", async (e) => {
     const ap = e.target.closest("[data-aprobar]");
     if (ap) {
-      // Aprobar = permitir la app en este equipo. Se encola en el carrito en vez
-      // de mandarse suelto: así sale con el resto y por el mismo camino, que es
-      // lo que evita que "aprobar" y "permitir" se separen en dos lógicas.
-      S.pendApps[ap.dataset.aprobar] = "allow";
+      // Aprobar = permitir la app en este equipo + marcar el pedido como aprobado.
+      const pkg = ap.dataset.aprobar;
+      const key = ap.dataset.key || LS.pkgKey(pkg);
+      try {
+        await LS.db.ref("devices/" + deviceId + "/appRequests/" + key).update({
+          status: "approved",
+          resolvedAt: Date.now(),
+          notified: false
+        });
+      } catch (_) {}
+      S.pendApps[pkg] = "allow";
       pintarCarrito();
       irA("apps");
-      $("c-apps-buscar").value = ap.dataset.aprobar;
+      $("c-apps-buscar").value = pkg;
       pintarApps();
       LS.toast("Quedó marcada como permitida. Aplicá los cambios con el botón de abajo.", "ok");
       return;
     }
     const re = e.target.closest("[data-rechazar]");
     if (re) {
-      LS.db.ref("devices/" + deviceId + "/appRequests/" + re.dataset.rechazar + "/status")
-        .set("rejected")
-        .then(() => LS.toast("Pedido rechazado.", "ok"))
-        .catch((err) => LS.toast("No se pudo: " + err.message, "error"));
+      re.disabled = true;
+      try {
+        await LS.db.ref("devices/" + deviceId + "/appRequests/" + re.dataset.rechazar).update({
+          status: "rejected",
+          resolvedAt: Date.now(),
+          notified: false
+        });
+        await LS.sendCommand(deviceId, "SYNC_APP_REQUESTS", null, null, { nombre: nombreDispositivo() });
+        LS.toast("Pedido rechazado y avisado al celular.", "ok");
+      } catch (err) {
+        LS.toast("No se pudo: " + err.message, "error");
+      }
+      re.disabled = false;
     }
   });
 
@@ -1144,6 +1190,10 @@
         "reciba los comandos y no los aplique nunca.")) return;
       try {
         await LS.db.ref("deviceSecrets/" + deviceId + "/commandSecret").remove();
+        await LS.db.ref("devices/" + deviceId).update({
+          commandSecretMismatch: null,
+          "info/commandSecretMismatch": null
+        });
         LS.toast("Listo. El celular va a reescribir el secreto en su próxima sincronización.", "ok");
       } catch (err) { LS.toast("No se pudo: " + err.message, "error"); }
       return;
@@ -1229,9 +1279,11 @@
     LS.db.ref("devices/" + deviceId).on("value", (snap) => {
       S.device = snap.val() || {};
       S.appPolicy = S.device.appPolicy || {};
-      const inv = S.device.installedApps || (S.device.info && S.device.info.installedApps) || [];
-      S.installed = Array.isArray(inv) ? inv.map((x) => (typeof x === "string" ? x : x && x.packageName))
-        .filter(Boolean) : Object.keys(inv).map((k) => LS.keyPkg(k));
+      const inv = S.device.apps || (S.device.info && S.device.info.apps) ||
+        S.device.installedApps || (S.device.info && S.device.info.installedApps) || [];
+      S.installed = Array.isArray(inv)
+        ? inv.map((x) => (typeof x === "string" ? x : x && x.packageName)).filter(Boolean)
+        : Object.keys(inv).map((k) => (inv[k] && inv[k].packageName) || LS.keyPkg(k));
       pintarTodo();
     }, (err) => {
       LS.toast("No se pudo leer el celular: " + err.message, "error");

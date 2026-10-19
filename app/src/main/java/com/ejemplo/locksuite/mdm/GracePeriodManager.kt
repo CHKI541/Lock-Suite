@@ -156,17 +156,34 @@ object GracePeriodManager {
      * @param durationMs cuánto dura.
      * @param targetProfile qué perfil se aplica al cerrar (por omisión, Kosher estricto).
      */
+    private const val KEY_LAST_WALL = "grace_last_wall"
+    private const val KEY_LAST_BOOT_COUNT = "grace_last_boot_count"
+    @Volatile private var lastDiskSaveRealtime = 0L
+
+    private fun currentBootCount(context: Context): Int = try {
+        android.provider.Settings.Global.getInt(
+            context.contentResolver,
+            android.provider.Settings.Global.BOOT_COUNT,
+            -1
+        )
+    } catch (_: Exception) {
+        -1
+    }
+
     fun start(
         context: Context,
         durationMs: Long,
         targetProfile: String = EnrollmentProfiles.LEVEL_STRICT
     ) {
         val ahora = System.currentTimeMillis()
+        lastDiskSaveRealtime = SystemClock.elapsedRealtime()
         prefs(context).edit()
             .putLong(KEY_DEADLINE_WALL, ahora + durationMs)
             .putLong(KEY_DURATION_MS, durationMs)
             .putLong(KEY_ELAPSED_ACCUM, 0L)
-            .putLong(KEY_LAST_REALTIME, SystemClock.elapsedRealtime())
+            .putLong(KEY_LAST_REALTIME, lastDiskSaveRealtime)
+            .putLong(KEY_LAST_WALL, ahora)
+            .putInt(KEY_LAST_BOOT_COUNT, currentBootCount(context))
             .putLong(KEY_STARTED_AT, ahora)
             .putString(KEY_TARGET_PROFILE, targetProfile)
             .remove(KEY_LAST_CLOSE_REASON)
@@ -187,6 +204,8 @@ object GracePeriodManager {
             .remove(KEY_DURATION_MS)
             .remove(KEY_ELAPSED_ACCUM)
             .remove(KEY_LAST_REALTIME)
+            .remove(KEY_LAST_WALL)
+            .remove(KEY_LAST_BOOT_COUNT)
             .remove(KEY_STARTED_AT)
             .putString(KEY_LAST_CLOSE_REASON, reason)
             .apply()
@@ -207,30 +226,59 @@ object GracePeriodManager {
     fun checkAndHarden(context: Context): Boolean {
         val ctx = context.applicationContext
         val p = prefs(ctx)
-        val deadline = p.getLong(KEY_DEADLINE_WALL, 0L)
+        var deadline = p.getLong(KEY_DEADLINE_WALL, 0L)
         if (deadline <= 0L) return false
 
-        // ── Avanzar el acumulador de tiempo real ──
-        //
-        // `elapsedRealtime()` se reinicia en cada arranque, así que un valor guardado
-        // MAYOR que el actual significa "hubo un reinicio en el medio". En ese caso el
-        // delta correcto es el valor actual entero (el tiempo desde que bootea), no la
-        // resta, que daría negativo y haría retroceder el acumulador — o sea, le
-        // regalaría tiempo al que reinicie el equipo a propósito.
         val realtimeAhora = SystemClock.elapsedRealtime()
+        val wallAhora = System.currentTimeMillis()
+        val bootActual = currentBootCount(ctx)
+        val bootPrevio = p.getInt(KEY_LAST_BOOT_COUNT, bootActual)
         val realtimePrevio = p.getLong(KEY_LAST_REALTIME, realtimeAhora)
-        val delta = if (realtimeAhora >= realtimePrevio) realtimeAhora - realtimePrevio else realtimeAhora
+        val wallPrevio = p.getLong(KEY_LAST_WALL, wallAhora)
+
+        val huboReinicio = (bootActual != -1 && bootPrevio != -1 && bootActual != bootPrevio) ||
+            realtimeAhora < realtimePrevio
+        val delta = if (!huboReinicio) realtimeAhora - realtimePrevio else realtimeAhora
         val acumulado = p.getLong(KEY_ELAPSED_ACCUM, 0L) + maxOf(0L, delta)
         val duracion = p.getLong(KEY_DURATION_MS, 0L)
 
-        p.edit()
-            .putLong(KEY_ELAPSED_ACCUM, acumulado)
-            .putLong(KEY_LAST_REALTIME, realtimeAhora)
-            .apply()
+        // Si en el mismo arranque el reloj de pared dio un salto enorme hacia adelante
+        // (>10 minutos más que el tiempo real transcurrido, típico de un equipo recién
+        // formateado cuya hora salta de la fecha de fábrica a la hora real por NTP al
+        // conectarse al Wi-Fi), ajustamos el deadline para no cerrar el período de gracia
+        // en el primer minuto.
+        if (!huboReinicio && wallPrevio > 0L) {
+            val wallDelta = wallAhora - wallPrevio
+            if (wallDelta - delta > 10 * 60 * 1000L) {
+                val ajuste = wallDelta - delta
+                deadline += ajuste
+                p.edit()
+                    .putLong(KEY_DEADLINE_WALL, deadline)
+                    .putLong(KEY_ELAPSED_ACCUM, acumulado)
+                    .putLong(KEY_LAST_REALTIME, realtimeAhora)
+                    .putLong(KEY_LAST_WALL, wallAhora)
+                    .putInt(KEY_LAST_BOOT_COUNT, bootActual)
+                    .apply()
+                lastDiskSaveRealtime = realtimeAhora
+                Log.i(TAG, "Salto de reloj NTP detectado (+${ajuste / 60000} min); deadline ajustado.")
+            }
+        }
 
-        val vencioPorPared = System.currentTimeMillis() >= deadline
+        val vencioPorPared = wallAhora >= deadline
         val vencioPorAcumulador = duracion > 0L && acumulado >= duracion
-        if (!vencioPorPared && !vencioPorAcumulador) return false
+
+        if (!vencioPorPared && !vencioPorAcumulador) {
+            if (huboReinicio || realtimeAhora - lastDiskSaveRealtime >= 60_000L) {
+                p.edit()
+                    .putLong(KEY_ELAPSED_ACCUM, acumulado)
+                    .putLong(KEY_LAST_REALTIME, realtimeAhora)
+                    .putLong(KEY_LAST_WALL, wallAhora)
+                    .putInt(KEY_LAST_BOOT_COUNT, bootActual)
+                    .apply()
+                lastDiskSaveRealtime = realtimeAhora
+            }
+            return false
+        }
 
         // El motivo se guarda y se publica al panel. No es adorno: si un equipo cierra por
         // el acumulador y no por el reloj de pared, eso significa que ALGUIEN MOVIÓ LA
@@ -244,6 +292,7 @@ object GracePeriodManager {
         }
 
         val destino = targetProfile(ctx)
+        val startedAtPrev = p.getLong(KEY_STARTED_AT, 0L)
         // Se limpia ANTES de aplicar, y el orden importa: el perfil destino pasa por
         // `applyMasterProfile()`, y si esa función viera el período todavía activo lo
         // volvería a arrancar. Quedaría un equipo que se "cierra" y vuelve a abrirse solo,
@@ -255,6 +304,21 @@ object GracePeriodManager {
         } catch (e: Exception) {
             Log.e(TAG, "No se pudo aplicar el perfil de cierre '$destino': ${e.message}", e)
             false
+        }
+        if (!aplicado) {
+            // Si falló aplicar el perfil destino, restaurar el período vencido para que el
+            // próximo ciclo del Watchdog lo vuelva a intentar en vez de dejar el equipo abierto.
+            p.edit()
+                .putLong(KEY_DEADLINE_WALL, deadline)
+                .putLong(KEY_DURATION_MS, duracion)
+                .putLong(KEY_ELAPSED_ACCUM, acumulado)
+                .putLong(KEY_LAST_REALTIME, realtimeAhora)
+                .putLong(KEY_LAST_WALL, wallAhora)
+                .putInt(KEY_LAST_BOOT_COUNT, bootActual)
+                .putLong(KEY_STARTED_AT, startedAtPrev)
+                .putString(KEY_TARGET_PROFILE, destino)
+                .apply()
+            return false
         }
         Log.i(TAG, "Período de gracia cerrado ($motivo). Perfil '$destino' aplicado: $aplicado")
 

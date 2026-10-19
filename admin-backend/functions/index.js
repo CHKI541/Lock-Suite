@@ -240,13 +240,19 @@ const MAILBOX_TTL_ACTION_MS = 24 * 60 * 60 * 1000;
 const MAILBOX_TTL_STATE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Helper para verificar admin por UID (fuente de verdad alineada con database.rules.json)
-async function checkAdminByUid(uid) {
+async function checkAdminByUid(uid, decodedToken) {
   if (!uid) throw { status: 403, message: "Acceso denegado: UID inválido." };
+  if (decodedToken && decodedToken.admin === true) return;
   const snap = await admin.database().ref(`authorizedAdminsUids/${uid}`).once("value");
   if (!snap.exists() || snap.val() !== true) {
     throw { status: 403, message: "Acceso denegado: administrador no autorizado." };
   }
 }
+
+const DOMAIN_RULE_COMMANDS = new Set([
+  "SET_DOMAIN_RULE_BLOCK", "SET_DOMAIN_RULE_ALLOW",
+  "SET_DOMAIN_RULE_FORCE_BLOCK", "SET_DOMAIN_RULE_FORCE_ALLOW", "REMOVE_DOMAIN_RULE",
+]);
 
 // Helper para leer campo con fallback a info.X
 function getDeviceField(device, field, fallback = null) {
@@ -340,7 +346,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     const adminEmail = decoded.email;
 
     // Verificar que es admin autorizado por UID (fuente de verdad alineada con database.rules.json)
-    await checkAdminByUid(adminUid);
+    await checkAdminByUid(adminUid, decoded);
 
     const {
       deviceId, command, packages, devicePin, rememberDevice, newPin,
@@ -384,14 +390,13 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     }
 
     const token = getDeviceField(deviceData, "fcmToken");
-    if (!token) {
-      res.status(404).json({ error: "El dispositivo no tiene FCM token." });
-      return;
-    }
-
     const commandId = crypto.randomUUID();
     const commandSecret = (await admin.database().ref(`deviceSecrets/${deviceId}/commandSecret`).once("value")).val();
     const hasCommandSecret = typeof commandSecret === "string" && commandSecret.length >= 32;
+    if (!token && !hasCommandSecret) {
+      res.status(404).json({ error: "El dispositivo no tiene FCM token ni buzón de comandos activo." });
+      return;
+    }
     // Migración controlada: un cliente anterior a 0.5.0 no puede verificar la
     // firma por dispositivo. Solo se le permite recibir la actualización; no
     // puede ejecutar ninguna política hasta volver a sincronizar ya actualizado.
@@ -400,6 +405,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       return;
     }
     const payload = { command, commandId };
+    const pkgRegex = DOMAIN_RULE_COMMANDS.has(command) ? /^[a-zA-Z0-9_.-]+$/ : /^[a-zA-Z0-9_.]+$/;
 
     if (command === "CHANGE_PIN") {
       if (!newPin || !/^\d{4,16}$/.test(newPin)) {
@@ -514,10 +520,10 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       }
       payload.profileId = profileId;
     } else if (typeof packages === "string" && packages.trim().length > 0) {
-      const clean = packages.split(",").map(p => p.trim()).filter(p => /^[a-zA-Z0-9_.]+$/.test(p));
+      const clean = packages.split(",").map(p => p.trim()).filter(p => pkgRegex.test(p));
       if (clean.length > 0) payload.packages = clean.join(",");
     } else if (Array.isArray(packages) && packages.length > 0) {
-      const clean = packages.map(p => String(p).trim()).filter(p => /^[a-zA-Z0-9_.]+$/.test(p));
+      const clean = packages.map(p => String(p).trim()).filter(p => pkgRegex.test(p));
       if (clean.length > 0) payload.packages = clean.join(",");
     }
 
@@ -552,11 +558,14 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
         // del pedido que cancela. Sin esto, un equipo que vuelve después de ambos
         // arrancaba la actualización y la cancelaba en el mismo segundo.
         const cancelaActualizaciones = command === "CANCEL_UPDATE_APP" && !payload.packages;
+        const desuspendeTodas = command === "UNSUSPEND_ALL_APPS";
         pendSnap.forEach((c) => {
           const v = c.val() || {};
           if (v.family === family) updates[c.key] = null;   // el nuevo reemplaza al viejo
           else if (cancelaActualizaciones && typeof v.family === "string" &&
                    v.family.startsWith("UPDATE_APP|")) updates[c.key] = null;
+          else if (desuspendeTodas && typeof v.family === "string" &&
+                   v.family.startsWith("SUSPEND_APP|")) updates[c.key] = null;
         });
         const ahora = Date.now();
         updates[commandId] = {
@@ -570,6 +579,20 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       } catch (e) {
         console.warn("No se pudo encolar el comando en el buzón:", e && e.message);
       }
+    }
+
+    if (!token) {
+      if (queued) {
+        await deviceRef.child(`commandAcks/${commandId}`).update({ status: "queued", reason: "El equipo aún no registró token FCM; quedó en el buzón del equipo" }).catch(() => {});
+        await admin.database().ref(`commandLog/${deviceId}`).push({
+          command, commandId, packages: payload.packages || null,
+          sentBy: adminUid, sentAt: admin.database.ServerValue.TIMESTAMP, fcmError: "NO_FCM_TOKEN",
+        }).catch(() => {});
+        res.json({ success: true, commandId, queued: true, fcmError: "NO_FCM_TOKEN" });
+        return;
+      }
+      res.status(404).json({ error: "El dispositivo no tiene FCM token." });
+      return;
     }
 
     try {

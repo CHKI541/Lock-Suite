@@ -117,20 +117,26 @@ class CommandProcessor(private val context: Context) {
             commandId.isNullOrBlank() -> "MISSING_COMMAND_ID"
             signature.isNullOrBlank() -> "MISSING_SIGNATURE"
             timestamp.isNullOrBlank() -> "MISSING_TIMESTAMP"
+            timestamp.toLongOrNull() == null -> "INVALID_TIMESTAMP"
+            // Primero se verifica la firma HMAC en tiempo constante antes de tocar
+            // preferencias o disparar lecturas de red (B.40 p.3).
+            !verifyFcmSignature(data, timestamp, signature) -> "BAD_SIGNATURE"
             // La ventana temporal y el piso monotónico son para lo que llega por FCM.
             // Lo que viene del BUZÓN (devices/<id>/pendingCommands) es viejo por
             // naturaleza —el equipo estuvo apagado o sin red— y su protección contra
             // repetición es la firma + el registro de commandId ya procesados, que
             // ahora dura semanas. Ver util/CommandMailbox.kt.
             source == Source.FCM && timestampOutOfWindow(timestamp) -> "TIMESTAMP_OUT_OF_WINDOW"
-            !verifyFcmSignature(data, timestamp, signature) -> "BAD_SIGNATURE"
             isReplay(commandId) -> "REPLAY"
             else -> null
         }
         if (rejection != null) {
             android.util.Log.w("LockSuiteFCM", "Comando FCM rechazado ($rejection): $command")
-            // Un commandId ausente o en blanco no da dónde escribir el ack; el resto sí.
-            if (!commandId.isNullOrBlank()) {
+            // Un commandId ausente o en blanco no da dónde escribir el ack; y si falló la
+            // firma HMAC, solo se escribe el ack cuando viene del buzón autenticado de
+            // Firebase (donde solo escribe un admin/Cloud Function) para no permitir que
+            // un tercero sin clave llene commandAcks.
+            if (!commandId.isNullOrBlank() && (rejection != "BAD_SIGNATURE" || source == Source.MAILBOX)) {
                 writeRejectionAck(commandId, command, rejection)
             }
             // BAD_SIGNATURE es la firma de que el secreto de comandos se desincronizó.
@@ -685,6 +691,7 @@ class CommandProcessor(private val context: Context) {
                 }
                 "CLEAR_WHITELIST_AUDIT" -> {
                     com.ejemplo.locksuite.mdm.WhitelistManager.clearAudit()
+                    com.ejemplo.locksuite.util.FirebaseDeviceSync.syncWhitelistState(applicationContext, force = true)
                     true
                 }
                 // ── TERMINAR EL ALTA POR QR (10/9/2026, B.61) ──
@@ -775,6 +782,10 @@ class CommandProcessor(private val context: Context) {
                             prefs.edit()
                                 .putString(com.ejemplo.locksuite.util.Constants.KEY_PIN_HASH, newHash)
                                 .putString(com.ejemplo.locksuite.util.Constants.KEY_PIN_SALT, newSalt)
+                                .apply()
+                            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
+                                .edit()
+                                .putBoolean("pin_configured_mirror", true)
                                 .apply()
                             
                             // MED-11: Cerrar sesiones locales activas y resetear intentos fallidos

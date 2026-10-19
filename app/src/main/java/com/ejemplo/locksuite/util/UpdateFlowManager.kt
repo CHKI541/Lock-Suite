@@ -187,6 +187,34 @@ object UpdateFlowManager {
     private val mainHandler = Handler(Looper.getMainLooper())
     @Volatile private var lastSyncAt = 0L
     @Volatile private var finishing = false
+    private var finishRunnable: Runnable? = null
+    private var restoreRunnable: Runnable? = null
+    private const val KEY_PREV_UNINSTALL_BLOCKED = "update_flow_prev_uninstall_blocked"
+    private const val KEY_PREV_UNINSTALL_PKG = "update_flow_prev_uninstall_pkg"
+
+    private fun restorePreviousUninstallBlock(context: Context) {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        val prevPkg = prefs.getString(KEY_PREV_UNINSTALL_PKG, null)
+        if (!prevPkg.isNullOrBlank()) {
+            try {
+                val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                val admin = ComponentName(context, DeviceAdminReceiver::class.java)
+                dpm.setUninstallBlocked(
+                    admin,
+                    prevPkg,
+                    prefs.getBoolean(KEY_PREV_UNINSTALL_BLOCKED, false)
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "No se pudo restaurar setUninstallBlocked para $prevPkg: ${e.message}")
+            }
+        }
+        if (prefs.contains(KEY_PREV_UNINSTALL_BLOCKED) || prefs.contains(KEY_PREV_UNINSTALL_PKG)) {
+            prefs.edit()
+                .remove(KEY_PREV_UNINSTALL_BLOCKED)
+                .remove(KEY_PREV_UNINSTALL_PKG)
+                .apply()
+        }
+    }
 
     // ──────────────────────────────────────────────
     // Consultas
@@ -195,6 +223,14 @@ object UpdateFlowManager {
     fun isRunning(context: Context): Boolean {
         val p = PrefsHelper.getMdmPrefs(context)
         return p.getBoolean(KEY_IN_PROGRESS, false) && !p.getString(KEY_PKG, null).isNullOrBlank()
+    }
+
+    fun wasRecentlyUpdated(context: Context, packageName: String): Boolean {
+        val p = PrefsHelper.getMdmPrefs(context)
+        val lastPkg = p.getString(KEY_LAST_RESULT_PKG, null) ?: return false
+        if (lastPkg != packageName) return false
+        val lastAt = p.getLong(KEY_LAST_RESULT_AT, 0L)
+        return lastAt > 0L && kotlin.math.abs(System.currentTimeMillis() - lastAt) < 30_000L
     }
 
     /** Lo anota SelfUpdater al abrir su ventana de instalación (APK de la Tienda / OTA). */
@@ -227,6 +263,9 @@ object UpdateFlowManager {
         val ctx = context.applicationContext
         val p = PrefsHelper.getMdmPrefs(ctx)
         if (!p.getBoolean(KEY_IN_PROGRESS, false)) {
+            if (p.contains(KEY_PREV_UNINSTALL_PKG)) {
+                restorePreviousUninstallBlock(ctx)
+            }
             if (p.contains(KEY_STALE_TOKEN)) {
                 p.edit().remove(KEY_STALE_TOKEN).remove(KEY_STALE_SEEN_AT).apply()
             }
@@ -245,6 +284,7 @@ object UpdateFlowManager {
 
         Log.w(TAG, "Instalación colgada desde hace ${(now - seenAt) / 60000} min ($token), vista desde $source: se cierra.")
         p.edit().remove(KEY_STALE_TOKEN).remove(KEY_STALE_SEEN_AT).apply()
+        restorePreviousUninstallBlock(ctx)
         if (isRunning(ctx)) {
             forceCleanup(ctx, RESULT_TIMEOUT)
         } else {
@@ -412,7 +452,13 @@ object UpdateFlowManager {
         }
 
         val prefs = PrefsHelper.getMdmPrefs(ctx)
+        finishRunnable?.let { mainHandler.removeCallbacks(it) }
+        restoreRunnable?.let { mainHandler.removeCallbacks(it) }
+        finishRunnable = null
+        restoreRunnable = null
         finishing = false
+
+        restorePreviousUninstallBlock(ctx)
 
         prefs.edit()
             .putString(KEY_PKG, packageName)
@@ -435,7 +481,10 @@ object UpdateFlowManager {
             val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
 
             val wasUninstallBlocked = try { dpm.isUninstallBlocked(admin, packageName) } catch (e: Exception) { false }
-            prefs.edit().putBoolean("update_flow_prev_uninstall_blocked", wasUninstallBlocked).apply()
+            prefs.edit()
+                .putBoolean(KEY_PREV_UNINSTALL_BLOCKED, wasUninstallBlocked)
+                .putString(KEY_PREV_UNINSTALL_PKG, packageName)
+                .apply()
             try { dpm.setUninstallBlocked(admin, packageName, true) } catch (e: Exception) { }
 
             try {
@@ -645,6 +694,12 @@ object UpdateFlowManager {
             .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
             .apply()
 
+        // B.86: Restaurar setUninstallBlocked sincrónicamente al cerrar el flujo,
+        // sin esperar los 5.6 segundos de lectura del aviso. Así si el proceso muere
+        // mientras se muestra el cartel final, la app no queda con desinstalación
+        // bloqueada para siempre.
+        restorePreviousUninstallBlock(ctx)
+
         service?.invalidateFlagsCache()
         service?.resetUpdateSession()
 
@@ -682,7 +737,8 @@ object UpdateFlowManager {
             result == RESULT_ERROR
         val delayMs = if (!showNoticeOnOverlay) 0L else if (needsReading) 5000L else 1800L
 
-        mainHandler.postDelayed({
+        val outerRunnable = Runnable {
+            finishRunnable = null
             service?.overlayManager?.hideBlockingMessageOverlay()
 
             try {
@@ -699,29 +755,26 @@ object UpdateFlowManager {
                 Log.w(TAG, "No se pudo volver al inicio: ${e.message}")
             }
 
-            mainHandler.postDelayed({
+            val innerRunnable = Runnable {
+                restoreRunnable = null
                 try {
                     PolicyManager(ctx).restoreInstallRestrictions()
                 } catch (e: Exception) {
                     Log.e(TAG, "Error restaurando restricciones: ${e.message}")
                 }
-                if (!pkg.isNullOrBlank()) {
-                    try {
-                        val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-                        val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
-                        dpm.setUninstallBlocked(admin, pkg,
-                            prefs.getBoolean("update_flow_prev_uninstall_blocked", false))
-                    } catch (e: Exception) { e.printStackTrace() }
-                }
-                prefs.edit().remove("update_flow_prev_uninstall_blocked").apply()
+                restorePreviousUninstallBlock(ctx)
 
                 cancelWatchdog(ctx)
                 releaseWake()
                 finishing = false
                 LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
                 syncToPanel(ctx, force = true)
-            }, RESTORE_DELAY_MS)
-        }, delayMs)
+            }
+            restoreRunnable = innerRunnable
+            mainHandler.postDelayed(innerRunnable, RESTORE_DELAY_MS)
+        }
+        finishRunnable = outerRunnable
+        mainHandler.postDelayed(outerRunnable, delayMs)
 
         if (!finalNotice.isNullOrBlank() && result != RESULT_UPDATED) {
             try {

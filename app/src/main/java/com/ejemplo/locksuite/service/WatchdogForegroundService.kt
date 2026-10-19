@@ -322,13 +322,25 @@ class WatchdogForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        createNotificationChannel()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            }
+        } catch (e: Exception) {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         if (com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)) {
             stopSelf()
             return
         }
         instance = this
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
         scheduleWorkManagerWatchdog()
         handler.post(checkRunnable)
         handler.post(enforcerRunnable)
@@ -422,6 +434,13 @@ class WatchdogForegroundService : Service() {
         com.ejemplo.locksuite.util.AccessibilityEnforcer.reconcileApps(context, verdict)
 
         if (verdict != com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.VIOLATED) {
+            if (verdict == com.ejemplo.locksuite.util.AccessibilityEnforcer.Verdict.OK) {
+                val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
+                if (prefs.getBoolean("browsers_suspended_by_watchdog", false)) {
+                    prefs.edit().putBoolean("browsers_suspended_by_watchdog", false).apply()
+                    com.ejemplo.locksuite.mdm.PolicyManager(context).setBrowsersSuspended(false)
+                }
+            }
             cancelNag()
             return
         }

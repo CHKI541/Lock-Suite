@@ -68,7 +68,10 @@ window.LOCKSUITE_CATALOG = {
         "listado.mercadolibre.com",
         "listado.mercadolibre.com.ar",
         "snoopy.mercadolibre.com",
-        "snoopy.mercadolibre.com.ar"
+        "snoopy.mercadolibre.com.ar",
+        "ofertas.mercadopago.com.ar",
+        "ofertas.mercadolibre.com.ar",
+        "discounts-center.mercadopago.com"
       ],
       "note": "PAGOS: probar una transferencia real en simulación antes de pasar a estricto. "
     },
@@ -378,6 +381,8 @@ window.LOCKSUITE_CATALOG = {
     "amazontrust.com",
     "sectigo.com",
     "globalsign.com",
+    "accounts.google.com",
+    "oauth2.googleapis.com",
     "locksuite-nueva.web.app",
     "locksuite-nueva.firebaseapp.com",
     "firebaseio.com",

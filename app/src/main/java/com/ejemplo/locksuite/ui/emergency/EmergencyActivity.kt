@@ -56,62 +56,77 @@ class EmergencyActivity : ComponentActivity() {
         val policyManager = PolicyManager(this)
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val adminComponent = ComponentName(this, com.ejemplo.locksuite.receiver.DeviceAdminReceiver::class.java)
+        val appCtx = applicationContext
 
         Toast.makeText(this, "Iniciando purga total de políticas...", Toast.LENGTH_LONG).show()
 
-        // 1. Unhide any hidden apps before losing Device Owner privileges
-        try {
-            val appController = com.ejemplo.locksuite.mdm.AppController(this)
-            val apps = appController.getUserApps(loadIcon = false)
-            for (app in apps) {
-                if (app.isHidden) {
-                    appController.hideApp(app.packageName, false)
+        Thread({
+            // 1. Mostrar y des-suspender todas las apps antes de perder privilegios de Device Owner
+            try {
+                val appController = com.ejemplo.locksuite.mdm.AppController(appCtx)
+                val apps = appController.getUserApps(loadIcon = false)
+                for (app in apps) {
+                    if (app.isHidden) {
+                        appController.hideApp(app.packageName, false)
+                    }
+                    if (app.isSuspended) {
+                        appController.suspendApp(app.packageName, false)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // 2. Limpiar todas las restricciones de usuario de PolicyManager
+            try {
+                policyManager.clearAllRestrictions()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // 3. Reactivar launcher alias
+            setStealthMode(false)
+
+            // 4. Reactivar la barra de estado
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    dpm.setStatusBarDisabled(adminComponent, false)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // 5. Revocar privilegios de Device Owner (irreversible)
+            try {
+                dpm.clearDeviceOwnerApp(packageName)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                runOnUiThread {
+                    Toast.makeText(this, "Error al quitar Device Owner: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
 
-        // 2. Limpiar todas las restricciones de usuario de PolicyManager
-        policyManager.clearAllRestrictions()
-
-        // 3. Reactivar launcher alias
-        setStealthMode(false)
-
-        // 4. Reactivar la barra de estado
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                dpm.setStatusBarDisabled(adminComponent, false)
+            // 5b. Detener servicios (incluyendo KosherVpnService), cancelar WorkManager y marcar purga persistente
+            try {
+                stopService(Intent(appCtx, com.ejemplo.locksuite.service.KosherVpnService::class.java))
+                stopService(Intent(appCtx, com.ejemplo.locksuite.service.WatchdogForegroundService::class.java))
+                stopService(Intent(appCtx, com.ejemplo.locksuite.service.WatermarkService::class.java))
+                androidx.work.WorkManager.getInstance(appCtx).cancelUniqueWork("LockSuiteWatchdog")
+                androidx.core.app.NotificationManagerCompat.from(appCtx).cancelAll()
+                com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(appCtx).edit()
+                    .putBoolean("locksuite_purged", true)
+                    .commit()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
 
-        // 5. Revocar privilegios de Device Owner (irreversible)
-        try {
-            dpm.clearDeviceOwnerApp(packageName)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(this, "Error al quitar Device Owner: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-
-        // 5b. Detener servicios, cancelar WorkManager, limpiar notificaciones y marcar purga persistente
-        try {
-            stopService(Intent(this, com.ejemplo.locksuite.service.WatchdogForegroundService::class.java))
-            stopService(Intent(this, com.ejemplo.locksuite.service.WatermarkService::class.java))
-            androidx.work.WorkManager.getInstance(this).cancelUniqueWork("LockSuiteWatchdog")
-            androidx.core.app.NotificationManagerCompat.from(this).cancelAll()
-            com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this).edit()
-                .putBoolean("locksuite_purged", true)
-                .apply()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // 6. Cerrar sesión y salir
-        SessionManager.closeSession()
-        Toast.makeText(this, "Purga de emergencia completa. Dispositivo liberado.", Toast.LENGTH_LONG).show()
-        finishAffinity()
+            // 6. Cerrar sesión y salir en el hilo principal
+            SessionManager.closeSession()
+            runOnUiThread {
+                Toast.makeText(this, "Purga de emergencia completa. Dispositivo liberado.", Toast.LENGTH_LONG).show()
+                finishAffinity()
+            }
+        }, "EmergencyPurge").start()
     }
 
     private fun setStealthMode(enabled: Boolean) {

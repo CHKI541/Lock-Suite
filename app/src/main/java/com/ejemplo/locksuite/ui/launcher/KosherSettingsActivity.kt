@@ -220,45 +220,71 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                     }
                 }
 
+                val policyManager = remember { com.ejemplo.locksuite.mdm.PolicyManager(context) }
+                val isAdminActive = remember { com.ejemplo.locksuite.security.SessionManager.isActive() }
+                val bluetoothBlocked = remember {
+                    !isAdminActive && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH)
+                }
+                val dateTimeBlocked = remember {
+                    !isAdminActive && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_DATE_TIME)
+                }
+                val localeBlocked = remember {
+                    !isAdminActive && policyManager.isLocaleChangeBlocked()
+                }
+
                 // CONECTIVIDAD SECCIÓN
-                SettingsGroup(title = "Conectividad") {
-                    Column(modifier = Modifier.padding(4.dp)) {
-                        SettingsButton(
-                            label = "Configurar Bluetooth",
-                            icon = Icons.Filled.Bluetooth,
-                            onClick = {
-                                try {
-                                    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                if (!bluetoothBlocked) {
+                    SettingsGroup(title = "Conectividad") {
+                        Column(modifier = Modifier.padding(4.dp)) {
+                            SettingsButton(
+                                label = "Configurar Bluetooth",
+                                icon = Icons.Filled.Bluetooth,
+                                onClick = {
+                                    if (policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH) &&
+                                        !com.ejemplo.locksuite.security.SessionManager.isActive()
+                                    ) {
+                                        Toast.makeText(context, "Bluetooth bloqueado por el administrador", Toast.LENGTH_SHORT).show()
+                                        return@SettingsButton
                                     }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "No se pudo abrir Bluetooth", Toast.LENGTH_SHORT).show()
+                                    try {
+                                        val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "No se pudo abrir Bluetooth", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
                 }
 
                 // CONFIGURACIÓN DE DISPOSITIVO SECCIÓN
                 SettingsGroup(title = "Dispositivo") {
                     Column(modifier = Modifier.padding(4.dp)) {
-                        SettingsButton(
-                            label = "Configurar fecha y hora",
-                            icon = Icons.Filled.AccessTime,
-                            onClick = {
-                                try {
-                                    val intent = Intent(Settings.ACTION_DATE_SETTINGS).apply {
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        if (!dateTimeBlocked) {
+                            SettingsButton(
+                                label = "Configurar fecha y hora",
+                                icon = Icons.Filled.AccessTime,
+                                onClick = {
+                                    if (policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_CONFIG_DATE_TIME) && !com.ejemplo.locksuite.security.SessionManager.isActive()) {
+                                        Toast.makeText(context, "Fecha y hora bloqueadas por el administrador", Toast.LENGTH_SHORT).show()
+                                        return@SettingsButton
                                     }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "No se pudo abrir Fecha y Hora", Toast.LENGTH_SHORT).show()
+                                    try {
+                                        val intent = Intent(Settings.ACTION_DATE_SETTINGS).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "No se pudo abrir Fecha y Hora", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
-                            }
-                        )
+                            )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
 
                         SettingsButton(
                             label = "Encendido/Apagado Temporizado",
@@ -295,31 +321,37 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                             }
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        if (!localeBlocked) {
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        SettingsButton(
-                            label = "Configurar idioma y teclado",
-                            icon = Icons.Filled.Language,
-                            onClick = {
-                                try {
-                                    // Abre la pantalla de administración de teclados (Gboard, idiomas de entrada, etc.)
-                                    val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            SettingsButton(
+                                label = "Configurar idioma y teclado",
+                                icon = Icons.Filled.Language,
+                                onClick = {
+                                    if (policyManager.isLocaleChangeBlocked() && !com.ejemplo.locksuite.security.SessionManager.isActive()) {
+                                        Toast.makeText(context, "Cambio de idioma bloqueado por el administrador", Toast.LENGTH_SHORT).show()
+                                        return@SettingsButton
                                     }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
                                     try {
-                                        // Fallback a la configuración de idioma general del sistema
-                                        val intentLocale = Intent(Settings.ACTION_LOCALE_SETTINGS).apply {
+                                        // Abre la pantalla de administración de teclados (Gboard, idiomas de entrada, etc.)
+                                        val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
                                             flags = Intent.FLAG_ACTIVITY_NEW_TASK
                                         }
-                                        context.startActivity(intentLocale)
-                                    } catch (ex: Exception) {
-                                        Toast.makeText(context, "No se pudo abrir Ajustes de Idioma", Toast.LENGTH_SHORT).show()
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        try {
+                                            // Fallback a la configuración de idioma general del sistema
+                                            val intentLocale = Intent(Settings.ACTION_LOCALE_SETTINGS).apply {
+                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                            }
+                                            context.startActivity(intentLocale)
+                                        } catch (ex: Exception) {
+                                            Toast.makeText(context, "No se pudo abrir Ajustes de Idioma", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
-                            }
-                        )
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(8.dp))
 

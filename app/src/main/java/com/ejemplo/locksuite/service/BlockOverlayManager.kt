@@ -425,9 +425,8 @@ class BlockOverlayManager(private val service: AccessibilityService) {
                 if (blockingCancelable == cancelable) {
                     // Mismo formato: solo refrescar textos, sin recrear la ventana.
                     existing.findViewWithTag<android.widget.TextView>("title")?.text = title
-                    if (subtitle != null) {
-                        existing.findViewWithTag<android.widget.TextView>("subtitle")?.text = subtitle
-                    }
+                    existing.findViewWithTag<android.widget.TextView>("subtitle")?.text =
+                        subtitle ?: "Por favor, no toque la pantalla..."
                     return@onMain
                 }
                 // Cambio si es cancelable o no: hay que rearmar la vista.

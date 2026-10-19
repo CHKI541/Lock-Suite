@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.PersistableBundle
 import android.widget.Toast
+import kotlinx.coroutines.launch
 
 class DeviceAdminReceiver : DeviceAdminReceiver() {
 
@@ -77,26 +78,43 @@ class DeviceAdminReceiver : DeviceAdminReceiver() {
                 return
             }
 
-            val pm = com.ejemplo.locksuite.mdm.PolicyManager(context)
-            val ok = pm.applyMasterProfile(nivel, incluirPostAlta = false)
-            val pendientes = com.ejemplo.locksuite.mdm.EnrollmentProfiles.pendientesDeAlta(nivel)
+            val pendingResult = goAsync()
+            val appCtx = context.applicationContext
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                try {
+                    val pm = com.ejemplo.locksuite.mdm.PolicyManager(appCtx)
+                    val ok = pm.applyMasterProfile(nivel, incluirPostAlta = false)
+                    val pendientes = com.ejemplo.locksuite.mdm.EnrollmentProfiles.pendientesDeAlta(nivel)
 
-            android.util.Log.i(
-                "DeviceAdminReceiver",
-                "Alta por QR: perfil=$nivel aplicado=$ok pendientes=${pendientes.size}"
-            )
-            Toast.makeText(
-                context,
-                if (!ok) {
-                    "LockSuite: no se pudo aplicar el perfil «$nivel». Aplicalo desde el panel."
-                } else if (pendientes.isNotEmpty()) {
-                    "LockSuite configurada. Agregá la cuenta de Google y el idioma, " +
-                        "y después tocá «Terminar alta» en el panel."
-                } else {
-                    "LockSuite configurada con el perfil «$nivel»."
-                },
-                Toast.LENGTH_LONG
-            ).show()
+                    android.util.Log.i(
+                        "DeviceAdminReceiver",
+                        "Alta por QR: perfil=$nivel aplicado=$ok pendientes=${pendientes.size}"
+                    )
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        try {
+                            Toast.makeText(
+                                appCtx,
+                                if (!ok) {
+                                    "LockSuite: no se pudo aplicar el perfil «$nivel». Aplicalo desde el panel."
+                                } else if (pendientes.isNotEmpty()) {
+                                    "LockSuite configurada. Agregá la cuenta de Google y el idioma, " +
+                                        "y después tocá «Terminar alta» en el panel."
+                                } else {
+                                    "LockSuite configurada con el perfil «$nivel»."
+                                },
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } catch (_: Exception) {}
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e(
+                        "DeviceAdminReceiver",
+                        "Alta por QR: applyMasterProfile falló: ${e.message}", e
+                    )
+                } finally {
+                    try { pendingResult.finish() } catch (_: Exception) {}
+                }
+            }
         } catch (e: Exception) {
             android.util.Log.e(
                 "DeviceAdminReceiver",

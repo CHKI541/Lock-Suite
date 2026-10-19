@@ -18,6 +18,11 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
 
+        if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(context)) {
+            android.util.Log.i("BootReceiver", "Almacenamiento bloqueado (Direct Boot) en $action. Esperando ACTION_BOOT_COMPLETED.")
+            return
+        }
+
         // Alarma de respaldo: si la ventana de arranque protegido venció sin que la VPN
         // o el Watchdog hayan podido confirmar el filtro, se libera el proxy huérfano.
         if (action == ACTION_BOOT_GATE_TIMEOUT) {

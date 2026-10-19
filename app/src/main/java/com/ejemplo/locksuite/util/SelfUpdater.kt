@@ -120,6 +120,7 @@ object SelfUpdater {
 
                 // Levantar restricciones ANTES de crear la sesión (Android valida al crear, no al commit)
                 if (!prepareTemporaryInstallAccess(context)) {
+                    tempFile.delete()
                     return@withContext "No se pudieron preparar los permisos temporales de instalación."
                 }
                 temporaryInstallAccessPrepared = true
@@ -139,7 +140,8 @@ object SelfUpdater {
                 // cerrar (saltaba directo al catch de abajo), acumulando sesiones
                 // colgadas ante fallos repetidos de auto-actualización.
                 try {
-                    session.openWrite("COSU", 0, -1).use { out ->
+                    val fileSize = tempFile.length().takeIf { it > 0L } ?: -1L
+                    session.openWrite("COSU", 0, fileSize).use { out ->
                         FileInputStream(tempFile).use { fis ->
                             val buffer = ByteArray(65536)
                             var bytesRead: Int
@@ -166,12 +168,16 @@ object SelfUpdater {
                     session.commit(pendingIntent.intentSender)
                     installCommitSubmitted = true
                 } finally {
-                    session.close()
+                    if (!installCommitSubmitted) {
+                        try { session.abandon() } catch (_: Exception) {}
+                    }
+                    try { session.close() } catch (_: Exception) {}
                 }
 
                 tempFile.delete()
                 return@withContext null
             } catch (e: Exception) {
+                try { File(context.cacheDir, "locksuite_update.apk").delete() } catch (_: Exception) {}
                 if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
                     com.ejemplo.locksuite.mdm.PolicyManager(context).restoreInstallRestrictions()
                 }
@@ -195,12 +201,12 @@ object SelfUpdater {
         return withContext(Dispatchers.IO) {
             var temporaryInstallAccessPrepared = false
             var installCommitSubmitted = false
+            val tempFile = File(context.cacheDir, "store_${packageName}_update.apk")
             try {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Iniciando descarga de $label...", Toast.LENGTH_SHORT).show()
                 }
 
-                val tempFile = File(context.cacheDir, "store_${packageName}_update.apk")
                 val urlWithCacheBuster = if (apkUrl.contains("?")) "$apkUrl&t=${System.currentTimeMillis()}" else "$apkUrl?t=${System.currentTimeMillis()}"
                 val apkConnection = openDownloadConnection(urlWithCacheBuster)
 
@@ -258,10 +264,7 @@ object SelfUpdater {
                 // paquete nuevo que no esté en la lista local `allowed_packages`, y la
                 // Tienda instala lo permitido en `globalSettings/allowedPackages`: sin esta
                 // marca, la app recién bajada se desinstalaba sola. Ver PackageReceiver.
-                PrefsHelper.getMdmPrefs(context).edit()
-                    .putString(com.ejemplo.locksuite.receiver.PackageReceiver.KEY_STORE_INSTALL_PKG, packageName)
-                    .putLong(com.ejemplo.locksuite.receiver.PackageReceiver.KEY_STORE_INSTALL_AT, System.currentTimeMillis())
-                    .commit()
+                com.ejemplo.locksuite.receiver.PackageReceiver.markStoreInstall(context, packageName)
 
                 // Levantar restricciones ANTES de crear la sesión (Android valida al crear, no al commit)
                 if (!prepareTemporaryInstallAccess(context)) {
@@ -283,7 +286,8 @@ object SelfUpdater {
                 // mueve a un finally para que "fis"/"out"/la sesión siempre se
                 // cierren, incluso si la copia falla a mitad de camino.
                 try {
-                    session.openWrite("COSU", 0, -1).use { out ->
+                    val fileSize = tempFile.length().takeIf { it > 0L } ?: -1L
+                    session.openWrite("COSU", 0, fileSize).use { out ->
                         FileInputStream(tempFile).use { fis ->
                             val buffer = ByteArray(65536)
                             var bytesRead: Int
@@ -310,10 +314,12 @@ object SelfUpdater {
                     session.commit(pendingIntent.intentSender)
                     installCommitSubmitted = true
                 } finally {
-                    session.close()
+                    if (!installCommitSubmitted) {
+                        try { session.abandon() } catch (_: Exception) {}
+                    }
+                    try { session.close() } catch (_: Exception) {}
                 }
 
-                tempFile.delete()
                 return@withContext null
             } catch (e: Exception) {
                 if (temporaryInstallAccessPrepared && !installCommitSubmitted) {
@@ -321,11 +327,15 @@ object SelfUpdater {
                 }
                 Log.e("SelfUpdater", "Error al instalar $label", e)
                 return@withContext "Error al instalar $label: ${e.message}"
+            } finally {
+                if (tempFile.exists()) {
+                    try { tempFile.delete() } catch (_: Exception) {}
+                }
             }
         }
     }
 
-    private fun prepareTemporaryInstallAccess(context: Context): Boolean {
+    internal fun prepareTemporaryInstallAccess(context: Context): Boolean {
         try {
             PrefsHelper.getMdmPrefs(context)
                 .edit()

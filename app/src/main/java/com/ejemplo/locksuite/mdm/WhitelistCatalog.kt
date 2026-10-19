@@ -162,7 +162,9 @@ object WhitelistCatalog {
         "sectigo.com",
         "globalsign.com",
 
-        // ── El propio LockSuite: panel, base de datos, OTA, login del panel. ──
+        // ── El propio LockSuite: panel, base de datos, OTA, login del panel y cuentas Google. ──
+        "accounts.google.com",
+        "oauth2.googleapis.com",
         "locksuite-nueva.web.app",
         "locksuite-nueva.firebaseapp.com",
         "firebaseio.com",
@@ -287,7 +289,9 @@ object WhitelistCatalog {
                 // Subdominios del marketplace y tracking de Mercado Libre (sin autenticación ni captcha)
                 "click1.mercadolibre.com", "click1.mercadolibre.com.ar",
                 "listado.mercadolibre.com", "listado.mercadolibre.com.ar",
-                "snoopy.mercadolibre.com", "snoopy.mercadolibre.com.ar"
+                "snoopy.mercadolibre.com", "snoopy.mercadolibre.com.ar",
+                "ofertas.mercadopago.com.ar", "ofertas.mercadolibre.com.ar",
+                "discounts-center.mercadopago.com"
             ),
             note = "PAGOS: probar una transferencia real en simulación antes de pasar a estricto. " +
                 "mobile.mercadolibre.* y www.mercadolibre.com (/mla/lgz/captcha) son necesarios para el login: no bloquearlos por DNS (B.71, B.72)."

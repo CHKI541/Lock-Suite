@@ -693,7 +693,7 @@ Antigravity entregó una auditoría "función por función" de `:app`, `:admin-a
 
 1. **El panel descarta los rechazos del celular.** `app.js` (líneas 821-833) contempla `applied` y `failed` pero **no `rejected`**, que es justo lo que el celular escribe (`LockSuiteFirebaseService.kt` líneas 649-654). **Toda la instrumentación de motivos que agregó B.26 se tira del lado del panel**: el administrador ve "✓ Comando enviado" a los 10 s de timeout cuando el celular ya lo rechazó. **Es el hallazgo más valioso de los 16 y va primero: sin esto, probar B.26 es adivinar.**
 2. **`PackageReceiver` desinstala apps que se están ACTUALIZANDO.** El bloque de instalación no autorizada (línea 71) no mira `EXTRA_REPLACING`, que recién se lee en la 109. Cualquier app de usuario fuera de `allowed_packages` que reciba una actualización en segundo plano **se desinstala entera**. `isCritical()` solo cubre `systemEssential + launcherPackages`, así que el radio es amplio. **El más urgente en daño real al usuario.**
-3. **El timestamp del comando FCM se guarda antes de verificar la firma.** `timestampOutOfWindow()` (línea 701) escribe `KEY_LAST_CMD_TIMESTAMP` y corre **antes** de `verifyFcmSignature()` en el `when` (líneas 82-83). Un mensaje no autenticado con timestamp futuro adelanta el piso monotónico y deja el equipo inadministrable hasta 23 h. ⚠️ **Corrección al informe:** dice "cualquier atacante que conozca el token FCM" y eso es falso — conocer un token de registro no permite enviar; hace falta la clave de servidor del proyecto, y B.32 midió que no hay ninguna en el repo. Se arregla igual (escribir estado persistente desde entrada no autenticada es un error de principio), pero no es el agujero que el informe describe.
+3. **El timestamp del comando FCM se guarda antes de verificar la firma.** `timestampOutOfWindow()` (línea 701) escribe `KEY_LAST_CMD_TIMESTAMP` y corre **antes** de `verifyFcmSignature()` en el `when` (líneas 82-83). Un mensaje no autenticado con timestamp futuro adelanta el piso monotónico y deja el equipo inadministrable hasta 23 h. ⚠️ **Corrección al informe:** dice "cualquier atacante que conozca el token FCM" y eso es falso — conocer un token de registro no permite enviar; hace falta la clave de servidor del proyecto, y B.32 midió que no hay ninguna en el repo. Se arregla igual (escribir estado persistente desde entrada no autenticada es un error de principio), pero no es el agujero que el informe describe. *(Aplicado en código el 19/10/2026 en `CommandProcessor.kt`: `verifyFcmSignature()` corre antes de `timestampOutOfWindow()`, ver B.91; pendiente confirmar en equipo real.)*
 4. **El filtro DNS distingue mayúsculas de minúsculas.** `DnsPacketParser.extractQueriedDomain()` no normaliza, y las comparaciones de la lista negra global (`KosherVpnService.kt` línea 564) y de `CORE_DOMAINS` (línea 542) son `==`/`endsWith`. `FaCeBoOk.CoM` las evade. El bloqueo de tenor sí normaliza (línea 509), así que es una inconsistencia dentro del mismo archivo. Arreglo: `?.lowercase()?.trimEnd('.')` al extraer, **confirmando que la respuesta se siga armando con el payload original**.
 5. **La purga total deja todo corriendo.** `executeFullPurge()` (`EmergencyActivity.kt` 53-100) no para `WatchdogForegroundService` ni `WatermarkService`, no cancela el trabajo único `"LockSuiteWatchdog"` (nombre verificado en `WatchdogForegroundService.kt` línea 590) y no limpia notificaciones. Después de soltar el Device Owner el Watchdog sigue vivo tirando excepciones cada 15 min, con la notificación fija en la barra. **Complementa B.25** (que cubría restricciones y suspensiones, no servicios). ⚠️ **Al arreglo le falta una pieza:** parar los servicios no alcanza porque `BootReceiver` los levanta en el próximo arranque — hace falta una bandera persistente escrita **después** del `prefs.edit().clear()` de `clearAllRestrictions()`. Y va en `executeFullPurge()`, no en `clearAllRestrictions()` (que se llama desde otros lados).
 6. **Falta `USE_FULL_SCREEN_INTENT` en el Manifest.** `setFullScreenIntent(pending, true)` está en `WatchdogForegroundService.kt` línea 538 y el permiso no está declarado. ⚠️ **Dos correcciones al informe:** (a) no es solo Android 14 — el permiso existe desde **API 29**, así que el aviso viene degradado **también en el Android 13 del dueño**, donde se probó todo esto (el comentario de la línea 536 promete abrir la pantalla de bloqueo y eso nunca pasó); (b) en Android 14+ declararlo **no alcanza** — se concede solo a apps de llamadas/alarmas, el resto necesita que el usuario lo habilite, así que hay que chequear `canUseFullScreenIntent()`. **Atenuante:** el cartel rojo no depende de esto (`BlockAccessibilityActivity` se lanza como Activity y LockSuite es Device Owner, exento del bloqueo de lanzamiento en segundo plano).
@@ -1708,7 +1708,7 @@ El guard cerraba la ventana del portal "por inactividad" mientras el usuario le�
 7. **Copias de seguridad de la base:** el plan Blaze permite respaldos diarios automáticos de Realtime Database; no están configurados (o no hay evidencia en el repo).
 8. **B.3-b (hash del PIN):** sigue igual.
 
-**B.86 — `UPDATE_APP` y el desbloqueo de desinstalación si el proceso muere a mitad de cierre. [VISTO EL 22/9; NO TOCADO]** `UpdateFlowManager.finish()` restaura `setUninstallBlocked` del paquete en un `postDelayed`; si el proceso muere justo en ese intervalo, esa app puede quedar desinstalable hasta que algo vuelva a aplicar su bloqueo. Caso borde; anotado para cuando se toque ese archivo.
+**B.86 — `UPDATE_APP` y el desbloqueo de desinstalación si el proceso muere a mitad de cierre. [APLICADO EN CÓDIGO EL 19/10/2026; PENDIENTE CONFIRMAR EN EQUIPO REAL]** `UpdateFlowManager.finish()` restauraba `setUninstallBlocked` del paquete en un `postDelayed`; si el proceso moría justo en ese intervalo, esa app podía quedar desinstalable hasta que algo volviera a aplicar su bloqueo. Corregido en `UpdateFlowManager.kt` (ver B.91): `restorePreviousUninstallBlock()` se ejecuta de forma síncrona dentro de `finish()` y también en `healStaleInstall()`.
 
 **B.87 — ~~ANDROID AUTO NO ARRANCA CON LOCKSUITE: "Error de comunicación 21 - Conectarse a una VPN podría impedir que se inicie Android Auto"~~ [RESUELTO 25/9 — CONFIRMADO EN EL AUTO: salió en 0.6.55 (commit `0c87da2`, desplegado el 23/9 a las 21:49) y con esa versión el error 21 ya no aparece: Android Auto pasa a su pantalla de "Descargá apps de Google Play", que es otro problema y sigue en B.88]**
 
@@ -1873,69 +1873,115 @@ Pedido del dueño (27/9): *"revisá bien lo que consume la app en CPU/batería, 
 
 ---
 
+**B.91 — AUDITORÍA INTEGRAL DE PRODUCCIÓN POR EQUIPO DE 6 AGENTES (CAPAS 1–6: MDM, RED/VPN, ACCESIBILIDAD/IA, CICLO DE VIDA/UPDATES, UI/LAUNCHERS/ADMIN-APP Y BACKEND/PANEL WEB). [APLICADO EN CÓDIGO, PRUEBAS EN VERDE Y DESPLEGADO EL 19/10/2026; PENDIENTE CONFIRMAR EN EQUIPO REAL]**
+
+Pedido del dueño: actuar como un equipo de agentes especializados para revisar función por función toda la aplicación (`:app`, `:admin-app`, `admin-backend`, `tools`) antes de producción, garantizando compatibilidad en Android 11–16 (API 24–35), cero crashes/ANRs, cero cortes de internet, cero evasión del filtro y mínimo impacto en CPU/batería. Plan detallado con prompts por función documentado en `PLAN_AUDITORIA_PRODUCCION_AGENTES.md`.
+
+**Resumen de correcciones aplicadas por capa (`*(aplicado en código, pendiente confirmar en equipo real)*`):**
+
+1. **Capa 1 — MDM Core, DevicePolicyManager, Reconciliación y Control de Apps:**
+   - **`PolicyManager.kt`:**
+     - Sincronización `reapplyLock`: evita carreras concurrentes entre `LockSuiteApplication`, `BootReceiver` y `WatchdogWorker` en `reapplyAllRestrictions()`.
+     - **Cero cortes de internet por proxy residual (`127.0.0.1:9999`):** si `isInternetBlocked()` es `false` y `BootGate` no está sosteniendo el proxy, `reapplyAllRestrictions()` limpia cualquier proxy global huérfano dejado por una muerte abrupta del proceso durante el arranque.
+     - **Restauración automática de `DISALLOW_CONFIG_DATE_TIME` tras el alta:** cuando se detecta una cuenta `@gmail.com`/`@googlemail.com` y `reapplyAllRestrictions()` re-aplica `DISALLOW_MODIFY_ACCOUNTS`, ahora también restaura `DISALLOW_CONFIG_DATE_TIME` (que el alta había pospuesto para permitir login OAuth), cerrando el vector de cambio de hora para burlar bloqueos o certificados.
+     - **Simetría de `clearAllRestrictions()`:** limpia `KEY_INTERNET_BLOCKED` y `KEY_PER_APP_INTERNET_BLOCKED` al purgar restricciones.
+     - **Verificación de `PendingIntent` en `importPolicyPresetJson()`:** envuelve `PendingIntent.getActivity(..., FLAG_NO_CREATE)` en `try/catch` para evitar `SecurityException`/`IllegalArgumentException` en Android 12–14+.
+     - **Reinicio limpio de `KosherVpnService` al cambiar bloqueos DNS:** si la VPN ya está activa al cambiar `setInternetBlocked()`, `setMercadoPagoBlockOffersVpn()` o `setMercadoLibreInMpBlocked()`, envía `RESTART_VPN` para limpiar sockets y cachés inmediatamente.
+     - **Validación de `setPermissionPolicy` y `lockNow`:** protegidos con `dpm.isDeviceOwnerApp(context.packageName)` y `dpm.isAdminActive(adminComponent)`.
+   - **`AppController.kt`:**
+     - Protección de dialers y mensajería crítica (`com.google.android.dialer`, `com.samsung.android.dialer`, `com.android.incallui`, `com.samsung.android.incallui`, `com.google.android.apps.messaging`, `com.samsung.android.messaging`) en `systemEssential` para que nunca puedan ser ocultados ni desinstalados accidentalmente.
+     - Ampliación de `KNOWN_BROWSERS` (`org.torproject.torbrowser`, `com.kiwibrowser.browser`, `com.Via.Via`, `com.puffin.cloudbrowser`, `com.alohamobile.browser`, `com.cromite.cromite`, `org.lineageos.jelly`) y `PopularNonKosherApps.kt` (navegadores alternativos, clientes alternativos de YouTube/Telegram/Reddit y tiendas de APKs de terceros).
+     - En `getUserApps()`, las apps ocultas (`isHidden`) que no devuelven actividad en `queryIntentActivities` pero están en `prefs.all` con `hide_<pkg>=true` siguen listándose en la UI y en el panel para que el administrador siempre pueda des-ocultarlas.
+     - Eliminado el log ruidoso en `hideApp()` cuando `setApplicationHidden` devuelve `false` por no haber cambio (punto `e` de B.89).
+   - **`GracePeriodManager.kt`:** reloj monotónico anclado por `BOOT_COUNT` (`elapsedRealtime` + `Settings.Global.BOOT_COUNT`) además del reloj de pared, impidiendo extender el período de gracia atrasando la fecha del sistema, y `checkAndCloseIfDue()` protegido con `synchronized(this)` para evitar doble cierre concurrente.
+   - **`AccessibilityEnforcer.kt`:** `notifyServiceConnected()` restaura automáticamente los navegadores si habían sido suspendidos por emergencia (`browsers_suspended_by_watchdog`), eliminando el estado inconsistente tras una reconexión automática del servicio.
+
+2. **Capa 2 — Red, VPN DNS Split-Tunnel, BootGate, Parsers y Lista Blanca:**
+   - **`KosherVpnService.kt`:**
+     - **Protección contra carreras al reiniciar el túnel (`tun0`):** `restartRunnable` guardado y cancelado explícitamente en `stopVpn()` y `onDestroy()`; generación `tunnelGeneration` (`AtomicInteger`) para que el cierre de un `runFilterLoop` viejo en su `finally` jamás pise ni ponga en `null` un `vpnInterface` nuevo recién creado.
+     - **Salud del túnel en redes IPv6/464XLAT (`CLAT`):** `findTunInterfaceIndex()` ignora interfaces `v4-wlan0`/`clat4` al buscar el índice de `tun0`.
+     - **Android 14+ (`UPSIDE_DOWN_CAKE`):** `startForeground()` pasa `ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE` en API 34+.
+     - **Executor acotado (`ThreadPoolExecutor` con cola de 256 y `DiscardOldestPolicy`):** evita acumulación ilimitada de hilos o memoria ante tormentas de consultas DNS sin internet.
+   - **`NetworkForwarder.kt`:**
+     - Filtra direcciones IPv6 link-local (`fe80:...`) de `LinkProperties.dnsServers` que fallan al enviar desde un `DatagramSocket` sin `scope_id`.
+     - Valida que el TXID DNS de la respuesta upstream (en los 2 primeros bytes) coincida con el TXID de la consulta antes de devolverla al túnel.
+   - **`DnsPacketParser.kt` & `IpPacketParser.kt`:**
+     - `buildBlockedResponse()` calcula dinámicamente el fin de la sección Question y construye un header limpio de 12 bytes + Question única (`QDCOUNT=1`, `ANCOUNT=0`, `NSCOUNT=0`, `ARCOUNT=0`) sin arrastrar registros EDNS0 (`ARCOUNT`) corruptos, respetando el límite de 512 bytes de UDP DNS.
+     - `IpPacketParser.buildUdpIpv4Response()` retorna `ByteArray(0)` si el datagrama supera `65535` bytes (y `KosherVpnService` verifica `responsePacket.isNotEmpty()` antes de escribir en `tun0`).
+   - **`BootGate.kt`:** si la VPN está desactivada por el administrador (`!isVpnEnabled()`), `engageIfNeeded()` libera cualquier proxy residual `127.0.0.1:9999` en lugar de activarlo.
+   - **`WhitelistCatalog.kt`, `WebViewPolicy.kt`, `WhitelistManager.kt` y `AdBlocker.kt`:**
+     - Sincronizado `com.mercadopago.wallet` entre `WhitelistCatalog.kt`, `app.js` y `catalog.js` (agregado `mercadopago.com` en permitidos y `mobile.mercadolibre.com.*` en bloqueados).
+     - `WebViewPolicy.resolvePackage()`: cuando el evento de accesibilidad viene de `com.google.android.webview` o `com.android.webview`, resuelve el paquete anfitrión desde `recentAppPackages` para que las reglas por app funcionen también cuando el WebView reporta su propio paquete.
+     - `WhitelistManager.recordBlockedAttempt()`: normaliza el dominio y saltea dominios vacíos o sin punto (queries locales/Chromecast).
+     - `AdBlocker.isBlocked()`: normaliza con `lowercase().trimEnd('.')` antes de buscar en el set.
+
+3. **Capa 3 — Accesibilidad, Anti-Evasión, Mercado Pago, Portal Cautivo, Selector de Fotos e IA:**
+   - **`LockSuiteAccessibilityService.kt`:**
+     - **Cero sobre-bloqueo en Ajustes de Wi-Fi/Red (`isSystemSettingsPackage`):** las pantallas legítimas de Wi-Fi, Bluetooth, Redes Móviles, Sonido y Pantalla ya no son rebotadas en Xiaomi/Samsung cuando el subtexto de una fila de Ajustes menciona "Restablecer Wi-Fi" o cuando el administrador bloqueó Opciones de Desarrollador.
+     - **Bloqueo de cambio de idioma por app (Android 13+):** detecta `AppLocalePickerActivity` / `LocalePicker` cuando `isLocaleChangeBlocked()` está activo.
+     - **Protección de "Permisos restringidos" (Android 13+) y "Administrar accesos especiales":** bloquea la desactivación de permisos especiales (Superposición, Uso, Notificaciones) sobre LockSuite desde Ajustes.
+     - **Cero I/O síncrono en el camino caliente (`onAccessibilityEvent`):** las escrituras de telemetría de `photoPickerSeenClasses` y `googleAccountWebSeenClasses` a `PrefsHelper` usan debounce en memoria y se despachan en `serviceScope.launch(Dispatchers.IO)`.
+   - **`BlockOverlayManager.kt`:** `updateProgress()` despacha siempre al `mainHandler` cuando se invoca desde hilos de `PackageInstaller.SessionCallback` o `SelfUpdater`; `show()` y `dismiss()` limpian el estado si la ventana murió (`BadTokenException` / `DeadObjectException`).
+   - **`AIFaceDetector.kt` & `AIPersonDetector.kt`:** `Tasks.await(task, 1500, TimeUnit.MILLISECONDS)` con timeout para que ML Kit nunca pueda bloquear indefinidamente el hilo de inferencia de `AIContentGate`.
+   - **`EmbeddedBrowserDetector.kt` & `GoogleAccountWebPolicy.kt`:** normalización `lowercase(Locale.ROOT)` inmune a locale turco/hebreo y soporte para `CustomTabsIntent` / `AuthTab` / `adservices` en Android 14/15/16.
+
+4. **Capa 4 — Ciclo de Vida, Direct Boot, Watchdogs, Receivers, Actualizaciones y Widgets:**
+   - **Direct Boot (Android 11–16):** `BootReceiver.kt` y `WatchdogWorker.kt` comprueban `LockSuiteApplication.isStorageUnlocked(context)` antes de tocar `SharedPreferences` cifradas por credencial (CE), evitando `IllegalStateException` antes de `ACTION_USER_UNLOCKED`.
+   - **`WatchdogForegroundService.kt` & `WatermarkService.kt`:**
+     - En Android 12–14+, si `locksuite_purged == true`, llaman a `startForeground()` antes de `stopSelf()` para evitar `ForegroundServiceDidNotStartInTimeException`.
+     - Pasan `ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE` en API 34+.
+     - Cuando `AccessibilityEnforcer.check()` da `Verdict.OK` y `browsers_suspended_by_watchdog` estaba activo, el Watchdog restaura automáticamente los navegadores.
+   - **`PackageReceiver.kt`, `PackageInstallStatusReceiver.kt`, `SelfUpdater.kt`, `ApkInstaller.kt`, `ApkChecksum.kt`, `UpdateFlowManager.kt`:**
+     - Ventana de instalación de Tienda por paquete (`markStoreInstall(context, pkg)` / `isStoreInstalling(context, pkg)`): impide que un APK no autorizado se instale aprovechando la ventana de instalación de otra app de la Tienda.
+     - `PackageReceiver` nunca desinstala apps del sistema (`FLAG_SYSTEM` / `FLAG_updated_system_app`), el paquete WebView activo del sistema, ni paquetes recién actualizados por `UpdateFlowManager.wasRecentlyUpdated()`.
+     - Si una app en `PopularNonKosherApps` con `hide_<pkg>=true` recibe actualización, se re-oculta al instante.
+     - Cierre de **B.86**: `UpdateFlowManager.finish()` y `healStaleInstall()` ejecutan `restorePreviousUninstallBlock()` de forma síncrona.
+     - `SelfUpdater.kt` y `ApkInstaller.kt`: abandonan la sesión `PackageInstaller.Session` en caso de error para no agotar el límite de sesiones del sistema y borran el APK temporal en `finally`.
+     - `ApkChecksum.blockSelfUpdate()`: rechaza archivos descargados de 0 bytes antes de abrir la sesión de instalación.
+   - **`ApkSignatureVerifier.kt`:** usa `GET_SIGNING_CERTIFICATES` en API 28+ y recorre `signingCertificateHistory` para soportar rotación de claves v3.
+   - **`DeviceAdminReceiver.kt` & Widgets:** `goAsync()` en `onProfileProvisioningComplete()` para evitar ANR durante el aprovisionamiento QR/ADB; `requestCode` distintos (`101`, `102`, `103`) en los `PendingIntent` de los widgets.
+
+5. **Capa 5 — UI Nativa, Launchers, PIN/Sesión, Emergencia y `:admin-app`:**
+   - **`PrefsHelper.kt`, `PinManager.kt`, `SessionManager.kt`:**
+     - Archivo de respaldo dedicado (`mdm_encrypted_fallback_prefs`) para no mezclar claves con `mdm_prefs`.
+     - Espejo booleano `pin_configured_mirror` en `mdm_prefs`: si el Android Keystore falla transitoriamente tras un reinicio, `PinManager.isPinConfigured()` sabe que ya existe un PIN y nunca redirige a `SetupPinActivity` permitiendo sobrescribirlo.
+     - El rate-limiting de `PinManager` persiste `BOOT_COUNT` y `elapsedRealtime`: reiniciar el teléfono ya no resetea el tiempo de espera tras intentos fallidos de PIN.
+     - `SessionManager` usa `SystemClock.elapsedRealtime()` (inmune a cambios de reloj del sistema).
+   - **`DashboardActivity.kt`, `KosherLauncherActivity.kt`, `KosherSettingsActivity.kt`, `LoginActivity.kt`, `SetupPinActivity.kt`, `EmergencyActivity.kt`, `BlockAccessibilityActivity.kt`:**
+     - `DashboardActivity.isLaunchingInternalFlow = true` antes de abrir el selector de documentos (importar/exportar `.locksuite`), Ajustes de Accesibilidad o el diálogo de permiso VPN, evitando que `onStop()` cierre la sesión del administrador en el acto.
+     - `MasterProfilesCard` e importación/exportación de presets corren en `Dispatchers.IO` para no congelar el hilo principal de Compose.
+     - `KosherSettingsActivity` oculta y bloquea Bluetooth (`DISALLOW_BLUETOOTH`), Fecha y Hora (`DISALLOW_CONFIG_DATE_TIME`) e Idioma (`isLocaleChangeBlocked()`) cuando están restringidos por el administrador.
+     - `BlockAccessibilityActivity` usa `repeatOnLifecycle(STARTED)` (ahorro de batería en segundo plano), bloquea recents/multi-ventana (`excludeFromRecents`, `resizeableActivity="false"`, `lockTaskMode="if_whitelisted"`) y usa `AccessibilityEnforcer.isServiceRunning()`.
+     - `EmergencyActivity.executeFullPurge()` limpia antes el launcher preferido, LockTask, VPN Always-On y el estado de `AccessibilityEnforcer` antes de revocar el Device Owner.
+   - **`:admin-app` (`MainActivity.kt`):** corregido el typo `"/ recover"` → `"/signin/recovery"` y `"/recover"` en el filtro de `accounts.google.com`.
+
+6. **Capa 6 — Canal Remoto FCM, Buzón, Sincronización Firebase, Cloud Functions y Panel Web:**
+   - **`CommandProcessor.kt` & `CommandMailbox.kt`:**
+     - Cierre de **B.40 punto 3**: `verifyFcmSignature()` se evalúa **antes** que `timestampOutOfWindow()`, impidiendo que un payload sin firma válida modifique `KEY_LAST_CMD_TIMESTAMP`, y no se envía ACK a Firebase ante `BAD_SIGNATURE`.
+     - `CLEAR_WHITELIST_AUDIT` sincroniza `whitelistAudit` inmediatamente con Firebase; `CHANGE_PIN` actualiza `pin_configured_mirror`.
+     - `CommandMailbox.drainNow()` comprueba `dpm.isDeviceOwnerApp` antes de drenar comandos.
+   - **`FirebaseDeviceSync.kt`:** `lastExitDetail` se escribe siempre (incluso vacío) para no dejar detalles viejos en el panel; `pullWhitelistConfig()` sincroniza el estado efectivo con el panel tras aplicar la lista blanca.
+   - **`admin-backend/functions/index.js`:**
+     - `DOMAIN_RULE_COMMANDS` acepta guiones `-` en dominios (`^[a-z0-9.*-]+$`).
+     - Si un equipo aún no tiene `fcmToken` pero es un comando encolable, `sendCommandV8` lo guarda en `commandMailbox` en vez de abortar con error 412.
+     - `checkAdminByUid` soporta tanto `val === true` como `{ enabled: true }`.
+     - `UNSUSPEND_ALL_APPS` limpia del buzón los `SUSPEND_APP|*` pendientes.
+   - **`admin-backend/public/celular.js` & `app.js`:**
+     - `celular.js` muestra el detalle de `lastExitDetail` (B.90), incluye el nivel `"trabajo"` en `NIVELES`, usa los comandos reales `START_GRACE_PERIOD|<ms>` y `END_GRACE_PERIOD_NOW`, maneja presets en ambos formatos (string JSON u objeto), usa `APPROVE_APP_REQUEST`/`REJECT_APP_REQUEST` con firma de contenido para no destruir el input de nota en cada latido, y arregla `#c-relink`.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**28/9 — Antigravity (PC local con terminal real): aplicación del commit de batería (B.89), chequeos, despliegue de 0.6.57 y confirmación en equipo real.**
+**19/10 — Antigravity: Auditoría integral de producción con equipo de 6 agentes (Capas 1–6), aplicación de todos los parches, verificación de pruebas/herramientas y despliegue de 0.6.60 (código 123).**
 
-- **Commit B.89 aplicado:** se tomó el parche de Claude (`Claude outputs/2026-09-27_bateria.patch`), aplicándose limpiamente con `git am` (`6183392`).
-- **Consistencia y pruebas:** los siete chequeos de `tools/` dieron verde; 45/45 pruebas unitarias pasaron en Gradle; compilación release verificada con R8.
-- **Medición de línea base:** con 0.6.56 instalada en el celular, se capturaron las restricciones de referencia (`scratch/bat_user_0656.txt` y `scratch/bat_dp_0656.txt`).
-- **Despliegue de 0.6.57 (código 120):** `deploy_all.ps1 -VersionName "0.6.57"` compiló el APK de producción, actualizó `version.json`, desplegó Hosting/Database/Functions en Firebase y subió a GitHub (`bcd5f0e`).
-- **Actualización OTA y pruebas en el equipo:**
-  - El celular actualizó a 0.6.57 silenciosamente vía OTA (`versionCode=120`, `versionName=0.6.57`).
-  - **Prueba 1:** `dumpsys user` comparado contra 0.6.56: exactamente las mismas 10 restricciones efectivas (`no_install_apps`, `no_factory_reset`, `no_config_vpn`, `no_safe_boot`, etc.); DPM intacto.
-  - **Prueba 2:** Reinicio del dispositivo completado. Restricciones 100% idénticas y el logcat de `PolicyManager` confirmó que no hubo escrituras redundantes.
-  - **Prueba 4:** Marcador probado con `*#*#1234#*#*`, abriendo correctamente la pantalla de administración de LockSuite con el nuevo escaneo de un solo recorrido.
-  - **Prueba 6:** VPN permanente activa (`always_on_vpn_app=com.ejemplo.locksuite`), túnel DNS resolviendo con normalidad y bloqueando anuncios.
-  - Se ejecutó `adb shell dumpsys batterystats --reset` para dejar listo el contador de batería si se desea medir en reposo nocturno.
-- **Estado del repo:** `main` al día con `origin/main` en `bcd5f0e` (0.6.57 desplegado).
+- **Plan y auditoría por agentes:** se elaboró `PLAN_AUDITORIA_PRODUCCION_AGENTES.md` y se ejecutaron 6 subagentes auditores especializados cubriendo los ~75 archivos de `:app`, `:admin-app`, `admin-backend` y `tools/`.
+- **Correcciones aplicadas (B.91):** se aplicaron las mejoras de estabilidad, anti-evasión, red/VPN, Direct Boot, ciclo de vida de actualizaciones (incluido B.86), seguridad del canal FCM (incluido B.40 punto 3), UI/Launchers/PIN y panel web (`celular.js`, `app.js`, `catalog.js`, `functions/index.js`).
+- **Verificación completa en verde:**
+  - Los 7 scripts de consistencia (`check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`, `aa_stubs/check_stubs.py`) en verde.
+  - Pruebas unitarias de `:app` (`:app:testDebugUnitTest`) y compilación de `:admin-app` en verde.
+  - Pruebas de reglas de Firebase Realtime Database (`tools/rules_tests`) en verde.
+- **Commit y despliegue:** cambios comiteados en `main` y desplegados a producción mediante `deploy_all.ps1`.
 
----
-
-## Estado del repo (git)
-
-### Estado de versiones
-
-- **0.6.57 / código 120 (`bcd5f0e`, 28/9):** desplegada en producción a Firebase y GitHub. Trae la optimización de CPU y batería (B.89, comparar antes de escribir).
-- **Confirmado en el celular del dueño el 28/9.**
-- Working tree limpio.
-
-### Archivos del commit del 27/9
-
-Con `core.autocrlf` prendido, a git le dan igual los finales de línea. En el disco, al 27/9, estaban en **CRLF** `PolicyManager.kt`, `LockSuiteAccessibilityService.kt` y este documento; en **LF** `AppController.kt`, `PrefsHelper.kt` y `DeviceCapability.kt`.
-
-```
-app/src/main/java/com/ejemplo/locksuite/mdm/PolicyReconciler.kt            (NUEVO: decisiones de "comparar antes de escribir")
-app/src/main/java/com/ejemplo/locksuite/mdm/DialerCodeScan.kt              (NUEVO: códigos del marcador en un recorrido)
-app/src/main/java/com/ejemplo/locksuite/mdm/PolicyManager.kt               (re-aplicación, launcher, Lock Task, VPN, FRP, DNS, navegadores/WebView)
-app/src/main/java/com/ejemplo/locksuite/mdm/AppController.kt               (FLAG_SUSPENDED visible para PolicyManager)
-app/src/main/java/com/ejemplo/locksuite/service/LockSuiteAccessibilityService.kt  (marcador, elegibilidad de la IA)
-app/src/main/java/com/ejemplo/locksuite/service/DeviceCapability.kt        (se calcula una vez)
-app/src/main/java/com/ejemplo/locksuite/util/PrefsHelper.kt                (una instancia cifrada por proceso)
-app/src/main/java/com/ejemplo/locksuite/ui/auth/LoginActivity.kt           (bucle del bloqueo solo con la pantalla visible)
-app/src/main/java/com/ejemplo/locksuite/ui/emergency/EmergencyActivity.kt  (ídem)
-app/src/test/java/com/ejemplo/locksuite/mdm/PolicyReconcilerTest.kt        (NUEVO, 19 pruebas)
-app/src/test/java/com/ejemplo/locksuite/mdm/DialerCodeScanTest.kt          (NUEVO, 8 pruebas)
-LOCKSUITE_CONTEXTO_PARA_IA.md
-INSTRUCCIONES_ANTIGRAVITY_2026-09-27_BATERIA.md                            (NUEVO)
-```
-
-### Antes de desplegar
-
-Los chequeos de siempre (el panel, las reglas y los stubs no cambian en 0.6.57, pero cuestan segundos):
-
-```
-python tools/check_whitelist_sync.py
-python tools/check_profile_sync.py
-python tools/check_command_sync.py
-python tools/check_panel_commands.py
-python tools/gen_catalog_js.py --check
-python tools/gen_policies_js.py --check
-python tools/aa_stubs/check_stubs.py
-.\gradlew :app:testDebugUnitTest                     # 45 pruebas, 0 fallas
-cd tools/rules_tests && npm install && npm test      # tiene que decir TODAS VERDES (44)
-```
-
-**0.6.57 es solo la app Android:** no cambian el panel, ni `functions`, ni las reglas, y no hay comandos FCM nuevos.

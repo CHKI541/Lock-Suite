@@ -29,17 +29,33 @@ class WatermarkService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun ensureForeground() {
+        createNotificationChannel()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    createNotification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, createNotification())
+            }
+        } catch (e: Exception) {
+            try { startForeground(NOTIFICATION_ID, createNotification()) } catch (_: Exception) {}
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         isRunning = true
 
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification())
-
+        ensureForeground()
         addWatermarkView()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        ensureForeground()
         if (watermarkView == null) {
             addWatermarkView()
         }

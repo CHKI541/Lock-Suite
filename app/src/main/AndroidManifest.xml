@@ -248,6 +248,9 @@
         <activity
             android:name=".ui.emergency.BlockAccessibilityActivity"
             android:exported="false"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:resizeableActivity="false"
             android:showWhenLocked="true"
             android:turnScreenOn="true" />
 
@@ -263,23 +266,14 @@
 
         <!-- PACKAGE CHANGES RECEIVER (Sincronización en tiempo real al instalar/desinstalar apps) -->
         <!--
-            El filtro para la acción interna "UPDATE_TIMEOUT" (usada solo para una
-            alarma propia de LockSuiteFirebaseService) se quitó a propósito: esa
-            alarma se programa con un Intent explícito (Intent(context,
-            PackageReceiver::class.java)), que Android entrega directo al
-            componente sin necesidad de intent-filter — lo mismo que ya hacía
-            "INSTALL_SAFETY_TIMEOUT" (SelfUpdater/PackageInstallStatusReceiver), que
-            nunca tuvo intent-filter propio y funciona igual. Con el filtro
-            declarado, como el receptor ya es exported=true (obligatorio para
-            recibir PACKAGE_ADDED/REMOVED/REPLACED del sistema), cualquier otra app
-            del dispositivo podía enviar un broadcast implícito con la acción
-            genérica "UPDATE_TIMEOUT" y forzar una re-aplicación anticipada de
-            restricciones de instalación — sin beneficio funcional real, ya que la
-            alarma legítima nunca dependió de ese filtro para entregarse.
+            exported="false": PACKAGE_ADDED/REMOVED/REPLACED son broadcasts protegidos enviados
+            por el system_server (que ignora exported="false"), mientras que poner exported="false"
+            impide que cualquier app de terceros envíe intents explícitos falsificados como
+            UPDATE_TIMEOUT o INSTALL_SAFETY_TIMEOUT a este receptor.
         -->
         <receiver
             android:name=".receiver.PackageReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.PACKAGE_ADDED" />
                 <action android:name="android.intent.action.PACKAGE_REMOVED" />

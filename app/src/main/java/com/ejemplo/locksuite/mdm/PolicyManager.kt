@@ -345,8 +345,19 @@ class PolicyManager(private val context: Context) {
     fun setDebuggingFeaturesBlocked(block: Boolean) =
         setRestriction(UserManager.DISALLOW_DEBUGGING_FEATURES, block)
 
-    fun setUserSwitchBlocked(block: Boolean) =
-        setRestriction(UserManager.DISALLOW_USER_SWITCH, block)
+    fun setUserSwitchBlocked(block: Boolean): Boolean {
+        val ok = setRestriction(UserManager.DISALLOW_USER_SWITCH, block)
+        if (!isLockSuiteSuspended()) {
+            try {
+                if (block) {
+                    dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_ADD_USER)
+                } else {
+                    dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_ADD_USER)
+                }
+            } catch (_: Exception) {}
+        }
+        return ok
+    }
 
     fun setModifyAccountsBlocked(block: Boolean) =
         setRestriction(UserManager.DISALLOW_MODIFY_ACCOUNTS, block)
@@ -526,7 +537,26 @@ class PolicyManager(private val context: Context) {
     private fun lockTaskAllowedPackages(): Array<String> {
         val allowed = PrefsHelper.getMdmPrefs(context)
             .getStringSet("allowed_packages", null) ?: emptySet()
-        return (allowed + context.packageName).toTypedArray()
+        val dialerPkgs = try {
+            val dialIntent = Intent(Intent.ACTION_DIAL)
+            context.packageManager.queryIntentActivities(
+                dialIntent,
+                PackageManager.MATCH_SYSTEM_ONLY
+            ).mapNotNull { it.activityInfo?.packageName }.toSet()
+        } catch (_: Exception) {
+            emptySet()
+        }
+        val extraEssential = setOf(
+            context.packageName,
+            "com.android.dialer",
+            "com.google.android.dialer",
+            "com.samsung.android.dialer",
+            "com.samsung.android.incallui",
+            "com.android.incallui",
+            "com.android.server.telecom",
+            "com.android.phone"
+        )
+        return (allowed + dialerPkgs + extraEssential).toTypedArray()
     }
 
     fun setKioskLockTaskEnabled(enable: Boolean): Boolean {
@@ -617,7 +647,9 @@ class PolicyManager(private val context: Context) {
     fun setKosherLauncherEnabled(enabled: Boolean, openImmediately: Boolean = true): Boolean {
         if (deferIfSuspended("kosher_launcher_enabled", enabled)) return true
         return try {
-            PrefsHelper.getMdmPrefs(context).edit().putBoolean("kosher_launcher_enabled", enabled).apply()
+            val prefs = PrefsHelper.getMdmPrefs(context)
+            val wasEnabled = prefs.getBoolean("kosher_launcher_enabled", false)
+            prefs.edit().putBoolean("kosher_launcher_enabled", enabled).apply()
             
             val filter = android.content.IntentFilter(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_HOME)
@@ -632,7 +664,7 @@ class PolicyManager(private val context: Context) {
                     dpm.addPersistentPreferredActivity(adminComponent, filter, component)
                     // En Android ≤ 13 esto pudo sumar un duplicado: la próxima re-aplicación
                     // consolida (borra todas las propias y deja una).
-                    PrefsHelper.getMdmPrefs(context).edit().remove(KEY_HOME_PPA_TS).apply()
+                    prefs.edit().remove(KEY_HOME_PPA_TS).apply()
                 } else {
                     // Re-aplicación (Watchdog de 15 min, arranque): solo si hace falta.
                     // En Android ≤ 13 cada llamada AGREGABA una entrada duplicada que el
@@ -645,11 +677,15 @@ class PolicyManager(private val context: Context) {
 
                 // Iniciar servicio de la marca de agua
                 if (android.provider.Settings.canDrawOverlays(context)) {
-                    val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(intent)
-                    } else {
-                        context.startService(intent)
+                    try {
+                        val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(intent)
+                        } else {
+                            context.startService(intent)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("PolicyManager", "No se pudo iniciar WatermarkService en segundo plano: ${e.message}")
                     }
                 }
 
@@ -663,17 +699,19 @@ class PolicyManager(private val context: Context) {
             } else {
                 // Limpiar launcher preferido
                 dpm.clearPackagePersistentPreferredActivities(adminComponent, context.packageName)
-                PrefsHelper.getMdmPrefs(context).edit()
+                prefs.edit()
                     .remove("kosher_wallpaper_applied")
                     .remove(KEY_HOME_PPA_TS)
                     .apply()
 
                 // Detener servicio de la marca de agua
-                val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
-                context.stopService(intent)
+                try {
+                    val intent = Intent(context, com.ejemplo.locksuite.service.WatermarkService::class.java)
+                    context.stopService(intent)
+                } catch (_: Exception) {}
 
-                // Solo redirigir al launcher nativo cuando viene de FCM/UI, no desde el Watchdog
-                if (openImmediately) {
+                // Solo redirigir al launcher nativo cuando viene de FCM/UI y antes estaba activo
+                if (openImmediately && wasEnabled) {
                     val homeIntent = Intent(Intent.ACTION_MAIN).apply {
                         addCategory(Intent.CATEGORY_HOME)
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -756,13 +794,15 @@ class PolicyManager(private val context: Context) {
     }
 
     private fun applyKosherMp3Wallpaper() {
+        var bitmap: android.graphics.Bitmap? = null
         try {
             val prefs = PrefsHelper.getMdmPrefs(context)
             if (prefs.getBoolean("kosher_wallpaper_applied", false)) return
 
             val wallpaperManager = android.app.WallpaperManager.getInstance(context)
-            val bitmap = android.graphics.Bitmap.createBitmap(1080, 1920, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
+            val bmp = android.graphics.Bitmap.createBitmap(1080, 1920, android.graphics.Bitmap.Config.ARGB_8888)
+            bitmap = bmp
+            val canvas = android.graphics.Canvas(bmp)
             val paint = android.graphics.Paint()
             
             // Degradado elegante: Gris azulado oscuro a Negro pizarra
@@ -776,13 +816,15 @@ class PolicyManager(private val context: Context) {
             canvas.drawRect(0f, 0f, 1080f, 1920f, paint)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                wallpaperManager.setBitmap(bitmap, null, true, android.app.WallpaperManager.FLAG_SYSTEM or android.app.WallpaperManager.FLAG_LOCK)
+                wallpaperManager.setBitmap(bmp, null, true, android.app.WallpaperManager.FLAG_SYSTEM or android.app.WallpaperManager.FLAG_LOCK)
             } else {
-                wallpaperManager.setBitmap(bitmap)
+                wallpaperManager.setBitmap(bmp)
             }
             prefs.edit().putBoolean("kosher_wallpaper_applied", true).apply()
         } catch (e: Exception) {
             android.util.Log.w("PolicyManager", "Error aplicando fondo de pantalla MP3", e)
+        } finally {
+            try { bitmap?.recycle() } catch (_: Exception) {}
         }
     }
 
@@ -1071,14 +1113,9 @@ class PolicyManager(private val context: Context) {
             } else {
                 // Si ninguna política activa requiere la VPN, apagarla por completo para ahorrar batería
                 if (!com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(context)) {
-                    val stopServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
-                        action = "STOP_VPN"
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(stopServiceIntent)
-                    } else {
-                        context.startService(stopServiceIntent)
-                    }
+                    try {
+                        context.stopService(Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java))
+                    } catch (_: Exception) {}
                 }
             }
             true
@@ -1119,14 +1156,9 @@ class PolicyManager(private val context: Context) {
             } else {
                 // Si ninguna política activa requiere la VPN, apagarla por completo para ahorrar batería
                 if (!com.ejemplo.locksuite.receiver.BootReceiver.shouldVpnBeRunning(context)) {
-                    val stopServiceIntent = Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java).apply {
-                        action = "STOP_VPN"
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(stopServiceIntent)
-                    } else {
-                        context.startService(stopServiceIntent)
-                    }
+                    try {
+                        context.stopService(Intent(context, com.ejemplo.locksuite.service.KosherVpnService::class.java))
+                    } catch (_: Exception) {}
                 }
             }
             true
@@ -1147,7 +1179,7 @@ class PolicyManager(private val context: Context) {
                 // Configura un proxy local inexistente (127.0.0.1:9999) para forzar el fallo de toda conexión de red (WiFi y Datos)
                 val proxyInfo = android.net.ProxyInfo.buildDirectProxy("127.0.0.1", 9999)
                 dpm.setRecommendedGlobalProxy(adminComponent, proxyInfo)
-            } else {
+            } else if (!com.ejemplo.locksuite.util.BootGate.isActive(context)) {
                 dpm.setRecommendedGlobalProxy(adminComponent, null)
             }
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("internet_blocked", block).apply()
@@ -2347,14 +2379,14 @@ class PolicyManager(private val context: Context) {
     }
 
     fun healRestrictedEssentialApps() {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (prefs.getBoolean("essential_apps_healed_v2", false)) return
         val essentialApps = listOf(
             "com.sec.android.app.myfiles",
             "com.sec.android.app.voicenote",
             "com.google.android.apps.dynamite",
-            "com.samsung.android.video",
-            "com.samsung.knox.securefolder"
+            "com.samsung.android.video"
         )
-        val prefs = PrefsHelper.getMdmPrefs(context)
         for (pkg in essentialApps) {
             // Des-ocultar si quedó oculta
             try {
@@ -2370,6 +2402,7 @@ class PolicyManager(private val context: Context) {
             } catch (e: Exception) { }
             prefs.edit().putBoolean("suspend_$pkg", false).apply()
         }
+        prefs.edit().putBoolean("essential_apps_healed_v2", true).apply()
     }
 
     /**
@@ -2433,7 +2466,7 @@ class PolicyManager(private val context: Context) {
         // accesibilidad caída. Guarda interna de una vez por proceso: barato.
         autoGrantDeclaredPermissions()
 
-        // Auto-curación de apps esenciales/libres (Archivos, Grabadora, Google Chat, Video, Carpeta Segura)
+        // Auto-curación de apps esenciales/libres (Archivos, Grabadora, Google Chat, Video)
         healRestrictedEssentialApps()
 
         val restrictions = listOf(
@@ -2502,7 +2535,7 @@ class PolicyManager(private val context: Context) {
         // Hasta hoy esta función ORDENABA todo de nuevo en cada vuelta (cada 15 min, en cada
         // arranque y en cada arranque del proceso), estuviera puesto o no. Y en el sistema
         // ninguna de esas órdenes es gratis aunque no cambie nada: en Android 13 cada
-        // `addUserRestriction` reescribe `device_policies.xml` con fsync y manda dos
+        // `addUserRestriction` reescribía `device_policies.xml` con fsync y manda dos
         // broadcasts a todas las apps que escuchan cambios de políticas; en Android 14+
         // reescribe `device_policy_state.xml`. Eran 20 a 40 por vuelta. Ahora se lee UNA vez
         // lo que el sistema tiene puesto y se escribe solo lo que falta. La corrección sigue
@@ -2531,6 +2564,18 @@ class PolicyManager(private val context: Context) {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
+            }
+        }
+        if (PolicyReconciler.hayQueAplicar(
+                isRestrictionEnabled(UserManager.DISALLOW_USER_SWITCH),
+                reales.puestaPorNosotros(UserManager.DISALLOW_ADD_USER),
+                reales.efectiva(UserManager.DISALLOW_ADD_USER)
+            )
+        ) {
+            try {
+                dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_ADD_USER)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
 
@@ -2617,7 +2662,11 @@ class PolicyManager(private val context: Context) {
 
         // Aplicar proxy de bloqueo de internet si está activado
         if (isInternetBlocked()) {
-            setInternetBlocked(true)
+            if (!com.ejemplo.locksuite.util.BootGate.isGateProxyPresent(context)) {
+                setInternetBlocked(true)
+            }
+        } else {
+            com.ejemplo.locksuite.util.BootGate.healStuckProxy(context, "reapplyAllRestrictions")
         }
 
         // Suspender Google Play Store si el bloqueo de instalación está activado o si fue suspendida individualmente
@@ -2983,6 +3032,7 @@ class PolicyManager(private val context: Context) {
             UserManager.DISALLOW_UNINSTALL_APPS,
             UserManager.DISALLOW_DEBUGGING_FEATURES,
             UserManager.DISALLOW_USER_SWITCH,
+            UserManager.DISALLOW_ADD_USER,
             UserManager.DISALLOW_MODIFY_ACCOUNTS,
             UserManager.DISALLOW_SAFE_BOOT,
             UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
@@ -3031,7 +3081,8 @@ class PolicyManager(private val context: Context) {
         safely { dpm.setStatusBarDisabled(adminComponent, false) }
         safely { dpm.setKeyguardDisabled(adminComponent, false) }
 
-        // Proxy global de "bloquear todo el internet"
+        // Proxy global de "bloquear todo el internet" y BootGate
+        safely { com.ejemplo.locksuite.util.BootGate.release(context, "LockSuite suspendido") }
         safely { dpm.setRecommendedGlobalProxy(adminComponent, null) }
 
         // Always-on VPN designada por el MDM
@@ -3110,6 +3161,7 @@ class PolicyManager(private val context: Context) {
             UserManager.DISALLOW_UNINSTALL_APPS,
             UserManager.DISALLOW_DEBUGGING_FEATURES,
             UserManager.DISALLOW_USER_SWITCH,
+            UserManager.DISALLOW_ADD_USER,
             UserManager.DISALLOW_MODIFY_ACCOUNTS,
             UserManager.DISALLOW_SAFE_BOOT,
             UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
@@ -3174,10 +3226,13 @@ class PolicyManager(private val context: Context) {
         setKeyguardDisabled(false)
         setStatusBarDisabled(false)
         setScreenCaptureBlocked(false)
-        setKosherLauncherEnabled(false)
+        setKosherLauncherEnabled(false, openImmediately = false)
 
 
-        // Limpiar proxy global
+        // Limpiar proxy global y BootGate
+        try {
+            com.ejemplo.locksuite.util.BootGate.cancelSafetyAlarm(context)
+        } catch (e: Exception) { }
         setInternetBlocked(false)
 
         clearFrpPolicy()
@@ -3314,6 +3369,9 @@ class PolicyManager(private val context: Context) {
             .toSet()
     }
 
+    fun getBrowserPackagesForReconcile(): Set<String> =
+        (getInstalledBrowserPackages() + KNOWN_BROWSER_PACKAGES).toSet()
+
     fun suspendAllKnownBrowsers(suspend: Boolean) {
         val pm = context.packageManager
         val dynamicBrowsers = getInstalledBrowserPackages()
@@ -3413,14 +3471,16 @@ class PolicyManager(private val context: Context) {
 
             if (block) {
                 for (app in nonKosherApps) {
-                    // Garantizar que no quede suspendida
+                    // Garantizar que no quede suspendida antes de intentar ocultarla
                     try {
                         dpm.setPackagesSuspended(adminComponent, arrayOf(app.packageName), false)
                     } catch (e: Exception) { }
                     prefs.edit().putBoolean("suspend_${app.packageName}", false).apply()
 
-                    // Ocultar en el momento
-                    appController.hideApp(app.packageName, true)
+                    // Ocultar en el momento; si el OEM rechaza ocultar el paquete del sistema, suspenderlo
+                    if (!appController.hideApp(app.packageName, true)) {
+                        appController.suspendApp(app.packageName, true)
+                    }
                 }
             } else {
                 for (app in nonKosherApps) {

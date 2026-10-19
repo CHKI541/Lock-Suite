@@ -13,13 +13,13 @@ import java.nio.ByteBuffer
 object NetworkForwarder {
 
     private const val UPSTREAM_DNS_PORT = 53
-    private const val TIMEOUT_MS = 3500
+    private const val TIMEOUT_MS = 2000
     /**
      * Paciencia de los reintentos. Más corta que la del primer intento a propósito: si el
      * resolutor de la red no contestó, lo que importa es darle una respuesta a la app
      * antes de que ELLA se dé por vencida, no agotar los 3,5 s con cada alternativa.
      */
-    private const val RETRY_TIMEOUT_MS = 2000
+    private const val RETRY_TIMEOUT_MS = 1500
 
     private data class UpstreamResult(
         val address: InetAddress,
@@ -79,6 +79,7 @@ object NetworkForwarder {
 
     /** Red de seguridad por si algo cambia sin avisar por el callback. */
     private const val UPSTREAM_TTL_MS = 30_000L
+    private const val UPSTREAM_UNBOUND_TTL_MS = 1_500L
 
     @Volatile private var cachedUpstream: InetAddress? = null
     @Volatile private var cachedUpstreamNetwork: Network? = null
@@ -94,13 +95,15 @@ object NetworkForwarder {
     private fun isUsableResolver(dns: InetAddress): Boolean =
         !dns.isLoopbackAddress &&
         !dns.isAnyLocalAddress &&
+        !dns.isLinkLocalAddress &&
         (dns.hostAddress ?: "") !in TUNNEL_ADDRESSES
 
     private fun getUpstreamDnsAddress(vpnService: VpnService): UpstreamResult {
         val now = android.os.SystemClock.elapsedRealtime()
         val cached = cachedUpstream
         val cachedNet = cachedUpstreamNetwork
-        if (cached != null && now - cachedUpstreamAt < UPSTREAM_TTL_MS) {
+        val ttl = if (cachedNet != null) UPSTREAM_TTL_MS else UPSTREAM_UNBOUND_TTL_MS
+        if (cached != null && now - cachedUpstreamAt < ttl) {
             return UpstreamResult(cached, cachedNet)
         }
 
@@ -124,12 +127,11 @@ object NetworkForwarder {
                 // de preferencia, y recién se baja al siguiente si el anterior no dio
                 // nada:
                 //
-                //   1º la red ACTIVA, si no es la nuestra (esto es lo que se había
-                //      perdido en B.18: ahí se sacó activeNetwork entero porque podía
-                //      devolver el VPN, cuando alcanzaba con descartarlo si lo es);
-                //   2º cualquier red VALIDADA (o sea, que el sistema confirmó que sale
+                //   1º la red ACTIVA si está VALIDADA (y no es la nuestra);
+                //   2º cualquier red física VALIDADA (o sea, que el sistema confirmó que sale
                 //      a internet de verdad);
-                //   3º cualquier red con capacidad de internet — el comportamiento viejo,
+                //   3º la red ACTIVA aunque todavía no esté validada (ej. portal cautivo);
+                //   4º cualquier red con capacidad de internet — el comportamiento viejo,
                 //      que se conserva como último recurso para no empeorar ningún caso
                 //      que hoy funcione.
                 fun esUsable(net: Network, exigirValidada: Boolean): UpstreamResult? {
@@ -152,16 +154,20 @@ object NetworkForwarder {
                     return v6?.let { UpstreamResult(it, net) }   // redes IPv6 puras / DNS64
                 }
 
-                // 1º — la red activa.
+                // 1º — la red activa validada.
                 cm.activeNetwork?.let { activa ->
-                    esUsable(activa, exigirValidada = false)?.let { return it }
+                    esUsable(activa, exigirValidada = true)?.let { return it }
                 }
                 // 2º — cualquier red validada.
                 @Suppress("DEPRECATION")
                 for (network in cm.allNetworks) {
                     esUsable(network, exigirValidada = true)?.let { return it }
                 }
-                // 3º — comportamiento anterior, como último recurso.
+                // 3º — la red activa aunque aún no esté validada.
+                cm.activeNetwork?.let { activa ->
+                    esUsable(activa, exigirValidada = false)?.let { return it }
+                }
+                // 4º — comportamiento anterior, como último recurso.
                 @Suppress("DEPRECATION")
                 for (network in cm.allNetworks) {
                     esUsable(network, exigirValidada = false)?.let { return it }
@@ -290,6 +296,9 @@ object NetworkForwarder {
                     responseReceived = true
                     break
                 } catch (e: java.io.IOException) {
+                    if (intento == 0) {
+                        invalidateUpstreamCache()
+                    }
                     // Timeout, red inalcanzable, puerto cerrado: los tres se tratan igual
                     // y se pasa al siguiente resolutor. Se registra el motivo porque la
                     // diferencia entre "timeout" y "ENETUNREACH" es la que dice si el

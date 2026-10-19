@@ -110,7 +110,7 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
                             }
                             true
                         }
-                        Key.Enter -> {
+                        Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
                             if (!isConfirming) {
                                 if (pin1.length !in 4..16) {
                                     errorMessage = "El PIN debe tener entre 4 y 16 dígitos"
@@ -208,20 +208,22 @@ fun SetupPinScreen(onPinSet: (String) -> Unit) {
             }
         }
 
-        // Visualización del PIN en círculos discretos
+        // Visualización del PIN en círculos discretos (adaptativo para pantallas de 2.8")
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             val length = activePin.length
             val displayLength = if (length > 4) length else 4
+            val dotSize = if (displayLength > 8) 10.dp else 14.dp
+            val dotMargin = if (displayLength > 8) 2.dp else 4.dp
             for (i in 0 until displayLength) {
                 val filled = i < length
                 Box(
                     modifier = Modifier
-                        .size(16.dp)
-                        .padding(horizontal = 4.dp)
+                        .padding(horizontal = dotMargin)
+                        .size(dotSize)
                         .clip(CircleShape)
                         .background(if (filled) accentOrange else navyMedium)
                 )

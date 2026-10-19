@@ -205,11 +205,11 @@ object EmbeddedBrowserDetector {
      */
     private val CONTROLES_NAVEGACION = mapOf(
         "adelante" to listOf("forward", "adelante"),
-        "recargar" to listOf("reload", "refresh", "recargar", "actualizar"),
+        "recargar" to listOf("reload", "refresh", "recargar", "volver a cargar"),
         "abrir_afuera" to listOf("open_in_browser", "abrir en el navegador", "open in browser",
                                  "open_in_new", "abrir en chrome"),
         "detener" to listOf("stop_loading", "detener carga"),
-        "favorito" to listOf("bookmark", "favorito"),
+        "favorito" to listOf("bookmark", "marcador", "agregar a marcadores", "añadir a marcadores"),
         "compartir_enlace" to listOf("copy_link", "copiar enlace", "copy_url", "copiar dirección")
     )
 

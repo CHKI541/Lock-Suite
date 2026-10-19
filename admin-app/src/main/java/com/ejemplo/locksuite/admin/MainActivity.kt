@@ -168,6 +168,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Proteger el panel de administración contra capturas de pantalla y vista previa en Recientes
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+
         // El WebView de Android vive en la app "Android System WebView", que se puede
         // desactivar, estar actualizándose, o —en un equipo administrado por el propio
         // LockSuite— quedar suspendida. En cualquiera de esos casos inflar el layout
@@ -206,6 +209,30 @@ class MainActivity : AppCompatActivity() {
         val restored = savedInstanceState?.let { webView.restoreState(it) }
         if (restored == null) {
             loadPanel()
+        }
+    }
+
+    /**
+     * En un celular kosher, seleccionar texto dentro del WebView abre el menú contextual
+     * del sistema ("Copiar", "Compartir", "Búsqueda web", "Traducir"). "Búsqueda web" o
+     * "Compartir" lanza `ACTION_WEB_SEARCH` / `ACTION_SEND` hacia fuera del WebView.
+     * Conservamos únicamente Copiar / Cortar / Pegar / Seleccionar todo.
+     */
+    override fun onActionModeStarted(mode: android.view.ActionMode?) {
+        super.onActionModeStarted(mode)
+        val menu = mode?.menu ?: return
+        val allowedIds = setOf(
+            android.R.id.copy,
+            android.R.id.cut,
+            android.R.id.paste,
+            android.R.id.pasteAsPlainText,
+            android.R.id.selectAll
+        )
+        for (i in menu.size() - 1 downTo 0) {
+            val item = menu.getItem(i)
+            if (item.itemId !in allowedIds) {
+                menu.removeItem(item.itemId)
+            }
         }
     }
 
@@ -599,7 +626,16 @@ class MainActivity : AppCompatActivity() {
         if (scheme != "https") return false
 
         val host = uri.host?.lowercase() ?: return false
-        return host in NAV_ALLOWED_HOSTS
+        if (host !in NAV_ALLOWED_HOSTS) return false
+        if (host == "accounts.google.com") {
+            val path = uri.path?.lowercase() ?: ""
+            // En accounts.google.com permitimos el flujo OAuth/SignIn pero bloqueamos creación
+            // de cuentas, recuperación y gestión de cuenta general.
+            if (path.startsWith("/signup") || path.startsWith("/manageaccount") || path.startsWith("/signin/recovery") || path.startsWith("/recover")) {
+                return false
+            }
+        }
+        return true
     }
 
     /** ¿Puede la página bajar este subrecurso? */

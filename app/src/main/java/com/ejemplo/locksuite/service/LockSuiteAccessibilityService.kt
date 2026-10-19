@@ -356,6 +356,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val iabFinder: Boolean,
         /** El detector solo anota y no bloquea. ENCENDIDO de fábrica: ver B.60. */
         val iabSimulation: Boolean,
+        /** Bloquear cambio de idioma del sistema o por app (Android 13+). */
+        val localeChangeBlocked: Boolean,
         val takenAt: Long
     )
 
@@ -408,6 +410,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             // qué — este proyecto ya lo pagó en B.43, B.50 y B.15.
             iabFinder = p.getBoolean(EmbeddedBrowserDetector.KEY_ENABLED, false),
             iabSimulation = p.getBoolean(EmbeddedBrowserDetector.KEY_SIMULATION, true),
+            localeChangeBlocked = policyManager.isLocaleChangeBlocked(),
             takenAt = SystemClock.elapsedRealtime()
         )
         cachedFlags = fresh
@@ -797,6 +800,27 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             }
         }
 
+        // ── Rebote de cambio de idioma por aplicación (Android 13+ / API 33+) ──
+        if (f.localeChangeBlocked &&
+            eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            isSettingsPackage(packageName)
+        ) {
+            val cls = ev.className?.toString() ?: ""
+            if ((cls.contains("AppLocalePicker", ignoreCase = true) ||
+                 cls.contains("AppLocaleDetails", ignoreCase = true) ||
+                 cls.contains("LocalePicker", ignoreCase = true)) &&
+                !com.ejemplo.locksuite.security.SessionManager.isActive()
+            ) {
+                Log.w(TAG, "🚫 Selector de idioma detectado ($cls): rebotando al usuario.")
+                Layer3Audit.anotar(
+                    applicationContext, "idioma", packageName, cls,
+                    "selector de idioma del sistema o por aplicación bloqueado", true
+                )
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                return
+            }
+        }
+
         // ── Rebote del menú de Accesibilidad de Ajustes ──
         // Va ANTES de la anti-evasión genérica porque es más específico y más barato:
         // en el caso normal (95 % de las pantallas de Ajustes) se resuelve mirando el
@@ -917,7 +941,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // El arreglo está en `scanNode()`, gobernado por `captivePortalScan`.
         val portalCautivo = captiveOpenedAt != 0L &&
             flags().captivePortalCoverImages &&
-            CaptivePortalPolicy.isCaptivePortalWindow(activePkg, null)
+            (CaptivePortalPolicy.isCaptivePortalWindow(activePkg, null) || isSystemOrInputPackage(activePkg))
 
         val mode = when {
             mapsBlocking -> "both"
@@ -1193,6 +1217,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                pkg == "com.android.systemui" ||
                lower.contains("captiveportal") ||
                lower.contains("inputmethod") ||
+               lower.contains("honeyboard") ||
                lower.contains("latin") ||
                lower.contains("gboard") ||
                lower.contains("swiftkey") ||
@@ -1560,7 +1585,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // ──────────────────────────────────────────────
     private val dangerousSettingsActions = listOf(
         "desactivar", "turn off", "disable",
-        "forzar detención", "force stop", "deshabilitar",
+        "forzar detencion", "force stop", "deshabilitar",
         "quitar administrador", "quitar admin", "desinstalar", "uninstall",
         "הסר", "אלץ עצירה", "עצירה כפויה", "השבת", "ביטול", "הסרת התקנה",
         // La última palabra en yiddish tenía una "n" latina suelta al final
@@ -2010,7 +2035,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     private var contactPhotoBounceInProgress = false
     private var contactPhotoBounceBackoffUntil = 0L
-    private val contactPhotoBounceBackoffMs = 2_000L
+    private val contactPhotoBounceBackoffMs = 1_200L
 
     /**
      * ¿Alguna de las últimas ventanas fue una app de contactos?
@@ -2070,8 +2095,19 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         performGlobalAction(GLOBAL_ACTION_BACK)
 
         mainHandler.postDelayed({
+            try {
+                val root = rootInActiveWindow
+                if (root != null) {
+                    val activePkg = root.packageName?.toString() ?: ""
+                    val activeCls = root.className?.toString()
+                    root.recycle()
+                    if (PhotoPickerPolicy.shouldBounce(activePkg, activeCls, cameFromContacts())) {
+                        performGlobalAction(GLOBAL_ACTION_HOME)
+                    }
+                }
+            } catch (_: Exception) {}
             contactPhotoBounceInProgress = false
-        }, 900L)
+        }, 700L)
         return true
     }
 
@@ -2199,8 +2235,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 mainHandler.removeCallbacks(captiveTickRunnable)
                 mainHandler.postDelayed(captiveTickRunnable, CaptivePortalPolicy.TICK_MS)
             }
-        } else if (captiveOpenedAt != 0L) {
-            // Se fue a otra ventana: cerrar el ciclo y sumar el tiempo que estuvo abierta.
+        } else if (captiveOpenedAt != 0L && !isSystemOrInputPackage(packageName)) {
+            // Se fue a otra ventana real (no al teclado ni a SystemUI): cerrar el ciclo y sumar el tiempo que estuvo abierta.
             finishCaptivePortalSession()
         }
     }
@@ -2313,8 +2349,8 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (out.done || depth > MAX_TREE_DEPTH) return
         if (nodeBudget-- <= 0) return
 
-        val text = node.text?.toString()?.lowercase()
-        val desc = node.contentDescription?.toString()?.lowercase()
+        val text = node.text?.let { foldAccents(it) }
+        val desc = node.contentDescription?.let { foldAccents(it) }
 
         if (text != null || desc != null) {
             if (!out.inLockSuite) {
@@ -3475,12 +3511,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        instance = null
+        if (instance === this) instance = null
         val appCtx = applicationContext
         try {
             Thread({
                 try {
-                    Thread.sleep(300)
+                    Thread.sleep(1200)
                     com.ejemplo.locksuite.util.AccessibilityEnforcer.reconcileNow(appCtx)
                 } catch (e: Exception) {
                     Log.w(TAG, "Reconciliación al desvincular: ${e.message}")
@@ -3494,7 +3530,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        instance = null
+        if (instance === this) instance = null
         stopCaptiveWatch()
 
         // Aviso INSTANTÁNEO de que la accesibilidad se cayó. Es la señal más confiable

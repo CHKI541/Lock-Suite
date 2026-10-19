@@ -42,7 +42,7 @@ class StoreWidgetProvider : AppWidgetProvider() {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
 
-            val pendingIntent = PendingIntent.getActivity(context, 0, intent, flags)
+            val pendingIntent = PendingIntent.getActivity(context, 102, intent, flags)
             views.setOnClickPendingIntent(R.id.widget_store_root, pendingIntent)
 
             appWidgetManager.updateAppWidget(appWidgetId, views)

@@ -12,20 +12,25 @@ import com.google.mediapipe.tasks.vision.facedetector.FaceDetector
 
 class AIFaceDetector private constructor(private val detector: FaceDetector) {
 
+    @Synchronized
     fun detectFaceRegions(bitmap: Bitmap): List<DetectedRegion> {
         val argb = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap
-                    else bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                    else bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return emptyList()
         val mpImage = BitmapImageBuilder(argb).build()
-        val result = detector.detect(mpImage)
-        // Si hubo que crear una copia ARGB_8888 (el bitmap de entrada venía en otro
-        // formato), reciclarla ya terminada la detección: antes se perdía sin
-        // liberar su memoria nativa. Solo se recicla la copia propia — nunca el
-        // bitmap original del llamador, que puede seguir usándolo después.
-        if (argb !== bitmap) {
-            argb.recycle()
-        }
-        return result.detections().map {
-            DetectedRegion(it.boundingBox().toIntRect(), DetectionSource.FACE)
+        try {
+            val result = detector.detect(mpImage)
+            return result.detections().map {
+                DetectedRegion(it.boundingBox().toIntRect(), DetectionSource.FACE)
+            }
+        } finally {
+            try { mpImage.close() } catch (_: Exception) {}
+            // Si hubo que crear una copia ARGB_8888 (el bitmap de entrada venía en otro
+            // formato), reciclarla ya terminada la detección: antes se perdía sin
+            // liberar su memoria nativa. Solo se recicla la copia propia — nunca el
+            // bitmap original del llamador, que puede seguir usándolo después.
+            if (argb !== bitmap) {
+                argb.recycle()
+            }
         }
     }
 

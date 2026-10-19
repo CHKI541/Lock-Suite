@@ -278,9 +278,13 @@ object AccessibilityEnforcer {
         // suspendido, protección apagada, sin PIN) no corresponde suspender nada, y
         // dejar pasar ese caso habría suspendido el equipo justo cuando el
         // administrador acaba de liberarlo a propósito.
-        val porArranque = verdict == Verdict.VIOLATED &&
-            prefs.getBoolean(BootGate.KEY_ACTIVE_PUBLIC, false) &&
-            prefs.getBoolean(BootGate.KEY_WAIT_ACCESSIBILITY, false)
+        val bootGateActive = prefs.getBoolean(BootGate.KEY_ACTIVE_PUBLIC, false)
+        val porArranque = (verdict == Verdict.VIOLATED &&
+            bootGateActive &&
+            prefs.getBoolean(BootGate.KEY_WAIT_ACCESSIBILITY, false)) ||
+            (verdict != Verdict.NOT_APPLICABLE &&
+                bootGateActive &&
+                prefs.getBoolean(BootGate.KEY_SUSPEND_APPS, false))
 
         return porInterruptor || porArranque
     }

@@ -23,7 +23,30 @@ class PackageReceiver : BroadcastReceiver() {
          */
         const val KEY_STORE_INSTALL_PKG = "store_install_pkg"
         const val KEY_STORE_INSTALL_AT = "store_install_at"
+        private const val KEY_STORE_INSTALL_PREFIX = "store_install_ts_"
         private const val STORE_INSTALL_WINDOW_MS = 15 * 60 * 1000L
+
+        /** Registra un paquete que la Tienda o el instalador local está por instalar. */
+        fun markStoreInstall(context: Context, packageName: String) {
+            val now = System.currentTimeMillis()
+            PrefsHelper.getMdmPrefs(context).edit()
+                .putString(KEY_STORE_INSTALL_PKG, packageName)
+                .putLong(KEY_STORE_INSTALL_AT, now)
+                .putLong(KEY_STORE_INSTALL_PREFIX + packageName, now)
+                .commit()
+        }
+
+        fun isStoreInstalling(context: Context, packageName: String): Boolean {
+            val prefs = PrefsHelper.getMdmPrefs(context)
+            val now = System.currentTimeMillis()
+            val perPkgAt = prefs.getLong(KEY_STORE_INSTALL_PREFIX + packageName, 0L)
+            if (perPkgAt > 0L && Math.abs(now - perPkgAt) < STORE_INSTALL_WINDOW_MS) {
+                return true
+            }
+            val storePkg = prefs.getString(KEY_STORE_INSTALL_PKG, null)
+            val storeAt = prefs.getLong(KEY_STORE_INSTALL_AT, 0L)
+            return storePkg == packageName && Math.abs(now - storeAt) < STORE_INSTALL_WINDOW_MS
+        }
 
         /** Antirrebote: en algunos equipos el mismo evento llega dos veces seguidas. */
         @Volatile private var lastEventKey: String = ""
@@ -31,6 +54,7 @@ class PackageReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(context)) return
         val action = intent.action
         Log.i("PackageReceiver", "Acción de paquete recibida: $action")
 
@@ -53,8 +77,10 @@ class PackageReceiver : BroadcastReceiver() {
         if (action == "INSTALL_SAFETY_TIMEOUT") {
             Log.w("PackageReceiver", "⏰ Timeout de seguridad de instalación alcanzado. Restaurando restricciones MDM...")
             try {
-                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-                policyManager.restoreInstallRestrictions()
+                if (!UpdateFlowManager.isRunning(context)) {
+                    val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                    policyManager.restoreInstallRestrictions()
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -108,27 +134,31 @@ class PackageReceiver : BroadcastReceiver() {
             if (isInstallBlocked) {
                 val allowed = prefs.getStringSet("allowed_packages", null) ?: emptySet()
                 val appController = AppController(context)
-                // Evitar desinstalar nuestra propia app, las apps permitidas, o
-                // cualquier paquete crítico del sistema (systemUI, telefonía, GMS,
-                // teclado, etc). ANTES solo se excluían "allowed_packages" (pensado
-                // para apps de usuario de la tienda kosher) y la propia app: una
-                // actualización silenciosa de un componente del sistema — p.ej.
-                // Google Play Services actualizándose en segundo plano vía Play
-                // Store — también dispara ACTION_PACKAGE_ADDED, y si ese paquete no
-                // estaba en "allowed_packages" este receptor intentaba desinstalarlo
-                // automáticamente. Desinstalar GMS rompería FCM (el canal de control
-                // remoto) y gran parte del teléfono: exactamente lo que el requisito
-                // de "nunca debe trabarse ni perder el control remoto" prohíbe.
-                // updatingPkg también queda exento: si el paquete es justamente el
-                // que el administrador mandó actualizar, desinstalarlo acá sería
-                // deshacer la actualización que se acaba de pedir.
-                val storePkg = prefs.getString(KEY_STORE_INSTALL_PKG, null)
-                val storeAt = prefs.getLong(KEY_STORE_INSTALL_AT, 0L)
-                val storeInstalling = storePkg == packageName &&
-                    Math.abs(System.currentTimeMillis() - storeAt) < STORE_INSTALL_WINDOW_MS
-                val isAllowed = allowed.contains(packageName) || packageName == context.packageName ||
-                    packageName == updatingPkg || storeInstalling ||
-                    appController.isCritical(packageName) || appController.isPartialBlockOnly(packageName)
+                val isSystemApp = try {
+                    val ai = context.packageManager.getApplicationInfo(packageName, 0)
+                    (ai.flags and (android.content.pm.ApplicationInfo.FLAG_SYSTEM or android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
+                } catch (_: Exception) {
+                    false
+                }
+                val isWebViewOrTrichrome = packageName == "com.google.android.webview" ||
+                    packageName == "com.android.webview" ||
+                    packageName.startsWith("com.google.android.trichromelibrary")
+                val storeInstalling = isStoreInstalling(context, packageName)
+                val recentlyUpdated = UpdateFlowManager.wasRecentlyUpdated(context, packageName)
+                val wlDecision = try {
+                    com.ejemplo.locksuite.mdm.WhitelistManager(context).allDecisions()[packageName]
+                } catch (_: Exception) { null }
+
+                val isAllowed = allowed.contains(packageName) ||
+                    wlDecision == com.ejemplo.locksuite.mdm.WhitelistManager.STATE_ALLOW ||
+                    packageName == context.packageName ||
+                    packageName == updatingPkg ||
+                    recentlyUpdated ||
+                    storeInstalling ||
+                    isSystemApp ||
+                    isWebViewOrTrichrome ||
+                    appController.isCritical(packageName) ||
+                    appController.isPartialBlockOnly(packageName)
                 if (!isAllowed) {
                     Log.w("PackageReceiver", "🚫 Intento de instalación no autorizado: $packageName. Desinstalando...")
                     try {
@@ -179,10 +209,15 @@ class PackageReceiver : BroadcastReceiver() {
                         appController.suspendApp(packageName, true)
                     }
                     
-                    // 4. Si la app estaba suspendida individualmente por el administrador
+                    // 4. Si la app estaba suspendida individualmente por el administrador o es popular no kosher
+                    val isPopularBlocked = policyManager.isBlockPopularNonKosherEnabled() &&
+                        com.ejemplo.locksuite.mdm.PopularNonKosherApps.isPopularNonKosher(packageName)
                     val isIndividuallySuspended = prefs.getBoolean("suspend_$packageName", false)
-                    if (isIndividuallySuspended) {
+                    if (isIndividuallySuspended || isPopularBlocked) {
                         appController.suspendApp(packageName, true)
+                        if (policyManager.isHideSuspendedApps()) {
+                            appController.hideApp(packageName, true)
+                        }
                     }
 
                     // 5. Si la app estaba oculta explícitamente por el administrador

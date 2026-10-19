@@ -30,6 +30,9 @@ object PinManager {
         prefs.edit()
             .putString(Constants.KEY_PIN_HASH, hash)
             .putString(Constants.KEY_PIN_SALT, saltStr)
+            .commit()
+        PrefsHelper.getMdmPrefs(context).edit()
+            .putBoolean("pin_configured_mirror", true)
             .apply()
 
         // Sincronizar las credenciales del PIN con Firebase para el panel web remoto
@@ -50,7 +53,15 @@ object PinManager {
     }
 
     fun isPinConfigured(context: Context): Boolean {
-        return PrefsHelper.getEncryptedPrefs(context).contains(Constants.KEY_PIN_HASH)
+        val encHasPin = PrefsHelper.getEncryptedPrefs(context).contains(Constants.KEY_PIN_HASH)
+        val mdmPrefs = PrefsHelper.getMdmPrefs(context)
+        if (encHasPin) {
+            if (!mdmPrefs.getBoolean("pin_configured_mirror", false)) {
+                mdmPrefs.edit().putBoolean("pin_configured_mirror", true).apply()
+            }
+            return true
+        }
+        return mdmPrefs.getBoolean("pin_configured_mirror", false)
     }
 
     fun verifyPin(context: Context, inputPin: String): Boolean {
@@ -115,20 +126,33 @@ object PinManager {
         return constantTimeEquals(hashPin(input, salt), storedHash)
     }
 
+    private fun readBootCount(context: Context): Int {
+        return try {
+            android.provider.Settings.Global.getInt(
+                context.contentResolver,
+                android.provider.Settings.Global.BOOT_COUNT,
+                -1
+            )
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
     fun recordFailedAttempt(context: Context): LockoutStatus {
         val prefs = PrefsHelper.getEncryptedPrefs(context)
         val count = prefs.getInt(Constants.LOCKOUT_COUNT_KEY, 0) + 1
-        prefs.edit().putInt(Constants.LOCKOUT_COUNT_KEY, count).apply()
-        
+        val editor = prefs.edit().putInt(Constants.LOCKOUT_COUNT_KEY, count)
         return if (count >= Constants.MAX_ATTEMPTS) {
-            // Se guardan las DOS marcas de tiempo: la del reloj de pared y la
-            // monotónica. Ver getLockoutState() para el porqué.
-            prefs.edit()
+            // Se guardan las DOS marcas de tiempo (reloj de pared y monotónico) más
+            // el BOOT_COUNT para resistir tanto cambios de hora como reinicios.
+            editor
                 .putLong(Constants.LOCKOUT_TIME_KEY, System.currentTimeMillis())
                 .putLong(Constants.LOCKOUT_ELAPSED_KEY, android.os.SystemClock.elapsedRealtime())
-                .apply()
+                .putInt("lockout_boot_count", readBootCount(context))
+                .commit()
             LockoutStatus.LockedOut
         } else {
+            editor.commit()
             LockoutStatus.Warning(Constants.MAX_ATTEMPTS - count)
         }
     }
@@ -147,11 +171,10 @@ object PinManager {
      *  - SystemClock.elapsedRealtime(), que cuenta desde el último arranque y que el
      *    usuario no puede adelantar desde Ajustes.
      *
-     * Si el equipo se reinició (el contador monotónico arranca de cero y queda por
-     * debajo del valor guardado) no se puede medir por esa vía y se cae al reloj de
-     * pared, como antes. También se limita el tiempo restante al máximo de la
-     * duración configurada, para que atrasar el reloj tampoco pueda dejar a alguien
-     * bloqueado durante meses por accidente.
+     * Si el equipo se reinició (BOOT_COUNT cambió o el contador monotónico quedó por
+     * debajo del valor guardado), se reanuda el bloqueo monotónico desde el arranque
+     * actual si el reloj de pared parece haber sido adelantado o si sigue dentro de la
+     * ventana, cerrando el bypass por reinicio + cambio de hora.
      */
     fun getLockoutState(context: Context): LockoutState {
         val prefs = PrefsHelper.getEncryptedPrefs(context)
@@ -165,13 +188,22 @@ object PinManager {
             .coerceAtMost(duration)
 
         val lockMono = prefs.getLong(Constants.LOCKOUT_ELAPSED_KEY, -1L)
+        val lockBoot = prefs.getInt("lockout_boot_count", -1)
+        val currentBoot = readBootCount(context)
         val monoNow = android.os.SystemClock.elapsedRealtime()
-        val monoRemaining = if (lockMono < 0L || monoNow < lockMono) {
-            // Sin marca monotónica (bloqueo hecho por una versión anterior) o el
-            // equipo se reinició: esta vía no puede medir nada.
-            Long.MIN_VALUE
-        } else {
+        val sameBoot = (lockBoot == -1 || currentBoot == -1 || lockBoot == currentBoot) &&
+            lockMono >= 0L && monoNow >= lockMono
+        val monoRemaining = if (sameBoot) {
             ((lockMono + duration) - monoNow).coerceAtMost(duration)
+        } else {
+            // El equipo se reinició durante un bloqueo activo: re-anclamos el reloj
+            // monotónico al arranque actual para que un reinicio + adelanto de reloj
+            // no regale 5 intentos nuevos sin esperar los 5 minutos.
+            prefs.edit()
+                .putLong(Constants.LOCKOUT_ELAPSED_KEY, monoNow)
+                .putInt("lockout_boot_count", currentBoot)
+                .commit()
+            duration
         }
 
         val remaining = maxOf(wallRemaining, monoRemaining)
@@ -188,7 +220,8 @@ object PinManager {
             .remove(Constants.LOCKOUT_COUNT_KEY)
             .remove(Constants.LOCKOUT_TIME_KEY)
             .remove(Constants.LOCKOUT_ELAPSED_KEY)
-            .apply()
+            .remove("lockout_boot_count")
+            .commit()
     }
 
     /**

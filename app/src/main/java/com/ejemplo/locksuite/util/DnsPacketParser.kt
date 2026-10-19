@@ -15,10 +15,13 @@ object DnsPacketParser {
         val domain = StringBuilder()
         var pos = 12 // Saltar cabecera DNS de 12 bytes
         
+        var terminated = false
         try {
             while (pos < payload.size) {
                 val len = payload[pos].toInt() and 0xFF
                 if (len == 0) {
+                    pos++
+                    terminated = true
                     break // Fin del nombre de dominio (byte nulo)
                 }
                 
@@ -45,6 +48,7 @@ object DnsPacketParser {
                 domain.append(label)
                 pos += len
             }
+            if (!terminated || pos + 4 > payload.size) return null
             return if (domain.isEmpty()) null else domain.toString()
         } catch (e: Exception) {
             e.printStackTrace()

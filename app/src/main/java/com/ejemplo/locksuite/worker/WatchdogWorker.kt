@@ -12,6 +12,9 @@ import com.ejemplo.locksuite.util.PrefsHelper
 class WatchdogWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
 
     override fun doWork(): Result {
+        if (!com.ejemplo.locksuite.LockSuiteApplication.isStorageUnlocked(applicationContext)) {
+            return Result.retry()
+        }
         if (PrefsHelper.getMdmPrefs(applicationContext).getBoolean("locksuite_purged", false)) {
             return Result.success()
         }

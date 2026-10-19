@@ -47,7 +47,7 @@ class KosherVpnService : VpnService() {
          * Subir el MTU no afecta a ningún otro tráfico porque ningún otro tráfico pasa
          * por acá. Si `establish()` lo rechaza en algún equipo, se cae a 1500.
          */
-        private const val TUNNEL_MTU = 4000
+        private const val TUNNEL_MTU = 4200
         private const val TUNNEL_MTU_FALLBACK = 1500
 
         // ──────────────────────────────────────────────────────────────────────────
@@ -214,6 +214,9 @@ class KosherVpnService : VpnService() {
         /** Paquetes leídos del túnel desde que se estableció el actual. */
         val tunnelPacketsIn = java.util.concurrent.atomic.AtomicLong(0L)
 
+        /** Consultas DNS UDP/53 reales leídas del túnel desde que se estableció el actual. */
+        val tunnelDnsQueriesIn = java.util.concurrent.atomic.AtomicLong(0L)
+
         /** Respuestas DNS escritas de vuelta al túnel desde que se estableció el actual. */
         val tunnelResponsesOut = java.util.concurrent.atomic.AtomicLong(0L)
 
@@ -275,7 +278,7 @@ class KosherVpnService : VpnService() {
             if (!hasValidatedPhysicalNetwork(context)) return HEALTH_UNKNOWN
 
             if (tunnelPacketsIn.get() == 0L) return HEALTH_NO_CAPTURE
-            if (tunnelResponsesOut.get() == 0L) return HEALTH_NO_UPSTREAM
+            if (tunnelDnsQueriesIn.get() > 0L && tunnelResponsesOut.get() == 0L) return HEALTH_NO_UPSTREAM
             return HEALTH_OK
         }
 
@@ -309,7 +312,7 @@ class KosherVpnService : VpnService() {
 
         private fun windowedUpstreamBroken(): Boolean {
             val now = android.os.SystemClock.elapsedRealtime()
-            val inNow = tunnelPacketsIn.get()
+            val inNow = tunnelDnsQueriesIn.get()
             val outNow = tunnelResponsesOut.get()
             // Contadores que bajaron = túnel nuevo: la ventana arranca de cero.
             if (windowStartAtMs == 0L || inNow < windowPacketsAtStart || outNow < windowResponsesAtStart) {
@@ -486,6 +489,7 @@ class KosherVpnService : VpnService() {
             if (isCurrentlyRunning) {
                 try {
                     com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
+                    com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).reload()
                     android.util.Log.i("KosherVPN", "Reglas DNS recargadas en caliente (sin rehacer el tunel).")
                 } catch (e: Exception) {
                     android.util.Log.w("KosherVPN", "No se pudieron recargar reglas DNS: ${e.message}")
@@ -554,9 +558,10 @@ class KosherVpnService : VpnService() {
         try {
             startForeground(9002, buildNotification())
 
-            // Recargar reglas DNS desde SharedPrefs al (re)iniciar la VPN
+            // Recargar reglas DNS y lista blanca desde SharedPrefs al (re)iniciar la VPN
             try {
                 com.ejemplo.locksuite.LockSuiteApplication.domainRuleManager.loadRules()
+                com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).reload()
             } catch (e: Exception) {
                 android.util.Log.w("KosherVPN", "No se pudieron recargar reglas DNS: ${e.message}")
             }
@@ -737,7 +742,9 @@ class KosherVpnService : VpnService() {
             // este túnel está leyendo", no "desde que el servicio arrancó". Ver el bloque
             // SALUD DEL TÚNEL del companion.
             tunnelPacketsIn.set(0L)
+            tunnelDnsQueriesIn.set(0L)
             tunnelResponsesOut.set(0L)
+            windowStartAtMs = 0L
             tunnelReadyAtMs = android.os.SystemClock.elapsedRealtime()
 
             while (running) {
@@ -777,6 +784,7 @@ class KosherVpnService : VpnService() {
                     }
                     continue
                 }
+                tunnelDnsQueriesIn.incrementAndGet()
 
                 val executor = dnsExecutor
                 if (executor != null && !executor.isShutdown) {
@@ -828,10 +836,22 @@ class KosherVpnService : VpnService() {
                 } catch (e: Exception) {
                     android.util.Log.w("KosherVPN", "Error cerrando la interfaz VPN", e)
                 }
+                try {
+                    iface.close()
+                } catch (e: Exception) { }
             }
             if (shouldStopService) {
-                stopForeground(true)
-                stopSelf()
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (restartPendingUntilMs > now) {
+                    // Ya hay un reestablecimiento programado: no matar el servicio.
+                } else if (!policyManager.isLockSuiteSuspended()) {
+                    restartHandler.post {
+                        scheduleRestart(RESTART_SETTLE_MS, "cierre inesperado del bucle TUN")
+                    }
+                } else {
+                    stopForeground(true)
+                    stopSelf()
+                }
             }
         }
     }
@@ -847,6 +867,12 @@ class KosherVpnService : VpnService() {
             // bloqueada, que es instantáneo y no deja a nadie esperando un timeout.
             NetworkForwarder.sendBlockedDnsResponse(packet, output)
             return
+        }
+
+        if (!com.ejemplo.locksuite.mdm.WhitelistManager.isLoaded()) {
+            try {
+                com.ejemplo.locksuite.mdm.WhitelistManager(applicationContext).reload()
+            } catch (e: Exception) { }
         }
 
         // Intentar resolver el UID y paquete dueño del socket al principio para logging y reglas personalizadas.
@@ -905,24 +931,6 @@ class KosherVpnService : VpnService() {
         // ─────────────────────────────────────────────────────────────────────
         // MODO LISTA BLANCA (8/9/2026). Ver mdm/WhitelistManager.kt.
         // ─────────────────────────────────────────────────────────────────────
-        //
-        // Va acá, inmediatamente DESPUÉS de las reglas forzadas y ANTES de todo lo
-        // demás, y esa posición es la definición misma de las prioridades:
-        //
-        //  · Después de FORCE_*: el "forzar permitir/prohibir" de la sección DNS sigue
-        //    siendo la palabra final del administrador, incluso sobre la infraestructura.
-        //    Es la salida de emergencia y tiene que estar arriba de todo.
-        //  · Antes del resto: con la lista blanca encendida, un dominio que no está
-        //    listado no llega a discutirse con el adblock ni con la lista negra de
-        //    WebView — no está permitido y punto. Y de paso el camino caliente se acorta:
-        //    una resolución de Trie en vez de la cadena entera.
-        //
-        // El costo por consulta con el modo APAGADO es una resolución de Trie sobre un
-        // árbol chico (infraestructura + bloqueos fijos), sin locks, sin leer
-        // preferencias y sin construir objetos. Se paga igual porque es lo que arregla
-        // B.52: la lista negra global de WebView tiene `google.com` adentro y se aplica
-        // a TODO el equipo, así que `mtalk.google.com` (el canal de comandos del panel)
-        // caía bajo ese sufijo. La infraestructura ahora le gana.
         val whitelistDecision = com.ejemplo.locksuite.mdm.WhitelistManager.decide(queriedDomain)
         val whitelistOn = com.ejemplo.locksuite.mdm.WhitelistManager.isEnabledCached()
         val whitelistSimulating = com.ejemplo.locksuite.mdm.WhitelistManager.isSimulationCached()
@@ -931,12 +939,6 @@ class KosherVpnService : VpnService() {
             // Dominio de una app prohibida, o un bloqueo fijo (Tenor, YouTube por API).
             // Rige tenga o no encendido el modo: prohibir una app tiene que servir por
             // sí solo, sin obligar a activar el filtro estricto de todo el equipo.
-            // NO se anota en la auditoría a propósito. La auditoría contesta una sola
-            // pregunta —"¿qué dominio le faltó a una app que quiero permitir?"— y estos
-            // bloqueos son los DELIBERADOS: los dominios de una app prohibida y los
-            // bloqueos fijos (Tenor, YouTube). Mezclarlos ahí haría que el panel ofrezca
-            // "agregar a la lista" justo sobre lo que se decidió cerrar, que es la forma
-            // más fácil de destapar un bloqueo sin querer.
             android.util.Log.i("KosherVPN", "🚫 BLOQUEADO LISTA BLANCA dominio=$queriedDomain")
             com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
             NetworkForwarder.sendBlockedDnsResponse(packet, output)
@@ -952,32 +954,6 @@ class KosherVpnService : VpnService() {
             return
         }
 
-        if (whitelistOn) {
-            if (whitelistDecision == com.ejemplo.locksuite.dns.RuleType.ALLOW) {
-                // Dominio de una app permitida: pasa sin discutir con el resto de la
-                // cadena. Si el administrador lo permitió, permitido está.
-                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.ALLOWED)
-                NetworkForwarder.forwardDnsQuery(packet, output, this)
-                return
-            }
-            // No figura en ninguna lista. Acá es donde el modo hace lo suyo.
-            com.ejemplo.locksuite.mdm.WhitelistManager.recordAudit(queriedDomain)
-            if (whitelistSimulating) {
-                // SIMULACIÓN: no se bloquea nada, solo se anota para el panel. Es lo que
-                // permite completar las listas mirando el equipo real en vez de adivinar.
-                // Se sigue con la cadena normal, así que el equipo se comporta
-                // exactamente como antes de encender el modo.
-                if (VERBOSE) {
-                    android.util.Log.d("KosherVPN", "LISTA BLANCA (simulación) habría bloqueado: $queriedDomain")
-                }
-            } else {
-                android.util.Log.i("KosherVPN", "🚫 BLOQUEADO LISTA BLANCA (no listado) dominio=$queriedDomain de la app=$logPackage")
-                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
-                NetworkForwarder.sendBlockedDnsResponse(packet, output)
-                return
-            }
-        }
-
         // 1. Bloqueo global de anuncios (AdBlocker) si la opción está activa por el administrador
         val isAdBlockerActive = mdmPrefs.getBoolean("global_ad_blocking", false)
         if (isAdBlockerActive && AdBlocker.isBlocked(queriedDomain)) {
@@ -990,13 +966,6 @@ class KosherVpnService : VpnService() {
         // 2. Bloqueo global de GIFs/Tenor si la opción está activa por el administrador
         val isGifsBlocked = mdmPrefs.getBoolean("block_gifs", false)
         if (isGifsBlocked) {
-            // Antes: queriedDomain.contains("tenor") sobre el string completo. Eso
-            // marcaba como GIF cualquier dominio que tuviera esas letras adentro de
-            // una palabra más larga (por ejemplo "tenor" aparece dentro de palabras
-            // normales en español), bloqueando sitios que no tienen nada que ver y
-            // degradando la experiencia sin motivo. Ahora se exige que sea una
-            // etiqueta completa del dominio o un segmento separado por guiones,
-            // igual que en WebViewPolicy.
             val gifTokens = setOf("tenor", "giphy", "gboard-stickers")
             val labels = queriedDomain.lowercase().split(".")
             val isTenorOrGiphy = gifTokens.any { token ->
@@ -1012,20 +981,7 @@ class KosherVpnService : VpnService() {
 
         // 3. Ajustes/actividad de la cuenta de Google  (4/9/2026, interruptor por
         //    defecto ENCENDIDO — ver mdm/GoogleAccountWebPolicy.kt).
-        //
-        //    Va como lista negra GLOBAL, junto a anuncios y GIFs, y NO como regla por
-        //    app, porque las consultas DNS de Android salen por `netd` y no se pueden
-        //    atribuir a la app que las pidió (B.10). Una regla por app no regiría.
-        //
-        //    Va DESPUÉS del `when(customRule)` de arriba a propósito: así una regla
-        //    FORCE_ALLOW del administrador sigue ganando. Es la vía de escape para el
-        //    caso raro en que haga falta abrir la cuenta desde el propio equipo.
         val isGoogleAccountWebBlocked = mdmPrefs.getBoolean("block_google_account_web", true)
-        // Modo NORMAL por defecto: bloquea el historial y la actividad, pero deja
-        // `myaccount.google.com` para que el administrador pueda seguir manejando la
-        // cuenta desde el equipo. El modo estricto suma ese dominio. Ver
-        // GoogleAccountWebPolicy: acá es donde el corte fino existe de verdad, porque
-        // el nombre de clase de la pantalla no distingue una mitad de la otra.
         val googleAccountStrict = com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.isStrict(
             mdmPrefs.getString(
                 com.ejemplo.locksuite.mdm.GoogleAccountWebPolicy.KEY_MODE,
@@ -1039,6 +995,35 @@ class KosherVpnService : VpnService() {
             com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
             NetworkForwarder.sendBlockedDnsResponse(packet, output)
             return
+        }
+
+        // 4. Bloqueo global de ofertas de Mercado Pago si está activo
+        if (policyManager.isMercadoPagoBlockOffersVpnEnabled() && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
+            android.util.Log.i("KosherVPN", "🚫 BLOQUEADO OFERTAS MERCADO PAGO: $queriedDomain")
+            com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
+            NetworkForwarder.sendBlockedDnsResponse(packet, output)
+            return
+        }
+
+        if (whitelistOn) {
+            if (whitelistDecision == com.ejemplo.locksuite.dns.RuleType.ALLOW) {
+                // Dominio de una app permitida (que no cayó en anuncios, GIFs, cuenta Google ni ofertas MP)
+                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.ALLOWED)
+                NetworkForwarder.forwardDnsQuery(packet, output, this)
+                return
+            }
+            // No figura en ninguna lista. Acá es donde el modo hace lo suyo.
+            com.ejemplo.locksuite.mdm.WhitelistManager.recordAudit(queriedDomain)
+            if (whitelistSimulating) {
+                if (VERBOSE) {
+                    android.util.Log.d("KosherVPN", "LISTA BLANCA (simulación) habría bloqueado: $queriedDomain")
+                }
+            } else {
+                android.util.Log.i("KosherVPN", "🚫 BLOQUEADO LISTA BLANCA (no listado) dominio=$queriedDomain de la app=$logPackage")
+                com.ejemplo.locksuite.LockSuiteApplication.dnsActivityBuffer.record(queriedDomain, logPackage, com.ejemplo.locksuite.dns.DnsAction.BLOCKED)
+                NetworkForwarder.sendBlockedDnsResponse(packet, output)
+                return
+            }
         }
 
         var isBlocked = false
@@ -1069,13 +1054,9 @@ class KosherVpnService : VpnService() {
                     val isAllowed = WebViewPolicy.isDomainAllowedForGenericApp(logPackage, queriedDomain)
                     isBlocked = !isAllowed
                 }
-            } else if (logPackage == "com.mercadopago.wallet") {
-                if (policyManager.isMercadoPagoBlockOffersVpnEnabled()) {
-                    if (WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
-                        isBlocked = true
-                        otherPolicyDecided = true
-                    }
-                }
+            } else if (WebViewPolicy.isGloballyBlacklisted(queriedDomain)) {
+                isBlocked = true
+                otherPolicyDecided = true
             }
             // ⚠️ ACÁ HUBO UNA RAMA PARA `com.android.captiveportallogin` Y SE QUITÓ EL
             // 5/9/2026. NO VOLVER A PONERLA: no es que estuviera mal escrita, es que
@@ -1088,15 +1069,9 @@ class KosherVpnService : VpnService() {
             // ejecutarse nunca. Lo que sí se puede hacer está en
             // `mdm/CaptivePortalPolicy.kt` y es todo Capa 3. Ver B.46.
         } else {
-            // Fallback: Si no se pudo obtener el UID del socket (carrera de hilos), aplicamos la blacklist global
-            if (policyManager.isMercadoPagoBlockOffersVpnEnabled() && WebViewPolicy.isMercadoPagoOffersDomain(queriedDomain)) {
-                isBlocked = true
-                otherPolicyDecided = true
-            } else {
-                val globalBlacklist = WebViewPolicy.getGlobalBlacklist()
-                isBlocked = globalBlacklist.any { queriedDomain == it || queriedDomain.endsWith(".$it") }
-                if (isBlocked) otherPolicyDecided = true
-            }
+            // Fallback: Si no se pudo obtener el UID del socket (carrera de hilos / netd), aplicamos la blacklist global
+            isBlocked = WebViewPolicy.isGloballyBlacklisted(queriedDomain)
+            if (isBlocked) otherPolicyDecided = true
             logPackage = "fallback-global"
         }
 
@@ -1338,12 +1313,15 @@ class KosherVpnService : VpnService() {
                     }
                     android.util.Log.i("KosherVPN", "Cambio la red fisica por defecto; reestableciendo tunel VPN.")
                     // ARREGLO 1/9/2026 (V-3): el handle se anota SOLO si el
-                    // reestablecimiento efectivamente ocurrió. Antes se anotaba siempre,
-                    // y si el antirrebote de 8 s cancelaba el reinicio quedaba el túnel
-                    // de la red vieja marcado como si fuera el de la nueva — con lo cual
-                    // el siguiente aviso de la red buena se descartaba por "es la misma".
+                    // reestablecimiento efectivamente ocurrió o quedó agendado.
                     if (restartVpn()) {
                         lastNetworkHandle = handle
+                    }
+                }
+
+                override fun onCapabilitiesChanged(network: Network, networkCapabilities: android.net.NetworkCapabilities) {
+                    if (networkCapabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                        NetworkForwarder.invalidateUpstreamCache()
                     }
                 }
 
@@ -1382,13 +1360,19 @@ class KosherVpnService : VpnService() {
      */
     private fun restartVpn(): Boolean {
         val isCurrentlyRunning = synchronized(lifecycleLock) { running }
-        if (!isCurrentlyRunning) return false // La VPN no esta activa; no reiniciar por cuenta propia.
+        if (!isCurrentlyRunning && restartPendingUntilMs == 0L) return false // La VPN no esta activa; no reiniciar por cuenta propia.
 
         // Debounce de 8 s (antes 3 s). Un handoff de Wi-Fi a datos móviles genera una
-        // ráfaga de callbacks durante varios segundos; con 3 s se alcanzaban a encadenar
-        // dos o tres reestablecimientos seguidos, y cada uno es un hueco sin resolver.
+        // ráfaga de callbacks durante varios segundos; si cae dentro de los 8 s, no
+        // descartamos el cambio en silencio sino que aseguramos un único reestablecimiento
+        // al terminar la ventana de enfriamiento.
         val now = android.os.SystemClock.elapsedRealtime()
-        if (now - lastNetworkRestartAtMs < 8000) return false
+        val elapsed = now - lastNetworkRestartAtMs
+        if (elapsed < 8000) {
+            val remaining = (8000 - elapsed).coerceAtLeast(RESTART_SETTLE_MS)
+            scheduleRestart(remaining, "cambio de conectividad (agrupado)")
+            return true
+        }
         lastNetworkRestartAtMs = now
 
         // 6/9/2026: antes acá había un `stopVpn(); startVpn()` pegados. Ese par era la

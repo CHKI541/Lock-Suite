@@ -313,14 +313,14 @@ class WhitelistManager(private val context: Context) {
             }
 
             for ((pkg, state) in decisions) {
-                if (state != STATE_ALLOW) continue
-                for (d in allowedDomainsOf(pkg, custom)) rules[normalizeDomain(d)] = RuleType.ALLOW
-            }
-
-            for ((pkg, state) in decisions) {
                 if (state != STATE_BLOCK) continue
                 val todos = allowedDomainsOf(pkg, custom) + blockedDomainsOf(pkg, custom)
                 for (d in todos) rules[normalizeDomain(d)] = RuleType.BLOCK
+            }
+
+            for ((pkg, state) in decisions) {
+                if (state != STATE_ALLOW) continue
+                for (d in allowedDomainsOf(pkg, custom)) rules[normalizeDomain(d)] = RuleType.ALLOW
             }
 
             for (d in WhitelistCatalog.INFRASTRUCTURE) rules[normalizeDomain(d)] = RuleType.FORCE_ALLOW

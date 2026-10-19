@@ -85,7 +85,7 @@ object ApkSignatureVerifier {
         }
 
         val firmaApk = try {
-            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 pm.getPackageArchiveInfo(apkPath, PackageManager.GET_SIGNING_CERTIFICATES)
             } else {
                 @Suppress("DEPRECATION")
@@ -97,7 +97,7 @@ object ApkSignatureVerifier {
         } ?: return Result.Unknown("el APK descargado no tiene firma")
 
         val firmaInstalada = try {
-            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 pm.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES)
             } else {
                 @Suppress("DEPRECATION")
@@ -153,6 +153,8 @@ object ApkSignatureVerifier {
         val info = context.packageManager.getPackageInfo(context.packageName, flags)
         val firmas: Array<out Signature>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             info.signingInfo?.apkContentsSigners
+                ?: info.signingInfo?.signingCertificateHistory
+                ?: @Suppress("DEPRECATION") info.signatures
         } else {
             @Suppress("DEPRECATION")
             info.signatures
@@ -179,6 +181,8 @@ object ApkSignatureVerifier {
     private fun huellaDe(info: PackageInfo): String? {
         val firmas: Array<out Signature>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             info.signingInfo?.apkContentsSigners
+                ?: info.signingInfo?.signingCertificateHistory
+                ?: @Suppress("DEPRECATION") info.signatures
         } else {
             @Suppress("DEPRECATION")
             info.signatures

@@ -36,20 +36,25 @@ class AIPersonDetector private constructor(private val detector: ObjectDetector)
         fun release() { synchronized(this) { instance?.detector?.close(); instance = null } }
     }
 
+    @Synchronized
     fun detectPersonRegions(bitmap: Bitmap): List<DetectedRegion> {
         val argb = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap
-                   else bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                   else bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return emptyList()
         val mpImage = BitmapImageBuilder(argb).build()
-        val result = detector.detect(mpImage)
-        // Misma corrección que en AIFaceDetector: reciclar la copia ARGB_8888
-        // propia (si hubo que crearla) una vez terminada la detección, sin tocar
-        // el bitmap original del llamador.
-        if (argb !== bitmap) {
-            argb.recycle()
+        try {
+            val result = detector.detect(mpImage)
+            return result.detections()
+                .filter { d -> d.categories().any { it.categoryName() == PERSON_LABEL } }
+                .map { DetectedRegion(it.boundingBox().toIntRect(), DetectionSource.BODY) }
+        } finally {
+            try { mpImage.close() } catch (_: Exception) {}
+            // Misma corrección que en AIFaceDetector: reciclar la copia ARGB_8888
+            // propia (si hubo que crearla) una vez terminada la detección, sin tocar
+            // el bitmap original del llamador.
+            if (argb !== bitmap) {
+                argb.recycle()
+            }
         }
-        return result.detections()
-            .filter { d -> d.categories().any { it.categoryName() == PERSON_LABEL } }
-            .map { DetectedRegion(it.boundingBox().toIntRect(), DetectionSource.BODY) }
     }
 
     private fun RectF.toIntRect() = Rect(left.toInt(), top.toInt(), right.toInt(), bottom.toInt())

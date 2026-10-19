@@ -11,6 +11,9 @@ object AdBlocker {
     @Volatile private var blockedSet: Set<String> = emptySet()
     @Volatile var isReady: Boolean = false
         private set
+    @Volatile private var isLoading: Boolean = false
+    private val WS_REGEX = Regex("\\s+")
+    private val DOMAIN_REGEX = Regex("^[a-z0-9.-]+\\.[a-z0-9]+$")
 
     private const val ASSET_FILENAME = "hagezi-light.txt"
     private const val LOCAL_FILENAME = "adblock_list.txt" // Permite actualizarla en caliente en el futuro
@@ -18,15 +21,18 @@ object AdBlocker {
     /**
      * Carga la lista de dominios bloqueados en segundo plano para no congelar la UI de la app.
      */
+    @Synchronized
     fun loadAsync(context: Context) {
-        if (isReady) return
+        if (isReady || isLoading) return
+        isLoading = true
+        val appContext = context.applicationContext
         Thread {
             try {
-                val localFile = File(context.filesDir, LOCAL_FILENAME)
+                val localFile = File(appContext.filesDir, LOCAL_FILENAME)
                 val reader: BufferedReader = if (localFile.exists()) {
                     BufferedReader(FileReader(localFile))
                 } else {
-                    BufferedReader(InputStreamReader(context.assets.open(ASSET_FILENAME)))
+                    BufferedReader(InputStreamReader(appContext.assets.open(ASSET_FILENAME)))
                 }
 
                 // Cargamos con un tamaño inicial estimado de ~60,000 dominios para evitar redimensionar el set en runtime
@@ -37,7 +43,7 @@ object AdBlocker {
                         if (line.isEmpty() || line.startsWith("#") || line.startsWith("!")) return@forEach
                         
                         // Si la línea contiene espacios (ej. "0.0.0.0 adserver.com"), extraemos el dominio (la última parte)
-                        var domain = line.split(Regex("\\s+")).lastOrNull()?.lowercase()?.trim()
+                        var domain = line.split(WS_REGEX).lastOrNull()?.lowercase()?.trim()
                         if (!domain.isNullOrEmpty()) {
                             domain = domain
                                 .removePrefix("||")
@@ -47,7 +53,7 @@ object AdBlocker {
                                 .substringBefore("/")
                                 .removeSuffix(".")
 
-                            if (domain.matches(Regex("^[a-z0-9.-]+\\.[a-z0-9]+$"))) {
+                            if (DOMAIN_REGEX.matches(domain)) {
                                 parsed.add(domain)
                             }
                         }
@@ -59,6 +65,8 @@ object AdBlocker {
                 android.util.Log.i("AdBlocker", "Lista de bloqueo de anuncios cargada: ${parsed.size} dominios.")
             } catch (e: Exception) {
                 android.util.Log.e("AdBlocker", "Error cargando lista de bloqueo de anuncios: ${e.message}")
+            } finally {
+                isLoading = false
             }
         }.start()
     }

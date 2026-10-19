@@ -77,6 +77,8 @@ class KosherLauncherActivity : ComponentActivity() {
 
     /** Lista de apps que el modo teclas está mostrando. */
     private var nokiaApps by mutableStateOf<List<AppItem>>(emptyList())
+    private var nokiaKeypadMode by mutableStateOf(false)
+    private var nokiaTouchEnabled by mutableStateOf(true)
 
     /** Versión del conjunto de paquetes instalados/desinstalados. */
     private var launcherPackagesVersion by mutableStateOf(0L)
@@ -168,18 +170,16 @@ class KosherLauncherActivity : ComponentActivity() {
         updateTime()
 
         // Modo teléfono de teclas: pantalla completamente distinta, mismo launcher.
-        // Se decide acá y no dentro de LauncherScreen para no meter una segunda interfaz
-        // entera dentro de una función que ya es grande.
         val prefsLauncher = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
         launcherPackagesVersion = prefsLauncher.getLong("launcher_packages_version", 0L)
-        if (prefsLauncher.getBoolean("nokia_keypad_mode", false)) {
-            // La lista de apps se arma UNA vez acá, no dentro del `setContent`: cargarla en
-            // la composición sería un efecto colateral que se repetiría en cada
-            // recomposición (y cada carga enumera todas las actividades del equipo).
+        nokiaKeypadMode = prefsLauncher.getBoolean("nokia_keypad_mode", false)
+        nokiaTouchEnabled = prefsLauncher.getBoolean("nokia_touch_enabled", true)
+        if (nokiaKeypadMode) {
             actualizarFechaNokia()
             nokiaApps = cargarAppsNokia()
-            val touchOn = prefsLauncher.getBoolean("nokia_touch_enabled", true)
-            setContent {
+        }
+        setContent {
+            if (nokiaKeypadMode) {
                 NokiaKeypadScreen(
                     apps = nokiaApps,
                     enMenu = nokiaEnMenu,
@@ -188,11 +188,9 @@ class KosherLauncherActivity : ComponentActivity() {
                     hora = currentTime,
                     fecha = nokiaFecha,
                     bateria = batteryPercent,
-                    touchHabilitado = touchOn
+                    touchHabilitado = nokiaTouchEnabled
                 )
-            }
-        } else {
-            setContent {
+            } else {
                 LauncherScreen(
                     batteryPercent = batteryPercent,
                     isBluetoothEnabled = isBluetoothEnabled,
@@ -225,11 +223,12 @@ class KosherLauncherActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             val resueltas = pm.queryIntentActivities(mainIntent, 0)
             val ocultasDelSistema = setOf(
-                packageName, "com.android.systemui", "com.android.providers.telephony",
-                "com.android.packageinstaller", "com.google.android.packageinstaller",
+                packageName, "com.android.settings", "com.android.systemui",
+                "com.android.providers.telephony", "com.android.packageinstaller",
+                "com.google.android.packageinstaller", "com.android.phone",
                 "com.google.android.gms", "com.google.android.gsf"
             )
-            resueltas.mapNotNull { ri ->
+            val lista = resueltas.mapNotNull { ri ->
                 val pkg = ri.activityInfo.packageName
                 if (pkg in ocultasDelSistema) return@mapNotNull null
                 try {
@@ -240,8 +239,22 @@ class KosherLauncherActivity : ComponentActivity() {
                 val label = ri.loadLabel(pm).toString()
                 val intent = pm.getLaunchIntentForPackage(pkg) ?: return@mapNotNull null
                 AppItem(pkg, label, intent, AppIconMapper.getMapping(pkg, label), ri)
-            }.distinctBy { it.packageName }
-                .sortedBy { NokiaIconSet.para(it.packageName, it.label).label.lowercase() }
+            }.distinctBy { it.packageName }.toMutableList()
+
+            val settingsIcon = AppIconMapper.getMapping("com.ejemplo.locksuite.settings", "Ajustes")
+            val customSettingsIntent = Intent(this, KosherSettingsActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            lista.add(
+                AppItem(
+                    "com.ejemplo.locksuite.settings",
+                    "Ajustes",
+                    customSettingsIntent,
+                    settingsIcon,
+                    null
+                )
+            )
+            lista.sortedBy { NokiaIconSet.para(it.packageName, it.label).label.lowercase() }
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
@@ -279,8 +292,7 @@ class KosherLauncherActivity : ComponentActivity() {
      * inesperado de página es lo que hace que el usuario se pierda.
      */
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
-        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
-        if (!prefs.getBoolean("nokia_keypad_mode", false)) {
+        if (!nokiaKeypadMode) {
             return super.onKeyDown(keyCode, event)
         }
         val total = nokiaApps.size
@@ -366,9 +378,8 @@ class KosherLauncherActivity : ComponentActivity() {
     override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
         if (ev == null) return super.dispatchTouchEvent(ev)
 
-        val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
-        val modoTeclas = prefs.getBoolean("nokia_keypad_mode", false)
-        val touchBloqueado = modoTeclas && !prefs.getBoolean("nokia_touch_enabled", true)
+        val modoTeclas = nokiaKeypadMode
+        val touchBloqueado = modoTeclas && !nokiaTouchEnabled
 
         val width = resources.displayMetrics.widthPixels
         val height = resources.displayMetrics.heightPixels
@@ -415,13 +426,22 @@ class KosherLauncherActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
 
-        // Invalidación barata de apps: recargar solo si PackageReceiver notificó cambios
+        // Invalidación barata de apps y refresco reactivo de modo Nokia / touch
         val prefsLauncher = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
+        val nuevoModoNokia = prefsLauncher.getBoolean("nokia_keypad_mode", false)
+        val nuevoTouchNokia = prefsLauncher.getBoolean("nokia_touch_enabled", true)
         val currentPkgVer = prefsLauncher.getLong("launcher_packages_version", 0L)
-        if (currentPkgVer != launcherPackagesVersion) {
+        val cambioModo = nuevoModoNokia != nokiaKeypadMode
+        nokiaKeypadMode = nuevoModoNokia
+        nokiaTouchEnabled = nuevoTouchNokia
+        if (currentPkgVer != launcherPackagesVersion || (cambioModo && nuevoModoNokia)) {
             launcherPackagesVersion = currentPkgVer
-            if (prefsLauncher.getBoolean("nokia_keypad_mode", false)) {
+            if (nuevoModoNokia) {
+                actualizarFechaNokia()
                 nokiaApps = cargarAppsNokia()
+                if (nokiaSeleccion >= nokiaApps.size) {
+                    nokiaSeleccion = (nokiaApps.size - 1).coerceAtLeast(0)
+                }
             }
         }
 

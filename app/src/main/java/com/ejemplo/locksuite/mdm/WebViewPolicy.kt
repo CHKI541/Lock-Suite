@@ -16,7 +16,8 @@ object WebViewPolicy {
         "com.didiglobal.passenger" to setOf(
             "didiglobal.com",    // API principal
             "xiaojukeji.com",    // Backend DiDi
-            "diditaxi.com.cn"    // Servidores de taxi
+            "diditaxi.com.cn",   // Servidores de taxi
+            "didistatic.com"     // Recursos estáticos de DiDi
             // Bloqueado: game.diditaxi.com.cn, minigame.didiglobal.com, drama.didiglobal.com, etc.
         )
     )
@@ -56,7 +57,7 @@ object WebViewPolicy {
         "game.diditaxi.com.cn",
         "minigame.didiglobal.com",
         "play.didiglobal.com",
-        "xiaojukeji.com/game",
+        "game.xiaojukeji.com",
         "drama.didiglobal.com",
         "webcast.didiglobal.com",
 
@@ -66,6 +67,38 @@ object WebViewPolicy {
         "admob.com",
         "app-measurement.com",
         "crashlytics.com"
+    )
+
+    // Subdominios específicos de apps de Google (Gmail, Drive, Meet, Chat, Messages, Wallet,
+    // Calendar, Contacts, Keep, Home, Login) que NO son buscadores web y deben seguir
+    // funcionando aunque el sufijo general "google.com" (Google Search, www.google.com,
+    // translate.google.com, news.google.com) esté en GLOBAL_BLACKLIST.
+    private val ALLOWED_GOOGLE_SUBDOMAINS: Set<String> = setOf(
+        "accounts.google.com",
+        "myaccount.google.com",
+        "mail.google.com",
+        "inbox.google.com",
+        "drive.google.com",
+        "docs.google.com",
+        "drive.usercontent.google.com",
+        "meet.google.com",
+        "chat.google.com",
+        "messages.google.com",
+        "jibe.google.com",
+        "wallet.google.com",
+        "pay.google.com",
+        "payments.google.com",
+        "calendar.google.com",
+        "contacts.google.com",
+        "keep.google.com",
+        "home.google.com",
+        "mtalk.google.com",
+        "play.google.com",
+        "dl.google.com",
+        "time.google.com",
+        "clients3.google.com",
+        "clients4.google.com",
+        "android.clients.google.com"
     )
 
     // Servicios de infraestructura globales indispensables que permitimos para que las apps no se rompan
@@ -102,6 +135,18 @@ object WebViewPolicy {
      */
     fun getGlobalBlacklist(): Set<String> {
         return GLOBAL_BLACKLIST
+    }
+
+    /**
+     * Evalúa si un dominio cae en la lista negra global de WebViews, respetando los
+     * subdominios dedicados de apps de Google (Gmail, Drive, Meet, Messages, Wallet, Login).
+     */
+    fun isGloballyBlacklisted(queriedDomain: String): Boolean {
+        val lower = queriedDomain.lowercase().trimEnd('.')
+        if (ALLOWED_GOOGLE_SUBDOMAINS.any { lower == it || lower.endsWith(".$it") }) {
+            return false
+        }
+        return GLOBAL_BLACKLIST.any { lower == it || lower.endsWith(".$it") }
     }
 
     /**

@@ -14,9 +14,12 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
         val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
 
         // Restaurar restricciones de instalación del MDM tras completar o fallar el proceso
+        // (solo si no hay un flujo de Play Store en curso, para no cortarle permisos a mitad)
         try {
-            val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
-            policyManager.restoreInstallRestrictions()
+            if (!com.ejemplo.locksuite.util.UpdateFlowManager.isRunning(context)) {
+                val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
+                policyManager.restoreInstallRestrictions()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }

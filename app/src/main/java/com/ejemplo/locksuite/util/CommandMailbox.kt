@@ -124,6 +124,8 @@ object CommandMailbox {
         if (!draining.compareAndSet(false, true)) return
         try {
             val ctx = context.applicationContext
+            val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+            if (dpm == null || !dpm.isDeviceOwnerApp(ctx.packageName)) return
             val id = FirebaseDeviceSync.deviceId(ctx)
             val ref = FirebaseDatabase.getInstance().getReference("devices/$id/pendingCommands")
             val latch = CountDownLatch(1)

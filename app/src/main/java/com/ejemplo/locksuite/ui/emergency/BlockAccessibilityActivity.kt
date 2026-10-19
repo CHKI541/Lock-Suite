@@ -27,6 +27,7 @@ import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.service.LockSuiteAccessibilityService
 import com.ejemplo.locksuite.util.LocaleManager
 import kotlinx.coroutines.delay
+import androidx.lifecycle.repeatOnLifecycle
 
 class BlockAccessibilityActivity : ComponentActivity() {
 
@@ -55,31 +56,38 @@ fun BlockAccessibilityScreen() {
     val alertDarkRed = Color(0xFF7B241C)
     val accentYellow = Color(0xFFF1C40F)
 
-    // Verificar si el servicio está habilitado
+    // Verificar si el servicio está realmente corriendo (Settings.Secure + proceso vivo / instancia)
     fun isAccessibilityServiceEnabled(context: Context): Boolean {
-        val enabledServices = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: ""
-        val shortId = "com.ejemplo.locksuite/.service.LockSuiteAccessibilityService"
-        val longId = "com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService"
-        return enabledServices.contains(shortId) || enabledServices.contains(longId)
+        return try {
+            com.ejemplo.locksuite.util.AccessibilityEnforcer.isServiceRunning(context)
+        } catch (_: Exception) {
+            val enabledServices = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: ""
+            val shortId = "com.ejemplo.locksuite/.service.LockSuiteAccessibilityService"
+            val longId = "com.ejemplo.locksuite/com.ejemplo.locksuite.service.LockSuiteAccessibilityService"
+            enabledServices.contains(shortId) || enabledServices.contains(longId)
+        }
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            if (isAccessibilityServiceEnabled(context)) {
-                val policyManager = PolicyManager(context)
-                val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
-                // Restaurar navegadores solo si fueron suspendidos por el watchdog
-                if (prefs.getBoolean("browsers_suspended_by_watchdog", false)) {
-                    policyManager.setBrowsersSuspended(false)
-                    prefs.edit().remove("browsers_suspended_by_watchdog").apply()
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                if (isAccessibilityServiceEnabled(context)) {
+                    val policyManager = PolicyManager(context)
+                    val prefs = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(context)
+                    // Restaurar navegadores solo si fueron suspendidos por el watchdog
+                    if (prefs.getBoolean("browsers_suspended_by_watchdog", false)) {
+                        policyManager.setBrowsersSuspended(false)
+                        prefs.edit().remove("browsers_suspended_by_watchdog").apply()
+                    }
+                    Toast.makeText(context, "Servicio de accesibilidad activado.", Toast.LENGTH_SHORT).show()
+                    (context as? Activity)?.finish()
                 }
-                Toast.makeText(context, "Servicio de accesibilidad activado.", Toast.LENGTH_SHORT).show()
-                (context as? Activity)?.finish()
+                delay(1000L)
             }
-            delay(1000L)
         }
     }
 

@@ -178,6 +178,10 @@ object ApkChecksum {
      * @return `null` si se puede instalar, o el mensaje de error.
      */
     fun blockSelfUpdate(file: File, expected: String?): String? {
+        if (!file.exists() || file.length() <= 0L) {
+            Log.e(TAG, "Archivo de actualización de LockSuite inexistente o vacío.")
+            return "El archivo de actualización descargado no existe o está vacío."
+        }
         return when (val r = verify(file, expected)) {
             Result.Match -> {
                 Log.i(TAG, "sha256 de la actualización de LockSuite verificado correctamente.")

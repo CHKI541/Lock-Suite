@@ -44,7 +44,9 @@ object PopularNonKosherApps {
         "com.heytap.market",                           // Oppo / Realme Market
         "com.oppo.market",                             // Oppo Market alternativo
         "com.vivo.appstore",                           // Vivo V-Appstore
-        "com.transsion.palmsore",                      // Palm Store (Tecno / Infinix)
+        "com.transsion.palmstore",                     // Palm Store (Tecno / Infinix)
+        "com.transsion.palmsore",                      // Palm Store variante
+        "com.afmobi.palmplay",                         // PalmPlay (Tecno / Infinix / Itel)
         "com.amazon.venezia",                          // Amazon Appstore
         "com.aurora.store",                            // Aurora Store
         "org.fdroid.fdroid",                           // F-Droid

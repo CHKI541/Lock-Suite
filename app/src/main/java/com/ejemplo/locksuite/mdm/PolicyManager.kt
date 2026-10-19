@@ -532,7 +532,7 @@ class PolicyManager(private val context: Context) {
             }
         }
         try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncStateNow(context)
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
         } catch (_: Exception) {}
         return true
     }
@@ -555,7 +555,7 @@ class PolicyManager(private val context: Context) {
             }
         }
         try {
-            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncStateNow(context)
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
         } catch (_: Exception) {}
         return true
     }

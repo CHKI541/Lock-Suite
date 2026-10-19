@@ -639,7 +639,7 @@
     this.textContent = abrir ? "Cerrar todo" : "Abrir todo";
   });
 
-  /* ── Los tres que van aparte ─────────────────────────────────────────── */
+  /* ── Los interruptores especiales ─────────────────────────────────────── */
   const ESPECIALES = [
     {
       field: "locksuiteSuspended", label: "Suspender LockSuite",
@@ -658,6 +658,10 @@
         "en este equipo no se va a poder marcar el código de recuperación *#*#9999#*#*."
     },
     {
+      field: "nokiaKeypadMode", label: "Modo teléfono de teclas (Nokia)",
+      on: "ENABLE_NOKIA_MODE", off: "DISABLE_NOKIA_MODE"
+    },
+    {
       field: "nokiaTouchEnabled", label: "Táctil del launcher de teclas",
       on: "ENABLE_NOKIA_TOUCH", off: "DISABLE_NOKIA_TOUCH",
       confirmarAl: "apagar",
@@ -669,11 +673,14 @@
   ];
 
   function pintarEspeciales() {
-    $("c-especiales").innerHTML = ESPECIALES.map((p) =>
-      '<div class="ls-polrow">' +
-      '<label for="esp-' + p.field + '">' + esc(p.label) + "</label>" +
-      '<span class="ls-sw"><input type="checkbox" id="esp-' + p.field + '" data-esp="' + p.field +
-      '" ' + (campo(p.field, false) ? "checked" : "") + "><span></span></span></div>").join("");
+    $("c-especiales").innerHTML = ESPECIALES.map((p) => {
+      const defVal = (p.field === "nokiaTouchEnabled");
+      const val = campo(p.field, defVal);
+      return '<div class="ls-polrow">' +
+        '<label for="esp-' + p.field + '">' + esc(p.label) + "</label>" +
+        '<span class="ls-sw"><input type="checkbox" id="esp-' + p.field + '" data-esp="' + p.field +
+        '" ' + (val ? "checked" : "") + "><span></span></span></div>";
+    }).join("");
   }
 
   $("c-especiales").addEventListener("change", async (e) => {

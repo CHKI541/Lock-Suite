@@ -222,6 +222,52 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
 
                 val policyManager = remember { com.ejemplo.locksuite.mdm.PolicyManager(context) }
                 val isAdminActive = remember { com.ejemplo.locksuite.security.SessionManager.isActive() }
+                var nokiaModeActive by remember { mutableStateOf(policyManager.isNokiaKeypadMode()) }
+                var nokiaTouchActive by remember { mutableStateOf(policyManager.isNokiaTouchEnabled()) }
+
+                // APARIENCIA DEL LAUNCHER
+                SettingsGroup(title = "Apariencia del Launcher") {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Modo teléfono de teclas (Nokia)", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+                                Text("Reloj grande y menú de apps 3×3 con atajos numéricos", fontSize = 12.sp, color = Color.Gray)
+                            }
+                            Switch(
+                                checked = nokiaModeActive,
+                                onCheckedChange = { checked ->
+                                    nokiaModeActive = checked
+                                    policyManager.setNokiaKeypadMode(checked)
+                                }
+                            )
+                        }
+
+                        if (nokiaModeActive) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Habilitar pantalla táctil en modo teclas", fontSize = 14.sp, color = Color.White)
+                                    Text("Si se apaga, solo responde a teclas físicas (emergencia: 3s esquina sup. der.)", fontSize = 11.sp, color = Color.Gray)
+                                }
+                                Switch(
+                                    checked = nokiaTouchActive,
+                                    onCheckedChange = { checked ->
+                                        nokiaTouchActive = checked
+                                        policyManager.setNokiaTouchEnabled(checked)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 val bluetoothBlocked = remember {
                     !isAdminActive && policyManager.isRestrictionEnabled(android.os.UserManager.DISALLOW_BLUETOOTH)
                 }

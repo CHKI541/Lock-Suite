@@ -503,17 +503,37 @@ class PolicyManager(private val context: Context) {
     fun setNokiaKeypadMode(enable: Boolean): Boolean {
         if (deferIfSuspended("nokia_keypad_mode", enable)) return true
         PrefsHelper.getMdmPrefs(context).edit().putBoolean("nokia_keypad_mode", enable).apply()
-        // El launcher decide qué pantalla dibuja en onCreate(), así que hay que recrearlo
-        // para que el cambio se vea sin que el usuario tenga que reiniciar el equipo.
-        if (isKosherLauncherEnabled()) {
-            try {
-                val i = Intent(context, com.ejemplo.locksuite.ui.launcher.KosherLauncherActivity::class.java)
-                i.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                context.startActivity(i)
-            } catch (e: Exception) {
-                e.printStackTrace()
+        if (enable) {
+            // El modo Nokia requiere que el launcher kosher esté activo
+            if (!isKosherLauncherEnabled()) {
+                setKosherLauncherEnabled(true, openImmediately = true)
+            } else {
+                try {
+                    val i = Intent(context, com.ejemplo.locksuite.ui.launcher.KosherLauncherActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("REFRESH_NOKIA", true)
+                    }
+                    context.startActivity(i)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        } else {
+            if (isKosherLauncherEnabled()) {
+                try {
+                    val i = Intent(context, com.ejemplo.locksuite.ui.launcher.KosherLauncherActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        putExtra("REFRESH_NOKIA", true)
+                    }
+                    context.startActivity(i)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
         }
+        try {
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncStateNow(context)
+        } catch (_: Exception) {}
         return true
     }
 
@@ -523,6 +543,20 @@ class PolicyManager(private val context: Context) {
     fun setNokiaTouchEnabled(enable: Boolean): Boolean {
         if (deferIfSuspended("nokia_touch_enabled", enable)) return true
         PrefsHelper.getMdmPrefs(context).edit().putBoolean("nokia_touch_enabled", enable).apply()
+        if (isKosherLauncherEnabled()) {
+            try {
+                val i = Intent(context, com.ejemplo.locksuite.ui.launcher.KosherLauncherActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("REFRESH_NOKIA", true)
+                }
+                context.startActivity(i)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        try {
+            com.ejemplo.locksuite.util.FirebaseDeviceSync.syncStateNow(context)
+        } catch (_: Exception) {}
         return true
     }
 

@@ -513,7 +513,7 @@ function updateSidebarUI(e, t) {
             return;
         }
         const defVal = (n === "googleAccountWebBlocked" || n === "contactPhotoPickerBlocked"
-                        || n === "whitelistSharedCdn");
+                        || n === "whitelistSharedCdn" || n === "nokiaTouchEnabled");
         e.checked = field(t, n, defVal) === true;
     });
 

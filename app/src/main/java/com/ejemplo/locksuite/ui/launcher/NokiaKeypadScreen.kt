@@ -2,6 +2,7 @@ package com.ejemplo.locksuite.ui.launcher
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -72,7 +73,11 @@ fun NokiaKeypadScreen(
     hora: String,
     fecha: String,
     bateria: Int,
-    touchHabilitado: Boolean
+    touchHabilitado: Boolean,
+    onAbrirMenu: () -> Unit = {},
+    onVolverInicio: () -> Unit = {},
+    onSeleccionarApp: (Int) -> Unit = {},
+    onApagarPantalla: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -83,18 +88,32 @@ fun NokiaKeypadScreen(
 
         Box(modifier = Modifier.weight(1f)) {
             if (enMenu) {
-                MenuApps(apps = apps, seleccion = seleccion, pagina = pagina)
+                MenuApps(
+                    apps = apps,
+                    seleccion = seleccion,
+                    pagina = pagina,
+                    touchHabilitado = touchHabilitado,
+                    onSeleccionarApp = onSeleccionarApp
+                )
             } else {
-                Inicio(hora = hora, fecha = fecha)
+                Inicio(
+                    hora = hora,
+                    fecha = fecha,
+                    touchHabilitado = touchHabilitado,
+                    onAbrirMenu = onAbrirMenu
+                )
             }
         }
 
         // Barra de teclas suaves. En un teléfono de teclas de verdad estas etiquetas
         // corresponden a las dos teclas de abajo de la pantalla; en un equipo táctil sin
-        // esas teclas quedan como referencia visual de qué hace cada botón.
+        // esas teclas quedan como referencia visual y como botones táctiles directos.
         BarraTeclas(
             izquierda = if (enMenu) "Abrir" else "Menú",
-            derecha = if (enMenu) "Atrás" else "Apagar pantalla"
+            derecha = if (enMenu) "Atrás" else "Apagar pantalla",
+            touchHabilitado = touchHabilitado,
+            onIzquierda = { if (enMenu) onSeleccionarApp(seleccion) else onAbrirMenu() },
+            onDerecha = { if (enMenu) onVolverInicio() else onApagarPantalla() }
         )
     }
 }
@@ -137,9 +156,20 @@ private fun BarraEstado(bateria: Int, touchHabilitado: Boolean) {
 }
 
 @Composable
-private fun Inicio(hora: String, fecha: String) {
+private fun Inicio(
+    hora: String,
+    fecha: String,
+    touchHabilitado: Boolean,
+    onAbrirMenu: () -> Unit
+) {
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .then(
+                if (touchHabilitado) {
+                    Modifier.clickable(onClick = onAbrirMenu)
+                } else Modifier
+            ),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -161,7 +191,13 @@ private fun Inicio(hora: String, fecha: String) {
 }
 
 @Composable
-private fun MenuApps(apps: List<AppItem>, seleccion: Int, pagina: Int) {
+private fun MenuApps(
+    apps: List<AppItem>,
+    seleccion: Int,
+    pagina: Int,
+    touchHabilitado: Boolean,
+    onSeleccionarApp: (Int) -> Unit
+) {
     val porPagina = 9
     val desde = pagina * porPagina
     val visibles = apps.drop(desde).take(porPagina)
@@ -185,12 +221,15 @@ private fun MenuApps(apps: List<AppItem>, seleccion: Int, pagina: Int) {
                 for (col in 0 until 3) {
                     val indiceEnPagina = fila * 3 + col
                     val app = visibles.getOrNull(indiceEnPagina)
+                    val indiceGlobal = desde + indiceEnPagina
                     Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                         if (app != null) {
                             Casilla(
                                 app = app,
                                 numero = indiceEnPagina + 1,
-                                seleccionada = (desde + indiceEnPagina) == seleccion
+                                seleccionada = indiceGlobal == seleccion,
+                                touchHabilitado = touchHabilitado,
+                                onClick = { onSeleccionarApp(indiceGlobal) }
                             )
                         }
                     }
@@ -215,7 +254,13 @@ private fun MenuApps(apps: List<AppItem>, seleccion: Int, pagina: Int) {
 }
 
 @Composable
-private fun Casilla(app: AppItem, numero: Int, seleccionada: Boolean) {
+private fun Casilla(
+    app: AppItem,
+    numero: Int,
+    seleccionada: Boolean,
+    touchHabilitado: Boolean,
+    onClick: () -> Unit
+) {
     val nokia = NokiaIconSet.para(app.packageName, app.label)
     Column(
         modifier = Modifier
@@ -226,6 +271,11 @@ private fun Casilla(app: AppItem, numero: Int, seleccionada: Boolean) {
                 } else {
                     Modifier
                 }
+            )
+            .then(
+                if (touchHabilitado) {
+                    Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick)
+                } else Modifier
             )
             .padding(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -264,15 +314,33 @@ private fun Casilla(app: AppItem, numero: Int, seleccionada: Boolean) {
 }
 
 @Composable
-private fun BarraTeclas(izquierda: String, derecha: String) {
+private fun BarraTeclas(
+    izquierda: String,
+    derecha: String,
+    touchHabilitado: Boolean,
+    onIzquierda: () -> Unit,
+    onDerecha: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(BARRA)
             .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
-        Text(izquierda, color = TINTA, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(
+            text = izquierda,
+            color = TINTA,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = if (touchHabilitado) Modifier.clickable(onClick = onIzquierda).padding(4.dp) else Modifier
+        )
         Spacer(Modifier.weight(1f))
-        Text(derecha, color = TINTA, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(
+            text = derecha,
+            color = TINTA,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = if (touchHabilitado) Modifier.clickable(onClick = onDerecha).padding(4.dp) else Modifier
+        )
     }
 }

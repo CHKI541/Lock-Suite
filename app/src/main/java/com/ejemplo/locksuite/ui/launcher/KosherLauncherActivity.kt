@@ -188,7 +188,21 @@ class KosherLauncherActivity : ComponentActivity() {
                     hora = currentTime,
                     fecha = nokiaFecha,
                     bateria = batteryPercent,
-                    touchHabilitado = nokiaTouchEnabled
+                    touchHabilitado = nokiaTouchEnabled,
+                    onAbrirMenu = { nokiaEnMenu = true },
+                    onVolverInicio = { nokiaEnMenu = false },
+                    onSeleccionarApp = { indice ->
+                        nokiaSeleccion = indice
+                        abrirSeleccionNokia()
+                    },
+                    onApagarPantalla = {
+                        try {
+                            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+                            dpm.lockNow()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
                 )
             } else {
                 LauncherScreen(
@@ -423,10 +437,13 @@ class KosherLauncherActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        refrescarModoNokia()
+    }
 
-        // Invalidación barata de apps y refresco reactivo de modo Nokia / touch
+    private fun refrescarModoNokia() {
         val prefsLauncher = com.ejemplo.locksuite.util.PrefsHelper.getMdmPrefs(this)
         val nuevoModoNokia = prefsLauncher.getBoolean("nokia_keypad_mode", false)
         val nuevoTouchNokia = prefsLauncher.getBoolean("nokia_touch_enabled", true)
@@ -434,7 +451,7 @@ class KosherLauncherActivity : ComponentActivity() {
         val cambioModo = nuevoModoNokia != nokiaKeypadMode
         nokiaKeypadMode = nuevoModoNokia
         nokiaTouchEnabled = nuevoTouchNokia
-        if (currentPkgVer != launcherPackagesVersion || (cambioModo && nuevoModoNokia)) {
+        if (currentPkgVer != launcherPackagesVersion || cambioModo || (nuevoModoNokia && nokiaApps.isEmpty())) {
             launcherPackagesVersion = currentPkgVer
             if (nuevoModoNokia) {
                 actualizarFechaNokia()
@@ -444,6 +461,13 @@ class KosherLauncherActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        // Invalidación de apps y refresco reactivo de modo Nokia / touch
+        refrescarModoNokia()
 
         // ── KIOSCO REAL DEL SO (Lock Task, 2/9/2026) ──
         //

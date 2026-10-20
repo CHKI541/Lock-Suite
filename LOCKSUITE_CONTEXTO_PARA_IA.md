@@ -1969,18 +1969,54 @@ Pedido del dueño: actuar como un equipo de agentes especializados para revisar 
 
 ---
 
+**B.92 — MICROVISOR CONFINADO PARA DESAFÍOS DE VERIFICACIÓN DE GOOGLE (QR / "DEVICE PHONE VERIFICATION" Y 2SV) EN CELULARES SIN NAVEGADOR. [IMPLEMENTADO EN CÓDIGO, SUITE DE TESTS 100% VERDE Y COMPILACIÓN DEBUG EXITOSA EL 20/10/2026; PENDIENTE AUTORIZACIÓN DE DEPLOY Y PRUEBA EN EQUIPO REAL]**
+
+- **Contexto del reporte:** Al iniciar sesión en una PC en Google (`accounts.google.com`), Google disparó el desafío anti-bot IAP (*Identity / Anti-Abuse Protection*): *"Verifica tu información para continuar... Escanea el código QR con tu teléfono. Abre la app de Cámara, escanea el código y presiona el vínculo. Luego, sigue las instrucciones en tu teléfono"*.
+- **Análisis técnico del flujo:**
+  - El código QR decodifica a: `https://accounts.google.com/devicephoneverification/begin?flow=browser&plt=...&dsh=...`.
+  - El parámetro `flow=browser` indica que Google espera un navegador móvil para abrir la sesión web (`DevicePhoneVerificationUi`), confirmar la línea física y/o validar la SIM enviando un SMS de verificación al gateway de Google.
+  - En un celular kosher administrado por LockSuite, no hay navegador o están suspendidos (`KNOWN_BROWSERS`). Al escanear con la cámara o un lector de QR, el sistema no encontraba ninguna app para abrir `https://` o informaba que Chrome estaba desactivado por el administrador.
+- **Solución implementada — Microvisor Confinado (`GoogleVerificationActivity` y `GoogleVerificationPolicy`):**
+  1. **Motor de Políticas Puro (`GoogleVerificationPolicy.kt`):**
+     - `isNavigationAllowed(url)`: Confinamiento hermético exclusivo a `accounts.google.com` con rutas autorizadas (`/devicephoneverification`, `/v3/signin/challenge`, `/signin/challenge`, `/signin/recovery/challenge`, `/CheckCookie`). Bloquea subdominios maliciosos (ej. `attacker-accounts.google.com`), esquemas no HTTPS y cualquier fuga a Ayuda (`support.google.com`), Políticas de Privacidad (`policies.google.com`), Mi Actividad (`myactivity.google.com`) o aplicaciones de Google.
+     - `isResourceAllowed(url)`: Filtra recursos web (permite únicamente `gstatic.com` y `google.com` para fuentes/estilos/scripts de login). Bloquea activamente `youtube.com`, `ytimg.com`, `doubleclick.net`, etc.
+     - `isSmsOrTelAction(url)`: Detecta y autoriza esquemas nativos `sms:`, `smsto:`, `tel:` para despacho controlado al mensajero nativo del sistema.
+     - `isVerificationSuccess(url)`: Detecta auto-cierre exitoso (fragmentos `#success`, `/v2/success`, etc.).
+  2. **Interfaz y Sandbox en Jetpack Compose (`GoogleVerificationActivity.kt`):**
+     - UI nativa con barra superior oscura, indicador visual *"accounts.google.com (Confinado)"*, barra de progreso de carga y botón de cierre inmediato.
+     - Soporte para entrada manual de enlace con validación previa de seguridad si no se abre directamente desde QR.
+     - Sandbox de `WebView`: `setSupportMultipleWindows(false)` y `onCreateWindow() = false` (bloqueo total de popups y `window.open`), `allowFileAccess = false`, `allowContentAccess = false`, `allowFileAccessFromFileURLs = false`, `allowUniversalAccessFromFileURLs = false`.
+     - User-Agent de Mobile Chrome estándar para evitar el rechazo 403 (*Disallowed User-Agent*) de Google.
+     - Interceptación y supresión de acciones de "Buscar en la Web" o "Compartir" en el menú contextual de selección de texto (`startActionMode`), permitiendo únicamente Copiar y Pegar para códigos SMS.
+     - Manejo estricto de errores SSL (`onReceivedSslError` cancela inmediatamente la carga).
+     - Temporizador de seguridad de 10 minutos con auto-cierre para no dejar sesiones abiertas en segundo plano.
+  3. **Registro en Manifest (`AndroidManifest.xml`):**
+     - Declarado con `intent-filter` (VIEW/BROWSABLE) exclusivo para `accounts.google.com` con los prefijos `/devicephoneverification`, `/v3/signin/challenge`, y `/signin/challenge`.
+     - Así, al escanear el QR con la cámara del celular, Android ofrece abrir el enlace directamente en este microvisor seguro sin tocar ni des-suspender navegadores generales.
+  4. **Acceso desde Ajustes Kosher (`KosherSettingsActivity.kt`):**
+     - Agregada opción *"Verificación de Cuenta de Google"* con icono de llave para abrir el microvisor o pegar el enlace de verificación manualmente.
+- **Verificación:**
+  - Suite de tests unitarios pura `GoogleVerificationPolicyTest.kt` con 13 casos de prueba cubriendo navegación permitida, vectores de fuga, bloqueo de subrecursos, esquemas y detección de éxito (100% verde).
+  - Compilación completa de `:app:assembleDebug` y `:app:testDebugUnitTest` exitosa.
+  - Sincronización de comandos FCM verificada (`check_command_sync.py` verde).
+- **Pendiente:**
+  - Autorización explícita del usuario antes de ejecutar `deploy_all.ps1`.
+  - Prueba en equipo físico escaneando el QR o abriendo el microvisor desde Ajustes.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**19/10 — Antigravity: Auditoría integral de producción con equipo de 6 agentes (Capas 1–6), corrección del bucle de reconexión de VPN Always-On tras actualizar y despliegue de 0.6.61 (código 124).**
+**20/10 — Antigravity: Diseño, implementación y verificación del Microvisor Confinado de Google (`GoogleVerificationActivity`) para resolver desafíos QR (B.92) sin navegador ni fuga de filtro.**
 
-- **Plan y auditoría por agentes:** se elaboró `PLAN_AUDITORIA_PRODUCCION_AGENTES.md` y se ejecutaron 6 subagentes auditores especializados cubriendo los ~75 archivos de `:app`, `:admin-app`, `admin-backend` y `tools/`.
-- **Correcciones aplicadas (B.91):** se aplicaron las mejoras de estabilidad, anti-evasión, red/VPN, Direct Boot, ciclo de vida de actualizaciones (incluido B.86), seguridad del canal FCM (incluido B.40 punto 3), UI/Launchers/PIN y panel web (`celular.js`, `app.js`, `catalog.js`, `functions/index.js`).
-- **Corrección inmediata del síntoma *"Desconectado de la VPN siempre activa"* al actualizar (0.6.61):** se corrigió `KosherVpnService.kt` y `BootReceiver.kt` para restaurar el enfriamiento estricto de 8 s en `restartVpn()`, inicializar `lastNetworkRestartAtMs` al levantar `tun0` en `startVpn()`, filtrar `onLost()` solo por la red activa, y evitar que `ACTION_MY_PACKAGE_REPLACED` conmute el proxy de `BootGate`.
-- **Verificación completa en verde:**
-  - Los 7 scripts de consistencia (`check_command_sync.py`, `check_panel_commands.py`, `check_profile_sync.py`, `check_whitelist_sync.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`, `aa_stubs/check_stubs.py`) en verde.
-  - Pruebas unitarias de `:app` (`:app:testDebugUnitTest`) y compilación de `:admin-app` en verde.
-  - Pruebas de reglas de Firebase Realtime Database (`tools/rules_tests`) en verde.
-- **Commit y despliegue:** cambios comiteados en `main` y desplegados a producción (`0.6.61`, código `124`) mediante `deploy_all.ps1`.
-
+- **Diagnóstico y Arquitectura:** Se decodificó el QR IAP de Google (`/devicephoneverification/begin?flow=browser&plt=...`) y se diseñó una solución hermética que no requiere des-suspender Chrome ni abrir navegadores generales.
+- **Implementación Segura:**
+  - `GoogleVerificationPolicy.kt`: Motor de validación pura con lista blanca estricta (`accounts.google.com`), bloqueo de escapes (Ayuda, Términos, YouTube, Search) y subrecursos multimedia.
+  - `GoogleVerificationPolicyTest.kt`: 13 pruebas unitarias exhaustivas con 100% de éxito.
+  - `GoogleVerificationActivity.kt`: Actividad Compose con WebView enjaulado (sin popups, sin acceso a archivos locales, menú contextual sin búsqueda web, User-Agent compatible y temporizador de 10 min).
+  - `AndroidManifest.xml`: Intent filter para captura directa del QR desde la cámara.
+  - `KosherSettingsActivity.kt`: Acceso directo para el usuario.
+- **Verificación Técnica:** `testDebugUnitTest` y `assembleDebug` completados con éxito (`BUILD SUCCESSFUL`).
+- **Estado de Despliegue:** Commit preparado. Esperando confirmación explícita del usuario para ejecutar `deploy_all.ps1`.

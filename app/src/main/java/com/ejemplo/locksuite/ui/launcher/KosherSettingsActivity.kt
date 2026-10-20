@@ -424,6 +424,19 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
                                 }
                             }
                         )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        SettingsButton(
+                            label = "Verificación de Cuenta de Google",
+                            icon = Icons.Filled.Security,
+                            onClick = {
+                                val intent = Intent(context, com.ejemplo.locksuite.ui.verification.GoogleVerificationActivity::class.java).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
+                            }
+                        )
                     }
                 }
 

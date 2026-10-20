@@ -327,6 +327,42 @@
                 android:resource="@xml/app_update_widget_info" />
         </receiver>
 
+        <!-- GOOGLE VERIFICATION ACTIVITY (Microvisor Confinado de Verificaciones de Google - B.92) -->
+        <activity
+            android:name=".ui.verification.GoogleVerificationActivity"
+            android:label="Verificación de Google"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.LockSuite"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|density|fontScale|uiMode|layoutDirection|locale"
+            android:windowSoftInputMode="adjustResize">
+
+            <!-- Intent filter para capturar QR o enlaces de devicephoneverification -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="accounts.google.com" android:pathPrefix="/devicephoneverification" />
+            </intent-filter>
+
+            <!-- Intent filter para capturar desafíos v3 de inicio de sesión -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="accounts.google.com" android:pathPrefix="/v3/signin/challenge" />
+            </intent-filter>
+
+            <!-- Intent filter para capturar desafíos v2 de inicio de sesión -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="accounts.google.com" android:pathPrefix="/signin/challenge" />
+            </intent-filter>
+        </activity>
+
     </application>
 
 </manifest>

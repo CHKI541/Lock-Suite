@@ -1,6 +1,5 @@
 package com.ejemplo.locksuite.mdm
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,16 +14,18 @@ class GoogleVerificationPolicyTest {
     // ── 1. URLs DE VERIFICACIÓN PERMITIDAS ────────────────────────────────────
 
     @Test
-    fun `permite el QR exacto de la captura reportada por el usuario`() {
-        val qrUrl = "https://accounts.google.com/devicephoneverification/begin?flow=browser&plt=AKgnsbt6a7zYT0zvYQQU81JcwlcQhSQZAVEvzREb9WzYhVlsrrpWZZstF0-L2Di2T3Jskytye0eQZZubrZOJr1pdfKa1l5VrnIaUaKc4NxcELz4g6OKEpul3AyLO3MlSuxJy7rb3KZk_SIgtg-yUf3DxX_g1idZnrw&dsh=S-1272006808:1792497735287756&hl=es-419"
-        assertTrue(GoogleVerificationPolicy.isNavigationAllowed(qrUrl))
+    fun `permite el formato canonico del QR de verificacion IAP con token sintetico`() {
+        // Token sintético de prueba (P1-06: sin secretos reales)
+        val mockQrUrl = "https://accounts.google.com/devicephoneverification/begin?flow=browser&plt=MOCK_TEST_TOKEN_12345&dsh=S-MOCK:123456789&hl=es-419"
+        assertTrue(GoogleVerificationPolicy.isNavigationAllowed(mockQrUrl))
     }
 
     @Test
-    fun `permite rutas canonicas de devicephoneverification`() {
+    fun `permite rutas canonicas de devicephoneverification con limites de segmento`() {
         assertTrue(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification/initiate"))
         assertTrue(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification/verify?token=abc"))
         assertTrue(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification/step2"))
+        assertTrue(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification?flow=browser"))
     }
 
     @Test
@@ -56,6 +57,7 @@ class GoogleVerificationPolicyTest {
         assertTrue(GoogleVerificationPolicy.isNavigationAllowed("about:blank"))
         assertFalse(GoogleVerificationPolicy.isNavigationAllowed("about:config"))
         assertFalse(GoogleVerificationPolicy.isNavigationAllowed("about:flags"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("about:"))
     }
 
     @Test
@@ -69,7 +71,28 @@ class GoogleVerificationPolicyTest {
         assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com:80/devicephoneverification/begin"))
     }
 
-    // ── 2. VECTORES DE EVASIÓN ESTRICTAMENTE BLOQUEADOS ──────────────────────
+    // ── 2. BLINDAJE CONTRA VECTORES DE EVASIÓN Y CONFUSIÓN DE AUTORIDAD (P1-01) ──
+
+    @Test
+    fun `bloquea confusion de autoridad y userinfo en URL`() {
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com:443@evil.example/devicephoneverification/begin?x=a b"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com@evil.example/devicephoneverification/begin"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://user:pass@accounts.google.com/devicephoneverification/begin"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://evil.com?user=accounts.google.com"))
+    }
+
+    @Test
+    fun `bloquea path traversal y prefijos sin delimitador de segmento (P1-03)`() {
+        // Traversal a signup
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification/../signup"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification/%2e%2e/signup"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification/..%2fmanageaccount"))
+        // Prefijos pegados sin barra ni signo de interrogación
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverificationotra"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/signin/challenge-admin"))
+        // Barras invertidas
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification\\test"))
+    }
 
     @Test
     fun `bloquea otros dominios de Google que no sean accounts`() {
@@ -108,6 +131,7 @@ class GoogleVerificationPolicyTest {
         assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/myaccount"))
         // Switcher general
         assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/b/0/ManageAccount"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/b"))
     }
 
     @Test
@@ -124,6 +148,9 @@ class GoogleVerificationPolicyTest {
         assertFalse(GoogleVerificationPolicy.isNavigationAllowed("data:text/html,<h1>Hacked</h1>"))
         // market
         assertFalse(GoogleVerificationPolicy.isNavigationAllowed("market://details?id=com.android.chrome"))
+        // sms y tel bloqueados para no salir a apps externas (P1-05)
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("sms:+12025550199?body=verify"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("tel:+5491112345678"))
     }
 
     @Test
@@ -135,19 +162,7 @@ class GoogleVerificationPolicyTest {
         assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://"))
     }
 
-    // ── 3. ESQUEMAS SMS Y TELÉFONO NATIVOS ───────────────────────────────────
-
-    @Test
-    fun `detecta correctamente acciones de SMS o telefono para verificación`() {
-        assertTrue(GoogleVerificationPolicy.isSmsOrTelAction("sms:+12025550199?body=verify"))
-        assertTrue(GoogleVerificationPolicy.isSmsOrTelAction("sms:123456"))
-        assertTrue(GoogleVerificationPolicy.isSmsOrTelAction("tel:+5491112345678"))
-        assertFalse(GoogleVerificationPolicy.isSmsOrTelAction("https://accounts.google.com/devicephoneverification/begin"))
-        assertFalse(GoogleVerificationPolicy.isSmsOrTelAction("mailto:test@example.com"))
-        assertFalse(GoogleVerificationPolicy.isSmsOrTelAction(null))
-    }
-
-    // ── 4. SUBRECURSOS (SCRIPTS, ESTILOS, FUENTES) ───────────────────────────
+    // ── 3. SUBRECURSOS (SCRIPTS, ESTILOS, FUENTES) ───────────────────────────
 
     @Test
     fun `permite subrecursos indispensables de Google`() {
@@ -160,7 +175,9 @@ class GoogleVerificationPolicyTest {
     }
 
     @Test
-    fun `bloquea subrecursos no kosher o publicitarios`() {
+    fun `bloquea subrecursos no kosher, wss o publicitarios (P2-01)`() {
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("wss://accounts.google.com/ws"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("data:text/html,<h1>Test</h1>"))
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"))
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://www.youtube.com/embed/dQw4w9WgXcQ"))
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://googleads.g.doubleclick.net/pagead/ads"))
@@ -168,14 +185,19 @@ class GoogleVerificationPolicyTest {
         assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://unrelated-domain.com/tracker.js"))
     }
 
-    // ── 5. DETECCIÓN DE ÉXITO DE VERIFICACIÓN ────────────────────────────────
+    // ── 4. DETECCIÓN DE ÉXITO DE VERIFICACIÓN (P1-02) ────────────────────────
 
     @Test
-    fun `detecta URLs de finalizacion exitosa`() {
+    fun `detecta URLs de finalizacion exitosa SOLO en URLs autorizadas`() {
         assertTrue(GoogleVerificationPolicy.isVerificationSuccess("https://accounts.google.com/devicephoneverification/success"))
         assertTrue(GoogleVerificationPolicy.isVerificationSuccess("https://accounts.google.com/v3/signin/challenge/iap/success"))
         assertTrue(GoogleVerificationPolicy.isVerificationSuccess("https://accounts.google.com/devicephoneverification/verify?flowComplete=true"))
         assertFalse(GoogleVerificationPolicy.isVerificationSuccess("https://accounts.google.com/devicephoneverification/begin"))
+
+        // Falsos positivos en dominios externos estrictamente bloqueados (P1-02)
+        assertFalse(GoogleVerificationPolicy.isVerificationSuccess("https://evil.example/devicephoneverification/success"))
+        assertFalse(GoogleVerificationPolicy.isVerificationSuccess("https://evil.example/?status=success"))
+        assertFalse(GoogleVerificationPolicy.isVerificationSuccess("https://accounts.google.com/signup?status=success"))
         assertFalse(GoogleVerificationPolicy.isVerificationSuccess(null))
     }
 }

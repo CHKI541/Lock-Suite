@@ -361,6 +361,15 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="accounts.google.com" android:pathPrefix="/signin/challenge" />
             </intent-filter>
+
+            <!-- Intent filter para capturar desafíos de recuperación legítimos -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="accounts.google.com" android:pathPrefix="/signin/recovery/challenge" />
+                <data android:scheme="https" android:host="accounts.google.com" android:pathPrefix="/v3/signin/recovery/challenge" />
+            </intent-filter>
         </activity>
 
     </application>

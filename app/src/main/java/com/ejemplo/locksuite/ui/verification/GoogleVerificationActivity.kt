@@ -1,13 +1,14 @@
 package com.ejemplo.locksuite.ui.verification
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.View
 import android.view.ViewGroup
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
@@ -20,6 +21,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,10 +35,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -60,7 +64,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -86,11 +94,16 @@ class GoogleVerificationActivity : ComponentActivity() {
         }
     }
 
+    private fun resetSafetyTimeout() {
+        mainHandler.removeCallbacks(safetyTimeoutRunnable)
+        mainHandler.postDelayed(safetyTimeoutRunnable, 10 * 60 * 1000L)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Programar timeout de 10 min
-        mainHandler.postDelayed(safetyTimeoutRunnable, 10 * 60 * 1000L)
+        // Programar timeout inicial de 10 min
+        resetSafetyTimeout()
 
         // Extraer URL inicial del Intent si vino por escaneo de QR / Intent.ACTION_VIEW
         val initialUrl = extractVerificationUrl(intent)
@@ -125,14 +138,7 @@ class GoogleVerificationActivity : ComponentActivity() {
                         initialUrl = initialUrl,
                         onClose = { finish() },
                         onRegisterWebView = { activeWebView = it },
-                        onDispatchSmsOrTel = { actionUrl ->
-                            try {
-                                val intent = Intent(Intent.ACTION_SENDTO, Uri.parse(actionUrl))
-                                startActivity(intent)
-                            } catch (e: Exception) {
-                                Toast.makeText(this, "No se pudo abrir app de mensajería: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        },
+                        onResetTimeout = { resetSafetyTimeout() },
                         onVerificationComplete = {
                             Toast.makeText(this, "✅ Verificación de Google completada", Toast.LENGTH_LONG).show()
                             mainHandler.postDelayed({ finish() }, 2000L)
@@ -146,6 +152,7 @@ class GoogleVerificationActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        resetSafetyTimeout() // Reiniciar temporizador ante nuevo desafío (P2-04)
         val newUrl = extractVerificationUrl(intent)
         if (newUrl != null && GoogleVerificationPolicy.isNavigationAllowed(newUrl)) {
             activeWebView?.loadUrl(newUrl)
@@ -170,6 +177,8 @@ class GoogleVerificationActivity : ComponentActivity() {
         mainHandler.removeCallbacks(safetyTimeoutRunnable)
         activeWebView?.let { wv ->
             wv.stopLoading()
+            wv.clearHistory()
+            wv.clearCache(true)
             (wv.parent as? ViewGroup)?.removeView(wv)
             wv.destroy()
         }
@@ -182,118 +191,142 @@ fun GoogleVerificationScreen(
     initialUrl: String?,
     onClose: () -> Unit,
     onRegisterWebView: (WebView) -> Unit,
-    onDispatchSmsOrTel: (String) -> Unit,
+    onResetTimeout: () -> Unit,
     onVerificationComplete: () -> Unit
 ) {
     var currentUrl by remember { mutableStateOf(initialUrl) }
     var inputUrl by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var progress by remember { mutableFloatStateOf(0f) }
-    var isLoading by remember { mutableStateOf(currentUrl != null) }
+    val focusManager = LocalFocusManager.current
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Barra superior nativa con badge de seguridad
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF1E1E1E))
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF121212))
+    ) {
+        // ── TOP BAR NATIVO CON INDICADOR DE ENTORNO SEGURO ──
+        Surface(
+            color = Color(0xFF1A1A1A),
+            tonalElevation = 4.dp,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Security,
-                    contentDescription = "Seguro",
-                    tint = Color(0xFF4CAF50),
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Column {
-                    Text(
-                        text = "Verificación de Google",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    )
-                    Text(
-                        text = "accounts.google.com (Confinado)",
-                        color = Color(0xFFB0B0B0),
-                        fontSize = 12.sp
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onClose) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Cerrar",
+                            tint = Color.White
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = Color(0xFF00E676),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Verificación Segura",
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            text = "accounts.google.com (Confinado)",
+                            color = Color(0xFF9E9E9E),
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xFF263238), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "KOSHER",
+                            color = Color(0xFFFFB300),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // Barra de progreso de carga web
+                if (progress in 0.01f..0.99f) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFFF9100),
+                        trackColor = Color(0xFF2C2C2C)
                     )
                 }
             }
-
-            IconButton(onClick = onClose) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Cerrar",
-                    tint = Color.White
-                )
-            }
         }
 
-        // Barra de progreso si está cargando
-        if (isLoading && progress < 1f) {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth(),
-                color = Color(0xFFFF9100),
-                trackColor = Color(0xFF333333)
-            )
-        }
-
-        // Si tenemos una URL válida, mostrar el WebView confinado
+        // ── CONTENIDO PRINCIPAL: WEBVIEW O ENTRADA MANUAL ──
         if (currentUrl != null) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                GoogleVerificationWebView(
-                    url = currentUrl!!,
-                    onProgressChanged = { p ->
-                        progress = p
-                        isLoading = p < 1f
-                    },
-                    onRegisterWebView = onRegisterWebView,
-                    onDispatchSmsOrTel = onDispatchSmsOrTel,
-                    onVerificationComplete = onVerificationComplete
-                )
-            }
+            GoogleVerificationWebView(
+                url = currentUrl!!,
+                onProgressChanged = { progress = it },
+                onRegisterWebView = onRegisterWebView,
+                onVerificationComplete = onVerificationComplete
+            )
         } else {
-            // Pantalla de entrada manual si se abrió sin URL
-            Column(
+            // Pantalla de entrada manual o espera de QR
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(20.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+                contentAlignment = Alignment.Center
             ) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier.padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
                             imageVector = Icons.Default.Lock,
-                            contentDescription = "Lock",
+                            contentDescription = null,
                             tint = Color(0xFFFF9100),
                             modifier = Modifier.size(48.dp)
                         )
+
                         Spacer(modifier = Modifier.height(16.dp))
+
                         Text(
-                            text = "Verificación Segura de Google",
+                            text = "Verificación de Google",
                             color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
                         )
+
                         Spacer(modifier = Modifier.height(8.dp))
+
                         Text(
-                            text = "Escanea con la app de Cámara el código QR de tu computadora, o pega el enlace completo aquí debajo.",
+                            text = "Escanea el código QR desde la cámara del celular o pega aquí el enlace de verificación proporcionado por Google.",
                             color = Color(0xFFB0B0B0),
-                            fontSize = 14.sp
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
                         )
+
                         Spacer(modifier = Modifier.height(20.dp))
 
                         OutlinedTextField(
@@ -302,35 +335,51 @@ fun GoogleVerificationScreen(
                                 inputUrl = it
                                 errorMessage = null
                             },
-                            label = { Text("Enlace de verificación") },
+                            label = { Text("Enlace de verificación de Google") },
                             placeholder = { Text("https://accounts.google.com/...") },
-                            modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Uri,
+                                imeAction = ImeAction.Go
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onGo = {
+                                    focusManager.clearFocus()
+                                    val trimmed = inputUrl.trim()
+                                    if (GoogleVerificationPolicy.isNavigationAllowed(trimmed)) {
+                                        currentUrl = trimmed
+                                        onResetTimeout()
+                                    } else {
+                                        errorMessage = "Enlace no válido o no autorizado."
+                                    }
+                                }
+                            ),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = Color(0xFFFF9100),
-                                unfocusedBorderColor = Color(0xFF555555),
+                                unfocusedBorderColor = Color(0xFF424242),
                                 focusedLabelColor = Color(0xFFFF9100),
-                                unfocusedLabelColor = Color(0xFF888888),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White
+                                cursorColor = Color(0xFFFF9100)
                             )
                         )
 
-                        if (errorMessage != null) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Warning,
-                                    contentDescription = "Error",
-                                    tint = Color(0xFFFF5252),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = errorMessage!!,
-                                    color = Color(0xFFFF5252),
-                                    fontSize = 12.sp
-                                )
+                        AnimatedVisibility(visible = errorMessage != null) {
+                            Column {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFF5252),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = errorMessage ?: "",
+                                        color = Color(0xFFFF5252),
+                                        fontSize = 12.sp
+                                    )
+                                }
                             }
                         }
 
@@ -338,9 +387,11 @@ fun GoogleVerificationScreen(
 
                         Button(
                             onClick = {
+                                focusManager.clearFocus()
                                 val trimmed = inputUrl.trim()
                                 if (GoogleVerificationPolicy.isNavigationAllowed(trimmed)) {
                                     currentUrl = trimmed
+                                    onResetTimeout()
                                 } else {
                                     errorMessage = "Enlace no válido. Debe pertenecer a accounts.google.com/devicephoneverification o desafío de inicio de sesión."
                                 }
@@ -362,13 +413,20 @@ fun GoogleVerificationScreen(
     }
 }
 
+// IDs estándar del sistema Android para acciones de edición en el portapapeles
+private val ALLOWED_EDIT_ACTION_IDS = setOf(
+    android.R.id.copy,
+    android.R.id.paste,
+    android.R.id.cut,
+    android.R.id.selectAll
+)
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun GoogleVerificationWebView(
     url: String,
     onProgressChanged: (Float) -> Unit,
     onRegisterWebView: (WebView) -> Unit,
-    onDispatchSmsOrTel: (String) -> Unit,
     onVerificationComplete: () -> Unit
 ) {
     AndroidView(
@@ -383,6 +441,12 @@ fun GoogleVerificationWebView(
                     return wrapActionModeCallback(callback)?.let { super.startActionMode(it, type) }
                 }
 
+                /**
+                 * Intercepta el menú de selección de texto y conserva ÚNICAMENTE
+                 * las opciones estándar del portapapeles (Copiar/Pegar) por su identificador
+                 * numérico del sistema (R.id.copy, R.id.paste), eliminando de raíz
+                 * "Buscar en la Web", "Compartir", etc. de forma independiente del idioma (P2-02).
+                 */
                 private fun wrapActionModeCallback(callback: android.view.ActionMode.Callback?): android.view.ActionMode.Callback? {
                     if (callback == null) return null
                     return object : android.view.ActionMode.Callback {
@@ -395,10 +459,7 @@ fun GoogleVerificationWebView(
                             menu?.let { m ->
                                 for (i in m.size() - 1 downTo 0) {
                                     val item = m.getItem(i)
-                                    val title = item.title?.toString()?.lowercase() ?: ""
-                                    if (title.contains("search") || title.contains("buscar") ||
-                                        title.contains("share") || title.contains("compartir")
-                                    ) {
+                                    if (item.itemId !in ALLOWED_EDIT_ACTION_IDS) {
                                         m.removeItem(item.itemId)
                                     }
                                 }
@@ -407,10 +468,7 @@ fun GoogleVerificationWebView(
                         }
 
                         override fun onActionItemClicked(mode: android.view.ActionMode?, item: android.view.MenuItem?): Boolean {
-                            val title = item?.title?.toString()?.lowercase() ?: ""
-                            if (title.contains("search") || title.contains("buscar") ||
-                                title.contains("share") || title.contains("compartir")
-                            ) {
+                            if (item?.itemId !in ALLOWED_EDIT_ACTION_IDS) {
                                 return true // Consumir sin ejecutar búsqueda externa
                             }
                             return callback.onActionItemClicked(mode, item)
@@ -449,34 +507,37 @@ fun GoogleVerificationWebView(
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                         val reqUrl = request?.url?.toString() ?: return true
 
-                        // Acción nativa SMS/Teléfono
-                        if (GoogleVerificationPolicy.isSmsOrTelAction(reqUrl)) {
-                            onDispatchSmsOrTel(reqUrl)
+                        // 1. OBLIGATORIO: Validar herméticamente antes de cualquier otra cosa (P1-02)
+                        if (!GoogleVerificationPolicy.isNavigationAllowed(reqUrl)) {
+                            Toast.makeText(context, "🚫 Navegación externa bloqueada por seguridad", Toast.LENGTH_SHORT).show()
                             return true
                         }
 
-                        // Verificación de éxito
+                        // 2. Solo si la navegación es válida, verificar si completó con éxito
                         if (GoogleVerificationPolicy.isVerificationSuccess(reqUrl)) {
                             onVerificationComplete()
-                            return false
+                            return false // Permitir renderizar la pantalla de éxito en accounts.google.com
                         }
 
-                        // Validación hermética de navegación
-                        if (GoogleVerificationPolicy.isNavigationAllowed(reqUrl)) {
-                            return false // Permitir dentro del WebView
-                        }
-
-                        // Bloquear cualquier intento de salir del confinamiento
-                        Toast.makeText(context, "🚫 Navegación externa bloqueada por seguridad", Toast.LENGTH_SHORT).show()
-                        return true
+                        // 3. Permitir dentro del WebView
+                        return false
                     }
 
                     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                         val reqUrl = request?.url?.toString() ?: return null
-                        if (!GoogleVerificationPolicy.isResourceAllowed(reqUrl)) {
-                            // Retornar 403 Forbidden vacío para recursos bloqueados (videos, ads, tracking)
-                            return WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", emptyMap(), null)
+
+                        // Defensa en profundidad (P1-04): si es el frame principal
+                        if (request.isForMainFrame) {
+                            if (!GoogleVerificationPolicy.isNavigationAllowed(reqUrl)) {
+                                return WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", emptyMap(), null)
+                            }
+                        } else {
+                            // Subrecursos (scripts, css, imágenes)
+                            if (!GoogleVerificationPolicy.isResourceAllowed(reqUrl)) {
+                                return WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", emptyMap(), null)
+                            }
                         }
+
                         return super.shouldInterceptRequest(view, request)
                     }
 
@@ -488,9 +549,11 @@ fun GoogleVerificationWebView(
 
                     override fun onPageStarted(view: WebView?, startingUrl: String?, favicon: android.graphics.Bitmap?) {
                         super.onPageStarted(view, startingUrl, favicon)
+                        // Guardia contra redirecciones POST o internas no capturadas por shouldOverrideUrlLoading (P1-04)
                         if (startingUrl != null && !GoogleVerificationPolicy.isNavigationAllowed(startingUrl)) {
                             view?.stopLoading()
                             Toast.makeText(context, "🚫 Navegación no autorizada detenida", Toast.LENGTH_SHORT).show()
+                            (context as? Activity)?.finish()
                         }
                     }
 
@@ -498,6 +561,7 @@ fun GoogleVerificationWebView(
                         super.doUpdateVisitedHistory(view, visitedUrl, isReload)
                         if (visitedUrl != null && !GoogleVerificationPolicy.isNavigationAllowed(visitedUrl)) {
                             view?.stopLoading()
+                            (context as? Activity)?.finish()
                         }
                     }
 
@@ -525,7 +589,7 @@ fun GoogleVerificationWebView(
 
                     override fun onShowFileChooser(
                         webView: WebView?,
-                        filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>?,
+                        filePathCallback: android.webkit.ValueCallback<Array<Uri>>?,
                         fileChooserParams: FileChooserParams?
                     ): Boolean {
                         filePathCallback?.onReceiveValue(null)

@@ -114,9 +114,14 @@ object GoogleVerificationPolicy {
             val uri = URI(trimmed)
             val scheme = uri.scheme?.lowercase(Locale.ROOT)
             val host = uri.host?.lowercase(Locale.ROOT)
-            val path = uri.rawPath ?: ""
+            val port = uri.port
+            val path = if (scheme == "about" || scheme == "sms" || scheme == "tel") {
+                uri.schemeSpecificPart ?: ""
+            } else {
+                uri.rawPath ?: ""
+            }
             if (scheme != null) {
-                return UriParts(scheme, host, path)
+                return UriParts(scheme, host, path, port)
             }
         } catch (_: Exception) {
             // Continuar con fallback manual
@@ -129,8 +134,8 @@ object GoogleVerificationPolicy {
             val scheme = trimmed.substring(0, schemeEnd).lowercase(Locale.ROOT)
             val rest = trimmed.substring(schemeEnd + 1)
 
-            if (scheme == "sms" || scheme == "tel") {
-                return UriParts(scheme, host = null, path = rest)
+            if (scheme == "sms" || scheme == "tel" || scheme == "about") {
+                return UriParts(scheme, host = null, path = rest, port = -1)
             }
 
             if (!rest.startsWith("//")) return null
@@ -144,7 +149,14 @@ object GoogleVerificationPolicy {
                 .minOrNull() ?: afterSlashes.length
 
             val hostPort = afterSlashes.substring(0, hostEnd).lowercase(Locale.ROOT)
-            val host = if (hostPort.contains(":")) hostPort.substring(0, hostPort.indexOf(":")) else hostPort
+            val (host, port) = if (hostPort.contains(":")) {
+                val colonIdx = hostPort.indexOf(":")
+                val parsedHost = hostPort.substring(0, colonIdx)
+                val parsedPort = hostPort.substring(colonIdx + 1).toIntOrNull() ?: -1
+                Pair(parsedHost, parsedPort)
+            } else {
+                Pair(hostPort, -1)
+            }
 
             val path = if (pathSlash >= 0) {
                 val pathEnd = listOf(queryQuestion, hashMark)
@@ -155,7 +167,7 @@ object GoogleVerificationPolicy {
                 ""
             }
 
-            return UriParts(scheme, host, path)
+            return UriParts(scheme, host, path, port)
         } catch (_: Exception) {
             return null
         }
@@ -164,7 +176,8 @@ object GoogleVerificationPolicy {
     data class UriParts(
         val scheme: String,
         val host: String?,
-        val path: String
+        val path: String,
+        val port: Int = -1
     )
 
     /**
@@ -173,6 +186,7 @@ object GoogleVerificationPolicy {
      * Reglas estrictas:
      * - Debe ser https://
      * - Host exacto accounts.google.com
+     * - Puerto estándar 443 o no especificado (-1)
      * - Debe empezar con un prefijo permitido de verificación
      * - No debe coincidir con ningún prefijo prohibido
      */
@@ -180,13 +194,16 @@ object GoogleVerificationPolicy {
         if (url == null) return false
         val parts = parseUriParts(url) ?: return false
 
-        // about:blank se usa internamente por el WebView al inicializar
-        if (parts.scheme == "about" && (parts.path.isEmpty() || parts.path == "blank")) {
-            return true
+        // Únicamente about:blank se usa internamente por el WebView al inicializar
+        if (parts.scheme == "about") {
+            return parts.path.lowercase(Locale.ROOT) == "blank"
         }
 
         // Solo https permitido para navegar
         if (parts.scheme != "https") return false
+
+        // Puerto estándar HTTPS (443 o -1 omitido)
+        if (parts.port != -1 && parts.port != 443) return false
 
         val host = parts.host ?: return false
         // Coincidencia exacta de host. Jamás sufijo (.google.com abriría media web).

@@ -52,8 +52,21 @@ class GoogleVerificationPolicyTest {
     }
 
     @Test
-    fun `permite about blank interno`() {
+    fun `permite about blank interno pero bloquea otros esquemas about`() {
         assertTrue(GoogleVerificationPolicy.isNavigationAllowed("about:blank"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("about:config"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("about:flags"))
+    }
+
+    @Test
+    fun `valida estrictamente el puerto HTTPS`() {
+        // Puerto implícito (-1) y estándar (443) permitidos
+        assertTrue(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com/devicephoneverification/begin"))
+        assertTrue(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com:443/devicephoneverification/begin"))
+        // Puertos no estándar rechazados
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com:8443/devicephoneverification/begin"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com:8080/devicephoneverification/begin"))
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("https://accounts.google.com:80/devicephoneverification/begin"))
     }
 
     // ── 2. VECTORES DE EVASIÓN ESTRICTAMENTE BLOQUEADOS ──────────────────────

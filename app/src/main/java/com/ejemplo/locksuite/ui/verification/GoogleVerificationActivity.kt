@@ -486,6 +486,21 @@ fun GoogleVerificationWebView(
                         Toast.makeText(context, "Error de seguridad SSL al conectar con Google", Toast.LENGTH_SHORT).show()
                     }
 
+                    override fun onPageStarted(view: WebView?, startingUrl: String?, favicon: android.graphics.Bitmap?) {
+                        super.onPageStarted(view, startingUrl, favicon)
+                        if (startingUrl != null && !GoogleVerificationPolicy.isNavigationAllowed(startingUrl)) {
+                            view?.stopLoading()
+                            Toast.makeText(context, "🚫 Navegación no autorizada detenida", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+
+                    override fun doUpdateVisitedHistory(view: WebView?, visitedUrl: String?, isReload: Boolean) {
+                        super.doUpdateVisitedHistory(view, visitedUrl, isReload)
+                        if (visitedUrl != null && !GoogleVerificationPolicy.isNavigationAllowed(visitedUrl)) {
+                            view?.stopLoading()
+                        }
+                    }
+
                     override fun onPageFinished(view: WebView?, finishedUrl: String?) {
                         super.onPageFinished(view, finishedUrl)
                         if (GoogleVerificationPolicy.isVerificationSuccess(finishedUrl)) {
@@ -501,6 +516,19 @@ fun GoogleVerificationWebView(
 
                     override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?): Boolean {
                         // Bloquea estrictamente popups y window.open
+                        return false
+                    }
+
+                    override fun onGeolocationPermissionsShowPrompt(origin: String?, callback: android.webkit.GeolocationPermissions.Callback?) {
+                        callback?.invoke(origin, false, false)
+                    }
+
+                    override fun onShowFileChooser(
+                        webView: WebView?,
+                        filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>?,
+                        fileChooserParams: FileChooserParams?
+                    ): Boolean {
+                        filePathCallback?.onReceiveValue(null)
                         return false
                     }
                 }

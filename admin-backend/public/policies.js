@@ -513,7 +513,6 @@ window.LOCKSUITE_POLICIES = {
   "handledSeparately": [
     "kioskLockTaskEnabled",
     "locksuiteSuspended",
-    "nokiaKeypadMode",
     "nokiaTouchEnabled"
   ],
   "switchesWithoutCommand": [],

@@ -154,6 +154,14 @@ dependencies {
 
     // MediaPipe Tasks-Vision (AI Image Blocker)
     implementation(libs.mediapipe.tasks.vision)
+
+    // Escáner de QR del microvisor de verificaciones de Google (B.92, 22/10/2026).
+    // CameraX para la vista previa y los cuadros; ZXing (solo Java, sin servicios de
+    // Google ni red) para leer el QR. Ver ui/verification/GoogleQrScanner.kt.
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
 }
 
 

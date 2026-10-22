@@ -1,6 +1,9 @@
 package com.ejemplo.locksuite.mdm
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -199,5 +202,165 @@ class GoogleVerificationPolicyTest {
         assertFalse(GoogleVerificationPolicy.isVerificationSuccess("https://evil.example/?status=success"))
         assertFalse(GoogleVerificationPolicy.isVerificationSuccess("https://accounts.google.com/signup?status=success"))
         assertFalse(GoogleVerificationPolicy.isVerificationSuccess(null))
+    }
+
+    // ── 5. REVISIÓN DEL 22/10/2026 ───────────────────────────────────────────
+
+    @Test
+    fun `acepta el QR real con su forma exacta (token sintetico del mismo largo)`() {
+        // Forma medida del QR de la captura del dueño: /devicephoneverification/begin con
+        // flow, plt (base64url), dsh (con ':') y hl. El token es inventado.
+        val plt = "AKgnsb" + "x".repeat(200)
+        val url = "https://accounts.google.com/devicephoneverification/begin?flow=browser&plt=$plt&dsh=S-1272000000:1792536000000000&hl=es-419"
+        assertTrue(GoogleVerificationPolicy.isNavigationAllowed(url))
+        assertTrue(GoogleVerificationPolicy.isSmsHandoffContext(url))
+    }
+
+    @Test
+    fun `permite el RPC de las apps de Google como subrecurso (v3 y la del QR)`() {
+        // Sin esto el desafío v3 se dibujaba pero no podía responder (403 al batchexecute).
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/v3/signin/_/AccountsSignInUi/data/batchexecute?rpcids=abc"))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/devicephoneverification/_/DevicePhoneVerificationUi/data/batchexecute?rpcids=x"))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/_/signin/challenge?hl=es"))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/_/mss/boq-identity/_/js/k=x"))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/generate_204"))
+        assertTrue(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/devicephoneverification"))
+    }
+
+    @Test
+    fun `no deja como subrecurso los redirectores ni lo que no es del microvisor`() {
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/CheckCookie?continue=https://www.youtube.com/"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/ServiceLogin?continue=https://www.google.com/"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/signup/v2/webcreateaccount"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/b/0/ManageAccount"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com/devicephoneverificationotra/x"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("https://accounts.google.com:8443/_/js/x"))
+        assertFalse(GoogleVerificationPolicy.isResourceAllowed("http://accounts.google.com/_/js/x"))
+    }
+
+    @Test
+    fun `el SMS de Google se acepta y conserva numero y codigo exactos`() {
+        val sms = GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567?body=G-123456%20verifica")
+        assertNotNull(sms)
+        assertEquals("+15551234567", sms!!.recipient)
+        assertEquals("G-123456 verifica", sms.body)
+
+        val smsto = GoogleVerificationPolicy.parseSmsHandoff("SMSTO:+442071234567?body=abc")
+        assertEquals("+442071234567", smsto!!.recipient)
+        assertEquals("abc", smsto.body)
+
+        // Estilo iOS y con barras.
+        assertEquals("ABC", GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567;?&body=ABC")!!.body)
+        assertEquals("ABC", GoogleVerificationPolicy.parseSmsHandoff("sms://+15551234567?body=ABC")!!.body)
+        // sms_body también.
+        assertEquals("X1", GoogleVerificationPolicy.parseSmsHandoff("sms:24444?sms_body=X1")!!.body)
+        // Número corto de servicio y separadores visuales.
+        assertEquals("24444", GoogleVerificationPolicy.parseSmsHandoff("sms:24444?body=1")!!.recipient)
+        assertEquals("+5491112345678", GoogleVerificationPolicy.parseSmsHandoff("sms:+54%209%2011-1234-5678?body=1")!!.recipient)
+        // Sin texto: se acepta (borrador vacío) y no inventa nada.
+        assertEquals("", GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567")!!.body)
+    }
+
+    @Test
+    fun `acepta las otras formas conocidas de abrir un SMS (iOS e intent de Android)`() {
+        // iOS 8+: '&body=' sin '?'.
+        val ios = GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567&body=COD%2B1")
+        assertEquals("+15551234567", ios!!.recipient)
+        assertEquals("COD+1", ios.body)
+        // intent: de SMS. Se toman SOLO número y texto: el paquete y los otros extras no importan.
+        val intent = GoogleVerificationPolicy.parseSmsHandoff(
+            "intent://+15551234567#Intent;scheme=smsto;package=com.evil.app;S.extra=x;S.sms_body=G-1%20ok;end"
+        )
+        assertEquals("+15551234567", intent!!.recipient)
+        assertEquals("G-1 ok", intent.body)
+        assertEquals("ABC", GoogleVerificationPolicy.parseSmsHandoff("intent:24444#Intent;scheme=sms;S.sms_body=ABC;end")!!.body)
+        // Un intent que NO es de SMS sigue sin servir (y en el microvisor se bloquea como antes).
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("intent://www.youtube.com/#Intent;scheme=https;package=com.android.chrome;end"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("intent://+15551234567#Intent;scheme=tel;end"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("intent://+15551234567#Intent;scheme=smsto"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("intent://+15551234567,+15557654321#Intent;scheme=smsto;S.sms_body=x;end"))
+    }
+
+    @Test
+    fun `el codigo del SMS no pierde el signo mas (URLDecoder lo convertiria en espacio)`() {
+        val sms = GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567?body=a+b%2Bc")
+        assertEquals("a+b+c", sms!!.body)
+        // UTF-8 de verdad, también en hebreo.
+        assertEquals("קוד 12", GoogleVerificationPolicy.parseSmsHandoff("sms:+97221234567?body=%D7%A7%D7%95%D7%93%2012")!!.body)
+    }
+
+    @Test
+    fun `rechaza SMS armados para otra cosa`() {
+        // Varios destinatarios.
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567,+15557654321?body=x"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567%2C+15557654321?body=x"))
+        // Letras o largo imposible.
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:GOOGLE?body=x"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:12?body=x"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+1234567890123456?body=x"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:?body=x"))
+        // Texto demasiado largo o con caracteres de control.
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567?body=" + "a".repeat(321)))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567?body=a%0Ab"))
+        // Escapes rotos o UTF-8 inválido.
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567?body=%ZZ"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567?body=%E2%28"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+15551234567?body=%4"))
+        // Dígitos que no son ASCII.
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("sms:+١٥٥٥١٢٣٤٥٦٧?body=x"))
+        // Otros esquemas.
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("tel:+15551234567"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("mms:+15551234567?body=x"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("intent://x#Intent;scheme=sms;end"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff("https://accounts.google.com/devicephoneverification/begin"))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff(null))
+        assertNull(GoogleVerificationPolicy.parseSmsHandoff(""))
+    }
+
+    @Test
+    fun `el SMS solo se acepta desde la verificacion por QR`() {
+        assertTrue(GoogleVerificationPolicy.isSmsHandoffContext("https://accounts.google.com/devicephoneverification/consent?x=1"))
+        assertTrue(GoogleVerificationPolicy.isSmsHandoffContext("https://accounts.google.com/devicephoneverification/verify"))
+        assertTrue(GoogleVerificationPolicy.isSmsHandoffContext("https://accounts.google.com/devicephoneverification"))
+        // Otras pantallas del propio microvisor, no.
+        assertFalse(GoogleVerificationPolicy.isSmsHandoffContext("https://accounts.google.com/v3/signin/challenge/ipp"))
+        assertFalse(GoogleVerificationPolicy.isSmsHandoffContext("https://accounts.google.com/CheckCookie"))
+        assertFalse(GoogleVerificationPolicy.isSmsHandoffContext("about:blank"))
+        assertFalse(GoogleVerificationPolicy.isSmsHandoffContext("https://accounts.google.com/devicephoneverificationotra"))
+        // Afuera, nunca.
+        assertFalse(GoogleVerificationPolicy.isSmsHandoffContext("https://evil.example/devicephoneverification/consent"))
+        assertFalse(GoogleVerificationPolicy.isSmsHandoffContext("https://accounts.google.com.evil.com/devicephoneverification/consent"))
+        assertFalse(GoogleVerificationPolicy.isSmsHandoffContext(null))
+        // Y sms: sigue sin ser una navegación del WebView.
+        assertFalse(GoogleVerificationPolicy.isNavigationAllowed("sms:+15551234567?body=x"))
+    }
+
+    @Test
+    fun `el registro nunca guarda la query ni el contenido del SMS`() {
+        val log = GoogleVerificationPolicy.describeForLog("https://accounts.google.com/devicephoneverification/begin?flow=browser&plt=SECRETO")
+        assertEquals("https://accounts.google.com/devicephoneverification/begin", log)
+        assertFalse(GoogleVerificationPolicy.describeForLog("https://www.youtube.com/watch?v=SECRETO#t=1").contains("SECRETO"))
+        assertEquals("sms:(oculto)", GoogleVerificationPolicy.describeForLog("sms:+15551234567?body=SECRETO"))
+        assertEquals("data:(oculto)", GoogleVerificationPolicy.describeForLog("data:text/html,SECRETO"))
+        assertTrue(GoogleVerificationPolicy.describeForLog("https://accounts.google.com/" + "a".repeat(500)).length <= 120)
+        // La forma de un SMS rechazado sirve para diagnosticar sin anotar el código.
+        val shape = GoogleVerificationPolicy.describeSmsShapeForLog("sms:+16505550123?body=G-123%20OK")
+        assertEquals("sms:+99999999999?xxxx=x-999%99xx", shape)
+        assertFalse(shape.contains("650"))
+        assertFalse(shape.contains("G-123"))
+    }
+
+    @Test
+    fun `el User-Agent es de Chrome con la version real del WebView y sin marcas de WebView`() {
+        val webViewUa = "Mozilla/5.0 (Linux; Android 13; SM-A065M Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/141.0.7390.122 Mobile Safari/537.36"
+        val ua = GoogleVerificationPolicy.chromeLikeUserAgent(webViewUa)
+        assertTrue(ua.contains("Chrome/141.0.0.0"))
+        assertFalse(ua.contains("; wv"))
+        assertFalse(ua.contains("Version/4.0"))
+        assertFalse(ua.contains("LockSuite"))
+        assertTrue(ua.endsWith("Mobile Safari/537.36"))
+        // Sin dato o con basura: una versión fija razonable, nunca vacío.
+        assertTrue(GoogleVerificationPolicy.chromeLikeUserAgent(null).contains("Chrome/"))
+        assertTrue(GoogleVerificationPolicy.chromeLikeUserAgent("algo raro").contains("Chrome/"))
     }
 }

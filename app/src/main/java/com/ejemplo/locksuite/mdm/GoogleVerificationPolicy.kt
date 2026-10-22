@@ -1,13 +1,16 @@
 package com.ejemplo.locksuite.mdm
 
+import java.io.ByteArrayOutputStream
 import java.net.URI
-import java.net.URLDecoder
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 /**
  * GoogleVerificationPolicy — Motor de confinamiento hermético para el Microvisor
- * de Verificaciones de Google (B.92, 20/10/2026).
+ * de Verificaciones de Google (B.92, 20/10/2026; revisado el 22/10/2026).
  *
  * ═════════════════════════════════════════════════════════════════════════════
  * QUÉ PROBLEMA RESUELVE
@@ -15,9 +18,8 @@ import java.util.Locale
  * En un celular kosher administrado por LockSuite, los navegadores están
  * suspendidos para impedir la navegación libre por internet.
  *
- * Cuando el usuario inicia sesión en una computadora, Google puede exigir
- * un desafío IAP (Identity / Anti-Abuse Protection) escaneando un código QR
- * con el teléfono para validar la posesión del dispositivo y la línea SIM:
+ * Cuando el usuario inicia sesión o crea una cuenta en una computadora, Google puede
+ * exigir un desafío escaneando un código QR con el teléfono para validar la línea:
  *   `https://accounts.google.com/devicephoneverification/begin?flow=browser&plt=...`
  *
  * Esta clase es una FUNCIÓN PURA (sin dependencias del framework de Android)
@@ -25,6 +27,25 @@ import java.util.Locale
  * pantallas legítimas de verificación de Google, bloqueando de forma absoluta
  * cualquier intento de escape hacia búsquedas, YouTube, Mi Actividad, creación
  * de cuentas o la web abierta.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * ⚠️ DOS COSAS QUE HAY QUE SABER ANTES DE TOCAR ESTO (22/10/2026)
+ * ═════════════════════════════════════════════════════════════════════════════
+ * 1. **Este WebView NO pasa por la Capa 2.** La VPN de DNS excluye a LockSuite de su
+ *    propio túnel (`addDisallowedApplication(packageName)` en `KosherVpnService`), y
+ *    la Capa 3 ignora los eventos del propio paquete. O sea que lo que decide esta
+ *    clase es la ÚNICA barrera del microvisor. Ante la duda, se bloquea.
+ *
+ * 2. **El flujo del QR TERMINA EN UN SMS.** La página de Google lo dice textual:
+ *    *"Your phone will open an SMS message with a code you need to send to verify your
+ *    phone"* (`/devicephoneverification/consent`, botón "Send SMS"). El botón navega a
+ *    un `sms:` con el número de Google y el código. La versión del 20/10 bloqueaba
+ *    todo `sms:` como "navegación externa", así que **la verificación no podía
+ *    terminar nunca**. Ahora el `sms:` NO es una navegación (sigue siendo `false` en
+ *    [isNavigationAllowed]): es un pedido aparte, que solo se acepta desde una página
+ *    de `/devicephoneverification` ([isSmsHandoffContext]), se valida entero
+ *    ([parseSmsHandoff]) y se entrega a la app de Mensajes con el borrador armado. El
+ *    usuario lo envía él mismo desde Mensajes: nada sale sin que lo vea.
  */
 object GoogleVerificationPolicy {
 
@@ -53,6 +74,9 @@ object GoogleVerificationPolicy {
         // Verificación de seguridad intermedia
         "/speedbump/gapverify"
     )
+
+    /** La raíz de la verificación por QR: es el único lugar desde donde se acepta un `sms:`. */
+    private const val DEVICE_PHONE_VERIFICATION_ROOT = "/devicephoneverification"
 
     /**
      * Rutas expresamente PROHIBIDAS dentro de [ALLOWED_NAV_HOST], aunque
@@ -100,6 +124,39 @@ object GoogleVerificationPolicy {
         "google-analytics.com",
         "myactivity.google.com",
         "myaccount.google.com"
+    )
+
+    /**
+     * Subrecursos (XHR, scripts, estilos, imágenes) que la página puede pedirle a
+     * `accounts.google.com`. NO son navegación: la barra principal sigue atada a
+     * [ALLOWED_PATH_PREFIXES].
+     *
+     * 22/10: la lista del 20/10 solo dejaba `/_/mss/`, `/_/js/` y los prefijos de
+     * página. Pero las apps de Google (Wiz/boq) hablan con su servidor por
+     * `<raíz de la app>/_/<App>/data/batchexecute`: el desafío v3 llama a
+     * `/v3/signin/_/AccountsSignInUi/data/batchexecute`, que NO empieza con
+     * `/v3/signin/challenge`, y recibía un 403 — la pantalla se dibujaba y no podía
+     * responder. Ahora se permite la raíz de cada app confinada y el árbol `/_/`
+     * (estáticos y RPC de Google). `/checkcookie` salió de esta lista: es un
+     * redirector (`continue=`) y como subrecurso no hace falta para nada.
+     */
+    private val ALLOWED_ACCOUNTS_RESOURCE_ROOTS = listOf(
+        "/_/",
+        "/devicephoneverification/",
+        "/v3/signin/",
+        "/signin/challenge/",
+        "/signin/recovery/",
+        "/embedded/setup/",
+        "/speedbump/"
+    )
+
+    /** Rutas exactas de servicio (en minúscula) que la UI de sesión pide como subrecurso. */
+    private val ALLOWED_ACCOUNTS_RESOURCE_EXACT = setOf(
+        "/devicephoneverification",
+        "/generate_204",
+        "/favicon.ico",
+        "/listaccounts",
+        "/rotatecookies"
     )
 
     data class ParsedUri(
@@ -199,6 +256,9 @@ object GoogleVerificationPolicy {
      * - Sin userinfo ni ambigüedad de autoridad
      * - Ruta normalizada que coincida con un prefijo autorizado con delimitador de segmento
      * - No coincidir con ninguna ruta prohibida (creación de cuenta, gestión, etc.)
+     *
+     * `sms:` devuelve `false` a propósito: no es una navegación del WebView. Ver
+     * [parseSmsHandoff].
      */
     fun isNavigationAllowed(url: String?): Boolean {
         if (url == null) return false
@@ -262,15 +322,11 @@ object GoogleVerificationPolicy {
             return false
         }
 
-        // Si el host es accounts.google.com, verificar que sea un subrecurso válido o endpoint de verificación
+        // accounts.google.com: solo las raíces de las apps confinadas y el árbol `/_/`.
         if (host == ALLOWED_NAV_HOST) {
             val path = parsed.canonicalPath.lowercase(Locale.ROOT)
-            return path.startsWith("/_/mss/") ||
-                    path.startsWith("/_/js/") ||
-                    path.startsWith("/devicephoneverification") ||
-                    path.startsWith("/v3/signin/challenge") ||
-                    path.startsWith("/signin/challenge") ||
-                    path.startsWith("/checkcookie")
+            if (path in ALLOWED_ACCOUNTS_RESOURCE_EXACT) return true
+            return ALLOWED_ACCOUNTS_RESOURCE_ROOTS.any { path.startsWith(it) }
         }
 
         // Host exacto permitido
@@ -286,6 +342,11 @@ object GoogleVerificationPolicy {
      * ⚠️ SEGURIDAD CRÍTICA (P1-02):
      * Debe pertenecer OBLIGATORIAMENTE a una navegación permitida en accounts.google.com.
      * Jamás evalúa subcadenas sueltas en URLs externas.
+     *
+     * Nota (22/10): la pantalla real de Google (`/devicephoneverification/verify`)
+     * cambia de estado sin cambiar de URL, así que esto casi nunca va a disparar en el
+     * flujo del QR. No es un problema: el usuario cierra con la X cuando la computadora
+     * avanza. Lo que no puede pasar es lo contrario (un falso éxito fuera de Google).
      */
     fun isVerificationSuccess(url: String?): Boolean {
         if (url == null) return false
@@ -301,5 +362,259 @@ object GoogleVerificationPolicy {
                 pathLower.contains("/challenge/iap/success") ||
                 queryLower.contains("flowcomplete=true") ||
                 queryLower.contains("status=success")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SMS de verificación (22/10/2026)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Un SMS ya armado por Google, listo para dejarlo como borrador en Mensajes. */
+    data class SmsHandoff(val recipient: String, val body: String)
+
+    /** Un código de verificación entra holgado; un texto largo no es un código. */
+    private const val SMS_MAX_BODY_CHARS = 320
+
+    /** E.164 admite hasta 15 dígitos; los números cortos de servicio tienen 3 o más. */
+    private const val SMS_MIN_DIGITS = 3
+    private const val SMS_MAX_DIGITS = 15
+
+    /**
+     * ¿Se puede aceptar un `sms:` estando el WebView en esta página?
+     *
+     * Solo desde la verificación por QR (`/devicephoneverification` y lo que cuelga de
+     * ahí), y solo si la página misma es una navegación permitida. Cualquier otra
+     * pantalla —un desafío de inicio de sesión, `about:blank`, lo que sea— no puede
+     * abrir Mensajes.
+     */
+    fun isSmsHandoffContext(pageUrl: String?): Boolean {
+        if (!isNavigationAllowed(pageUrl)) return false
+        val parsed = parseStrictUri(pageUrl) ?: return false
+        if (parsed.host != ALLOWED_NAV_HOST) return false
+        val path = parsed.canonicalPath.lowercase(Locale.ROOT)
+        return path == DEVICE_PHONE_VERIFICATION_ROOT ||
+                path.startsWith("$DEVICE_PHONE_VERIFICATION_ROOT/")
+    }
+
+    /**
+     * Valida un `sms:`/`smsto:` (RFC 5724) y devuelve destinatario y texto, o `null`.
+     *
+     * Formatos aceptados: `sms:+15551234567?body=ABC`, `smsto:+1555…?body=…`,
+     * `sms:+1555…;?&body=…` y `sms:+1555…&body=…` (los de iOS), `sms://+1555…?body=…`
+     * y `intent://+1555…#Intent;scheme=smsto;S.sms_body=…;end` (de ese intent se usan
+     * solo número y texto). Cómo arma Google el suyo no se pudo observar desde acá: por
+     * eso se aceptan todas las formas conocidas, con las mismas reglas.
+     *
+     * Reglas, todas a propósito:
+     * - **Un solo destinatario** de 3 a 15 dígitos (con `+` adelante opcional; los
+     *   separadores visuales `-`, `.`, `(`, `)` se sacan). Una lista con comas se rechaza.
+     * - El texto se decodifica por porcentaje **sin** convertir `+` en espacio
+     *   (`URLDecoder` sí lo hace, y un código con `+` llegaría cambiado a Google, que
+     *   entonces no verifica nada).
+     * - Texto de hasta [SMS_MAX_BODY_CHARS] caracteres y sin caracteres de control.
+     * - Cualquier escape mal formado o UTF-8 inválido: `null`.
+     */
+    fun parseSmsHandoff(url: String?): SmsHandoff? {
+        if (url.isNullOrBlank()) return null
+        val s = url.trim()
+        if (s.length > 2048) return null
+        for (ch in s) {
+            if (ch < ' ' || ch == '\u007f') return null
+        }
+
+        val colon = s.indexOf(':')
+        if (colon <= 0) return null
+        val scheme = s.substring(0, colon).lowercase(Locale.ROOT)
+        if (scheme == "intent") return parseIntentSmsHandoff(s.substring(colon + 1))
+        if (scheme != "sms" && scheme != "smsto") return null
+
+        var rest = s.substring(colon + 1)
+        if (rest.startsWith("//")) rest = rest.substring(2)
+        return parseSmsParts(rest, extraBody = null)
+    }
+
+    /**
+     * `intent:` que en realidad es un SMS (`…#Intent;scheme=smsto;S.sms_body=…;end`):
+     * algunas páginas abren Mensajes así en Android. Del intent se usan SOLO el número y
+     * el texto; paquete, componente, acción y cualquier otro extra se descartan, y lo que
+     * se abre después es el mismo borrador en la app de SMS predeterminada.
+     */
+    private fun parseIntentSmsHandoff(afterScheme: String): SmsHandoff? {
+        val hash = afterScheme.indexOf("#Intent;")
+        if (hash < 0 || !afterScheme.endsWith(";end")) return null
+        var ssp = afterScheme.substring(0, hash)
+        if (ssp.startsWith("//")) ssp = ssp.substring(2)
+        val fields = afterScheme.substring(hash + "#Intent;".length, afterScheme.length - ";end".length)
+        var innerScheme: String? = null
+        var body: String? = null
+        for (field in fields.split(';')) {
+            when {
+                field.startsWith("scheme=") -> innerScheme = field.substring("scheme=".length).lowercase(Locale.ROOT)
+                field.startsWith("S.sms_body=") -> body = percentDecode(field.substring("S.sms_body=".length)) ?: return null
+            }
+        }
+        if (innerScheme != "sms" && innerScheme != "smsto") return null
+        return parseSmsParts(ssp, extraBody = body)
+    }
+
+    /** Destinatario + query de un `sms:` ya sin el esquema. */
+    private fun parseSmsParts(rest: String, extraBody: String?): SmsHandoff? {
+        // `?body=` es lo estándar; `&body=` sin `?` es la variante de iOS 8+.
+        val q = rest.indexOf('?').let { if (it >= 0) it else rest.indexOf('&') }
+        val recipientPart = if (q >= 0) rest.substring(0, q) else rest
+        val query = if (q >= 0) rest.substring(q + 1) else ""
+
+        // `;via=...` / `;?&body=` (iOS): todo lo que va después de ';' no es el número.
+        val semi = recipientPart.indexOf(';')
+        val rawRecipient = if (semi >= 0) recipientPart.substring(0, semi) else recipientPart
+
+        val decodedRecipient = percentDecode(rawRecipient) ?: return null
+        if (decodedRecipient.contains(',')) return null
+        val recipient = normalizeRecipient(decodedRecipient) ?: return null
+
+        var body = extraBody ?: ""
+        if (extraBody == null && query.isNotEmpty()) {
+            for (param in query.split('&')) {
+                if (param.isEmpty()) continue
+                val eq = param.indexOf('=')
+                val key = (if (eq >= 0) param.substring(0, eq) else param).lowercase(Locale.ROOT)
+                if (key == "body" || key == "sms_body") {
+                    body = percentDecode(if (eq >= 0) param.substring(eq + 1) else "") ?: return null
+                    break
+                }
+            }
+        }
+
+        if (body.length > SMS_MAX_BODY_CHARS) return null
+        for (ch in body) {
+            if (ch < ' ' || ch == '\u007f') return null
+        }
+
+        return SmsHandoff(recipient, body)
+    }
+
+    private fun normalizeRecipient(raw: String): String? {
+        val compact = StringBuilder()
+        for (ch in raw.trim()) {
+            when (ch) {
+                ' ', '-', '.', '(', ')' -> continue
+                else -> compact.append(ch)
+            }
+        }
+        val s = compact.toString()
+        val digits = if (s.startsWith("+")) s.substring(1) else s
+        if (digits.length < SMS_MIN_DIGITS || digits.length > SMS_MAX_DIGITS) return null
+        if (!digits.all { it in '0'..'9' }) return null
+        return s
+    }
+
+    /** Decodificación `%XX` estricta, en UTF-8, que deja el `+` como `+`. */
+    private fun percentDecode(s: String): String? {
+        if (s.indexOf('%') < 0) return s
+        val out = ByteArrayOutputStream(s.length)
+        var i = 0
+        while (i < s.length) {
+            val ch = s[i]
+            if (ch == '%') {
+                if (i + 2 >= s.length) return null
+                val hi = hexValue(s[i + 1])
+                val lo = hexValue(s[i + 2])
+                if (hi < 0 || lo < 0) return null
+                out.write((hi shl 4) or lo)
+                i += 3
+            } else {
+                val bytes = ch.toString().toByteArray(StandardCharsets.UTF_8)
+                out.write(bytes, 0, bytes.size)
+                i++
+            }
+        }
+        return try {
+            StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(out.toByteArray()))
+                .toString()
+        } catch (_: CharacterCodingException) {
+            null
+        }
+    }
+
+    /** Solo ASCII: `Character.digit` acepta también dígitos de otros alfabetos. */
+    private fun hexValue(c: Char): Int = when (c) {
+        in '0'..'9' -> c - '0'
+        in 'a'..'f' -> c - 'a' + 10
+        in 'A'..'F' -> c - 'A' + 10
+        else -> -1
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Utilidades (22/10/2026)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * La FORMA de un pedido de SMS rechazado, sin su contenido: dígitos → `9`, letras →
+     * `x`, el resto (`:`, `?`, `=`, `&`, `;`, `%`, `#`…) tal cual. Ejemplo:
+     * `sms:+16505550123?body=G-123` → `sms:+99999999999?xxxx=x-999`. Alcanza para ver en
+     * `logcat` qué formato usó Google si alguna vez no se reconoce, sin anotar el código.
+     */
+    fun describeSmsShapeForLog(url: String?): String {
+        if (url.isNullOrBlank()) return "(vacía)"
+        val s = url.trim()
+        val colon = s.indexOf(':')
+        if (colon <= 0) return "(inválida)"
+        val out = StringBuilder(s.substring(0, colon).lowercase(Locale.ROOT)).append(':')
+        for (ch in s.substring(colon + 1).take(160)) {
+            out.append(
+                when {
+                    ch in '0'..'9' -> '9'
+                    ch.isLetter() -> 'x'
+                    ch < ' ' -> '?'
+                    else -> ch
+                }
+            )
+        }
+        return out.toString()
+    }
+
+    /** Versión de Chrome que se usa si el WebView no publica la suya. */
+    private const val FALLBACK_CHROME_MAJOR = 130
+
+    /**
+     * User-Agent de Chrome para Android, con el formato "reducido" que manda Chrome
+     * desde la versión 110 (`Linux; Android 10; K`), y con la versión REAL del
+     * WebView del equipo.
+     *
+     * Antes estaba fijo en `Chrome/120.0.0.0 … LockSuiteVerification`: cada mes más
+     * viejo (Google empieza a avisar "navegador desactualizado"), y con una marca
+     * propia que ningún navegador real lleva. Se le saca a la versión del WebView el
+     * `; wv` y el `Version/4.0`, que son justamente lo que delata un WebView.
+     */
+    fun chromeLikeUserAgent(defaultWebViewUa: String?): String {
+        val major = defaultWebViewUa
+            ?.let { Regex("Chrome/(\\d{2,4})\\.").find(it)?.groupValues?.getOrNull(1) }
+            ?.toIntOrNull()
+            ?.takeIf { it in 60..999 }
+            ?: FALLBACK_CHROME_MAJOR
+        return "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/$major.0.0.0 Mobile Safari/537.36"
+    }
+
+    /**
+     * `esquema://host/ruta`, sin query ni fragmento, para logcat y para el registro
+     * que ve el panel. **Nunca** se anota la query: ahí viajan los tokens de Google
+     * (`plt`, `TL`, `dsh`) y el código del SMS.
+     */
+    fun describeForLog(url: String?): String {
+        if (url.isNullOrBlank()) return "(vacía)"
+        val s = url.trim()
+        val colon = s.indexOf(':')
+        if (colon <= 0) return "(inválida)"
+        val scheme = s.substring(0, colon).lowercase(Locale.ROOT)
+        if (scheme == "sms" || scheme == "smsto" || scheme == "tel" || scheme == "mailto" ||
+            scheme == "data" || scheme == "javascript" || scheme == "blob"
+        ) {
+            return "$scheme:(oculto)"
+        }
+        val cut = s.indexOfAny(charArrayOf('?', '#')).let { if (it >= 0) s.substring(0, it) else s }
+        return cut.take(120)
     }
 }

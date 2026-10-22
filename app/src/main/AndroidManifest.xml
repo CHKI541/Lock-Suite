@@ -30,6 +30,17 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
+    <!-- Cámara: SOLO para el escáner de QR del microvisor de verificaciones de Google
+         (B.92, 22/10/2026). En Android 12+ la cámara del sistema manda el link del QR al
+         navegador (suspendido) y no a LockSuite, así que LockSuite lee el QR por su cuenta.
+         Como Device Owner se concede solo (autoGrantDeclaredPermissions, B.55). Si el
+         administrador deshabilitó la cámara, el escáner lo respeta y no la usa.
+         `required="false"`: LockSuite se tiene que poder instalar en equipos sin cámara. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
 
     <!-- Knox SDK (Samsung) — recien concede algo una vez activada la licencia KPE;
          no tiene efecto en equipos sin Knox. Ver KnoxHardening.kt. -->
@@ -327,7 +338,27 @@
                 android:resource="@xml/app_update_widget_info" />
         </receiver>
 
-        <!-- GOOGLE VERIFICATION ACTIVITY (Microvisor Confinado de Verificaciones de Google - B.92) -->
+        <!-- GOOGLE VERIFY WIDGET (Acceso directo al escáner de QR de verificación de Google - B.92) -->
+        <receiver
+            android:name=".widget.GoogleVerifyWidgetProvider"
+            android:label="Verificar Google"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/google_verify_widget_info" />
+        </receiver>
+
+        <!-- GOOGLE VERIFICATION ACTIVITY (Microvisor Confinado de Verificaciones de Google - B.92)
+             ⚠️ (22/10) En Android 12+ estos intent-filter NO reciben el link de la cámara del
+             sistema: un link web va al navegador predeterminado salvo que la app esté aprobada
+             para el dominio, y accounts.google.com no se puede verificar. Para la flota, el
+             camino es el escáner propio (botón, widget o Ajustes Kosher). En un equipo puntual
+             se puede aprobar por ADB con "pm set-app-links-user-selection" (comando exacto en
+             INSTRUCCIONES_ANTIGRAVITY_2026-10-22_MICROVISOR_QR.md). -->
+
         <activity
             android:name=".ui.verification.GoogleVerificationActivity"
             android:label="Verificación de Google"

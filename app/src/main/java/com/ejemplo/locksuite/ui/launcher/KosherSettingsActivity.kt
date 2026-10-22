@@ -427,8 +427,10 @@ fun KosherSettingsScreen(onBack: () -> Unit) {
 
                         Spacer(modifier = Modifier.height(8.dp))
 
+                        // B.92 (22/10): el lanzador kosher no aloja widgets, así que este botón
+                        // es el camino al escáner de QR en estos equipos. El nombre lo dice.
                         SettingsButton(
-                            label = "Verificación de Cuenta de Google",
+                            label = "Verificación de Google (escanear QR)",
                             icon = Icons.Filled.Security,
                             onClick = {
                                 val intent = Intent(context, com.ejemplo.locksuite.ui.verification.GoogleVerificationActivity::class.java).apply {

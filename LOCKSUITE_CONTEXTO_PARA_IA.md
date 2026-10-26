@@ -2077,9 +2077,12 @@ Pedido del dueño: actuar como un equipo de agentes especializados para revisar 
   - Se actualizó `app.js` y `comun.js` para procesar el estado `queued` de forma inmediata informando que el comando quedó en cola en el buzón y se aplicará automáticamente cuando el celular conecte (hasta 15 min).
   - En `CommandProcessor.kt`, se habilitó la escritura del ACK de rechazo ante `BAD_SIGNATURE` para no silenciar fallos de firma.
   - En `database.rules.json`, se agregó soporte para que equipos existentes sin `ownerUid` adopten su nodo sin `PERMISSION_DENIED`.
-- **Verificación:**
+- **Verificación y Despliegue:**
   - 100% de pruebas unitarias (`:app:testDebugUnitTest`) pasando en verde (BUILD SUCCESSFUL en 4m 37s).
   - Herramientas de consistencia `tools/` (`check_command_sync.py`, `check_panel_commands.py`, `check_whitelist_sync.py`, `check_profile_sync.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`) todas en verde.
+  - Compilación release limpia (`clean assembleRelease`) y despliegue a producción de la versión **0.6.66 (código 129)** vía `deploy_all.ps1`.
+  - Publicado en Firebase Hosting (`locksuite-latest.apk`, `version.json`, `app.js`, `comun.js`), Database Rules activas y Cloud Functions desplegadas (`sendCommandV8` y `colectivosApi`).
+  - Commits `e2b22f2` y `0ccee50` pusheados a la rama `main` en GitHub.
 
 
 

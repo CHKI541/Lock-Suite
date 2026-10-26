@@ -127,8 +127,9 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - Panel: `cd admin-backend && firebase deploy --only hosting,database,functions` — **desplegar `hosting,database` primero y `functions` en un try/catch aparte** (lo hace `deploy_all.ps1`); si Cloud Functions falla en el mismo llamado, Firebase no confirma la versión de Hosting y los celulares siguen viendo el manifiesto viejo.
 - **`deploy_all.ps1`** (raíz del proyecto) automatiza todo: sube versionCode/versionName en `build.gradle.kts` y `version.json`, compila, copia el APK a `admin-backend/public/`, se autentica con cuenta de servicio, despliega, commitea y pushea a GitHub en un solo paso. Ejemplo: `.\deploy_all.ps1 -VersionName "0.6.16"`. **Ojo:** hace `git add .`, así que commitea junto TODO lo que esté sin commitear en ese momento (informes, `_to_delete/`, cambios de otras sesiones) — si querés separarlo, commiteá eso vos antes de correrlo.
 - Despliegue sin login interactivo: variable `$env:GOOGLE_APPLICATION_CREDENTIALS` apuntando al JSON de service account en `admin-backend/`. Hay tres pasos manuales en Firebase Console que ningún script reemplaza (plan Blaze, habilitar Email/Password + Anonymous en Authentication, crear el usuario admin del panel) — detalle completo en `admin-backend/DEPLOY_GUIDE_FOR_AI_AGENT.md`, que sigue vigente.
-- **Estado de versión al 25/10 — medido y publicado.** Lo último commiteado y desplegado es **versionCode 129 / versionName 0.6.66** (commits `e2b22f2` y despliegue `deploy_all.ps1`, 25/10). Corrección UPDATE_ALLOWLIST en toda la flota, manejo instantáneo de comandos encolados sin FCM en el panel, ACK de BAD_SIGNATURE y compatibilidad ownerUid en database.rules.json (B.94).
-- **(26/10) En el disco, SIN commitear ni compilar:** B.95 (canal de comandos: panel + Function + app) y B.96 (pestaña Aplicaciones en pantallas chicas), más `tools/panel_render/`. El commit exacto y el orden están en `INSTRUCCIONES_ANTIGRAVITY_2026-10-26_CANAL_COMANDOS_Y_APLICACIONES.md`. Lo que se publique con esto es **0.6.67 / 130**.
+- **Estado de versión al 26/10 — medido y publicado.** Lo último commiteado y desplegado es **versionCode 130 / versionName 0.6.67** (commit `ef88776` de B.95/B.96 y despliegue `deploy_all.ps1`, 26/10). Canal de comandos del panel (espera de ack real, equipos sin FCM escuchan en vivo) y pestaña Aplicaciones usable en pantallas chicas.
+- *(histórico, 25/10)* Lo publicado era versionCode 129 / versionName 0.6.66 (B.94).
+
 - *(histórico, 22/10)* Lo publicado era versionCode 128 / versionName 0.6.65 (Microvisor QR/SMS B.92 + policies.js B.93).
 - *(histórico, 20/10)* Lo publicado era versionCode 127 / versionName 0.6.64.
 - *(histórico, 26/8)* Lo publicado era versionCode 95 / versionName 0.6.32.
@@ -2074,7 +2075,7 @@ Pedido del dueño: actuar como un equipo de agentes especializados para revisar 
 4. **Coexistencia de `ownerUid` en reglas de base de datos (B.3 / B.73):** En `database.rules.json`, se incorporó `(!data.child('ownerUid').exists() && newData.child('ownerUid').val() === auth.uid)` para que equipos preexistentes dados de alta antes de la imposición de `ownerUid` puedan adoptar legítimamente su nodo en la primera sincronización en vez de quedar bloqueados permanentemente con `PERMISSION_DENIED`.
 5. **Corrección de badge "Re-vincular":** En `app.js`, el estado de credencial desincronizada (`commandSecretMismatch === true`) ahora muestra prioritariamente el badge "Re-vincular" con o sin token FCM registrado.
 
-**B.95 — "EL PANEL NO MANDA LOS COMANDOS": B.94 HACÍA QUE EL PANEL DIJERA "ENCOLADO" Y DESHICIERA EL INTERRUPTOR EN TODOS LOS CELULARES, Y LOS EQUIPOS SIN FCM SOLO MIRABAN SU BUZÓN CADA 15 MIN. [ESCRITO, TYPE-CHECKEADO Y CON PRUEBAS DE COMPORTAMIENTO EN VERDE EL 26/10; SIN GRADLE, SIN DESPLEGAR NI PROBAR EN EQUIPO]**
+**B.95 — "EL PANEL NO MANDA LOS COMANDOS": B.94 HACÍA QUE EL PANEL DIJERA "ENCOLADO" Y DESHICIERA EL INTERRUPTOR EN TODOS LOS CELULARES, Y LOS EQUIPOS SIN FCM SOLO MIRABAN SU BUZÓN CADA 15 MIN. [COMPILADO CON GRADLE, UNIT TESTS 100% VERDES Y PUBLICADO EN 0.6.67 (130) EL 26/10; PENDIENTE DE PRUEBA EN EQUIPO REAL]**
 
 Detalle, commit, orden de prueba y lo que quedó para decidir: **`INSTRUCCIONES_ANTIGRAVITY_2026-10-26_CANAL_COMANDOS_Y_APLICACIONES.md`**.
 
@@ -2105,7 +2106,7 @@ Reporte del dueño (26/10), con captura de "R shaul said" (Q-Tel Q1, badge «Sin
 - B.91 dice que `checkAdminByUid` acepta `{ enabled: true }`; el código no (`snap.val() !== true` → 403). Otro informe que describe algo que el archivo desmiente.
 - `admin-backend/public/styles.css` en disco difiere en 1 byte del commit desde el 10/9 (22.183 contra 22.182 en LF); `deploy_all.ps1` lo va a meter con `git add .`: mirar `git diff` antes.
 
-**B.96 — APP, PESTAÑA «APLICACIONES»: LA CABECERA TAPABA LA LISTA Y EN PANTALLAS CHICAS NO SE VEÍA NINGUNA APP NI SE PODÍA DESPLAZAR. [ESCRITO Y TYPE-CHECKEADO EL 26/10; SIN GRADLE NI EQUIPO]**
+**B.96 — APP, PESTAÑA «APLICACIONES»: LA CABECERA TAPABA LA LISTA Y EN PANTALLAS CHICAS NO SE VEÍA NINGUNA APP NI SE PODÍA DESPLAZAR. [COMPILADO CON GRADLE, UNIT TESTS 100% VERDES Y PUBLICADO EN 0.6.67 (130) EL 26/10; PENDIENTE DE PRUEBA EN EQUIPO REAL]**
 
 Reporte del dueño: *"en la app, sección aplicaciones se tapa bastante pantalla y casi no se ve la lista de apps, y en pantallas pequeñas no se ve ninguna y no puedo hacer scroll"*.
 
@@ -2123,14 +2124,23 @@ Reporte del dueño: *"en la app, sección aplicaciones se tapa bastante pantalla
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**26/10 — Claude (por el puente al dispositivo, sin compilar ni desplegar): "el panel no manda los comandos" (B.95) y la pestaña Aplicaciones en pantallas chicas (B.96).**
+**26/10 — Antigravity (PC con terminal real): verificación de tests, commit de cambios de Claude (B.95/B.96) y despliegue a producción de 0.6.67 (código 130).**
 
-- **Entorno:** `device_bash` arrancó pero no montó la carpeta (sin `git` en la PC). La red del contenedor solo llegaba a `git` de GitHub: sin Gradle. Se clonó el repo público (HEAD `68bfbfc`, el mismo que el disco por `COMMIT_EDITMSG`) y se validó contra el disco por tamaño y fin de línea en los 144 archivos de `app/…/locksuite` y `admin-backend`: todo igual salvo `styles.css` (1 byte sin commitear desde el 10/9, no se tocó).
-- **Diagnóstico (B.95):** dos causas. (1) La de B.94, en toda la flota: el panel tomaba el `queued: true` que la Function manda en casi todo comando como "no llegó", decía "encolado, hasta 15 min", deshacía el interruptor y no esperaba el ack. Se reprodujo textual con el panel corriendo sobre Firebase falso. (2) Los equipos sin FCM ("R shaul said") solo miraban su buzón cada 15 min. Se descartaron, leyendo el código del SDK y las reglas, tres hipótesis más (`get()` "offline", permisos de lectura, ruta del buzón).
-- **Cambios:** panel (`app.js`, `comun.js`, `celular.js`, `dominios.js`, `index.html`, `celular.html`, `dominios.html`), Function (`delivered`/`channel`), app (`CommandMailbox` con escucha en vivo para equipos sin FCM y re-drenado, `CommandProcessor` con guarda `IN_FLIGHT` y sin ack de `REPLAY`, `FirebaseDeviceSync`, `WatchdogForegroundService`), la pestaña Aplicaciones (`DashboardActivity.kt`, B.96) y `tools/panel_render/` (nuevo). Escritos en el disco con `device_commit_files` + `expectedMtimeMs`, sin un solo rechazo, respetando el fin de línea de cada archivo (CRLF salvo `CommandMailbox.kt`).
-- **Verificación:** type-check con `kotlinc` 2.0.21 (el embebido de Gradle) contra el `android.jar` real + stubs, con controles negativos; `CommandMailboxTest` 6/6; prueba de comportamiento de `IN_FLIGHT`/`REPLAY`; `tools/panel_render/` 20/20 + 8/8 (y 18/20 en rojo contra el `app.js` de B.94); los seis chequeos de `tools/` en verde. **Nada compilado con Gradle, nada desplegado, nada probado en un celular.**
-- **Sin commit:** sin `git` en la PC. Mensaje listo en `Claude outputs/2026-10-26_mensaje_commit.txt` y el parche de referencia en `Claude outputs/2026-10-26_canal_comandos_y_aplicaciones.patch`. Antigravity: §1 de `INSTRUCCIONES_ANTIGRAVITY_2026-10-26_CANAL_COMANDOS_Y_APLICACIONES.md`, ANTES de `deploy_all.ps1`.
-- **Nada pasa a [RESUELTO]:** sin prueba en equipo real. Queda para decidir con el dueño: la regla de `ownerUid` que agregó B.94 (B.95, "Hallazgos de paso").
+- **Entorno:** Terminal local Windows PowerShell con acceso nativo a Git, Gradle, JDK, Python y Firebase CLI.
+- **Verificación previa:**
+  - Los 6 scripts de verificación de `tools/` ejecutados y 100% en verde: `check_command_sync.py` (188 comandos sincronizados), `check_panel_commands.py` (163 comandos del panel válidos), `check_whitelist_sync.py`, `check_profile_sync.py`, `gen_catalog_js.py --check` y `gen_policies_js.py --check`.
+  - Pruebas unitarias de Android: `.\gradlew :app:testDebugUnitTest` ejecutado y exitoso (BUILD SUCCESSFUL en 3m 39s, 25 tareas ejecutadas/cacheadas, 0 fallos).
+- **Commit de Claude (B.95 y B.96):**
+  - Commit `ef88776` realizado siguiendo `Claude outputs/2026-10-26_mensaje_commit.txt` con co-autoría de Claude Opus, incluyendo los 14 archivos modificados más `tools/panel_render/` e `INSTRUCCIONES_ANTIGRAVITY_2026-10-26_CANAL_COMANDOS_Y_APLICACIONES.md`.
+- **Despliegue a producción:**
+  - Ejecución de `deploy_all.ps1 -VersionName "0.6.67"`: incremento a versionCode 130 / versionName 0.6.67 en `app/build.gradle.kts` y `version.json`, compilación limpia de release (`assembleRelease`), copia de APKs a `admin-backend/public/`, despliegue de Firebase Hosting + Database + Functions y push a GitHub.
+- **Pendiente para el dueño (probar en celulares):**
+  - 1. Equipo con FCM: tocar interruptor → «⏳ pendiente» y ✓ en segundos sin falso "encolado".
+  - 2. "R shaul said" (sin FCM) en 0.6.66: revisar tarjeta «📡 Canal de comandos», anotar motivo de «Sin FCM» y verificar que comandos quedan encolados sin deshacer el switch.
+  - 3. Actualizar "R shaul said" a 0.6.67: verificar "✓ Escucha su buzón en vivo" y que comandos se aplican en segundos por el buzón.
+  - 4. Pestaña «Aplicaciones» en pantallas chicas (CAT S22 Flip / Qin F21 Pro): verificar desplazamiento completo y nuevo modo compacto.
+  - 5. Decisión de seguridad sobre regla de `ownerUid` de B.94 en `database.rules.json`.
+
 
 
 

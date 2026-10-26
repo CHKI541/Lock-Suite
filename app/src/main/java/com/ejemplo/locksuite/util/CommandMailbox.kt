@@ -1,9 +1,13 @@
 package com.ejemplo.locksuite.util
 
 import android.content.Context
+import android.os.SystemClock
 import com.ejemplo.locksuite.service.CommandProcessor
 import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -56,6 +60,33 @@ import java.util.concurrent.atomic.AtomicBoolean
  * ⚠️ Un intruso NO puede meter comandos acá: las reglas nuevas de la base (22/9) solo
  * dejan escribir el nodo del equipo al propio equipo y a los administradores, y aunque
  * pudiera, sin el secreto del equipo la firma no verifica.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 26/10/2026 (B.95) — LOS EQUIPOS SIN FCM ESCUCHAN SU BUZÓN EN VIVO
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Hasta hoy el buzón era la RED DE SEGURIDAD de FCM. Pero hay equipos que no tienen FCM
+ * en absoluto (sin Play Services, o con el registro roto: el panel los marca «Sin FCM»),
+ * y para ellos el buzón era la ÚNICA vía y se revisaba cada 15 minutos. Desde el panel
+ * eso se veía como "le mando y no pasa nada": cada cambio tardaba hasta un cuarto de hora
+ * y el interruptor volvía solo atrás mientras tanto.
+ *
+ * Ahora, si el equipo NO tiene FCM, el servicio de primer plano mantiene un listener en
+ * vivo sobre `devices/<id>/pendingCommands` ([ensureLiveChannel]): apenas la Cloud
+ * Function deja un comando, la base se lo empuja al equipo y se drena en el acto. Es lo
+ * mismo que hace FCM, pero por la conexión de Realtime Database.
+ *
+ * Por qué SOLO sin FCM: un listener permanente mantiene abierta la conexión con la base
+ * (un latido cada ~45 s mientras haya red). Con FCM eso es batería tirada —Google ya
+ * despierta al equipo cuando hay un comando—, y este proyecto ya pagó varias sesiones
+ * sacando gastos así (B.30, B.80, B.89). Sin FCM es el precio de que el panel funcione.
+ * En Doze la conexión se corta igual; se reconecta en la ventana de mantenimiento y la
+ * base le manda lo que haya, que es lo mismo que haría el Worker.
+ *
+ * Y para que esto se pueda DIAGNOSTICAR desde el panel (la lección de B.41 y B.69), el
+ * equipo publica `mailboxLive` (si está escuchando, y si no por qué) y
+ * `mailboxLastCheckAt` / `mailboxLastResult` (cuándo revisó el buzón por última vez y
+ * qué encontró). Antes no había forma de saber desde el panel si un equipo levantaba su
+ * buzón o no.
  */
 object CommandMailbox {
 
@@ -63,6 +94,15 @@ object CommandMailbox {
 
     /** Nunca dos drenados a la vez (el Worker y un FCM pueden coincidir). */
     private val draining = AtomicBoolean(false)
+
+    /**
+     * Un pedido de drenado que llegó MIENTRAS otro corría (26/10/2026). Antes se
+     * descartaba sin más: si un comando entraba al buzón justo mientras se drenaba —con
+     * el listener en vivo pasa seguido, porque el propio drenado borra entradas y eso
+     * dispara otro aviso—, ese comando quedaba esperando a la vuelta del Worker, hasta
+     * 15 min. Ahora el drenado en curso, al terminar, vuelve a mirar una vez.
+     */
+    private val redrainRequested = AtomicBoolean(false)
 
     /** 1/1/2024: por debajo de esto el reloj del equipo no es creíble (ver CommandProcessor). */
     private const val CREDIBLE_CLOCK_FLOOR_MS = 1_704_067_200_000L
@@ -121,26 +161,40 @@ object CommandMailbox {
      * lectura de Firebase (con tope).
      */
     fun drainNow(context: Context, reason: String) {
-        if (!draining.compareAndSet(false, true)) return
+        if (!draining.compareAndSet(false, true)) {
+            redrainRequested.set(true)
+            return
+        }
+        val ctx = context.applicationContext
+        // Qué se le informa al panel de esta revisión (null = no informar nada).
+        var resultado: String? = null
         try {
-            val ctx = context.applicationContext
             val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
             if (dpm == null || !dpm.isDeviceOwnerApp(ctx.packageName)) return
             val id = FirebaseDeviceSync.deviceId(ctx)
             val ref = FirebaseDatabase.getInstance().getReference("devices/$id/pendingCommands")
             val latch = CountDownLatch(1)
             var snapshot: DataSnapshot? = null
+            var errorLectura: String? = null
             FirebaseDeviceSync.runAuthenticated {
                 ref.get()
                     .addOnSuccessListener { snapshot = it; latch.countDown() }
                     .addOnFailureListener { e ->
+                        errorLectura = e.message ?: e.javaClass.simpleName
                         android.util.Log.w(TAG, "No se pudo leer el buzón ($reason): ${e.message}")
                         latch.countDown()
                     }
             }
             latch.await(30, TimeUnit.SECONDS)
-            val snap = snapshot ?: return
-            if (!snap.exists() || !snap.hasChildren()) return
+            val snap = snapshot
+            if (snap == null) {
+                resultado = "error al leer: " + (errorLectura ?: "la base no contestó en 30 s")
+                return
+            }
+            if (!snap.exists() || !snap.hasChildren()) {
+                resultado = RESULTADO_VACIO
+                return
+            }
 
             val entries = snap.children.mapNotNull { child ->
                 val key = child.key ?: return@mapNotNull null
@@ -161,14 +215,19 @@ object CommandMailbox {
                 CommandProcessor.alreadyProcessed(ctx, cid)
             }
             for (e in descartar) removeEntry(ctx, e.key)
-            if (aplicar.isEmpty()) return
+            if (aplicar.isEmpty()) {
+                resultado = RESULTADO_VACIO
+                return
+            }
 
             android.util.Log.i(TAG, "Buzón ($reason): aplicando ${aplicar.size} comando(s) pendientes")
             val processor = CommandProcessor(ctx)
+            var conError = 0
             for (e in aplicar) {
                 try {
                     processor.process(e.data, CommandProcessor.Source.MAILBOX)
                 } catch (ex: Exception) {
+                    conError++
                     android.util.Log.e(TAG, "Comando del buzón falló: ${e.data["command"]}: ${ex.message}", ex)
                 } finally {
                     // Se borra SIEMPRE: si falló, el ack ya dice por qué, y dejarlo haría
@@ -176,11 +235,174 @@ object CommandMailbox {
                     removeEntry(ctx, e.key)
                 }
             }
+            resultado = "aplicó ${aplicar.size} (${aplicar.joinToString(", ") { it.data["command"] ?: "?" }.take(120)})" +
+                (if (conError > 0) " — $conError con error" else "") + " · vía $reason"
         } catch (e: Exception) {
+            resultado = "error: ${e.message ?: e.javaClass.simpleName}"
             android.util.Log.e(TAG, "Drenado del buzón falló ($reason): ${e.message}", e)
         } finally {
             draining.set(false)
+            resultado?.let { reportCheck(ctx, it) }
+            // Algo pidió drenar mientras este corría: se mira una vez más. No hay rulo:
+            // si no queda nada, la vuelta siguiente no borra nada ni dispara avisos.
+            if (redrainRequested.getAndSet(false)) drainAsync(ctx, "re-drenado")
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ESCUCHA EN VIVO (solo equipos sin FCM) — ver el encabezado, 26/10/2026.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private const val RESULTADO_VACIO = "sin pendientes"
+
+    /**
+     * Después de un error (permiso, la base cerró la consulta), cuánto esperar para
+     * reintentar: 1 min, y se duplica en cada error seguido hasta 15 min. El caso típico
+     * es un equipo reinstalado esperando que lo re-vinculen (PERMISSION_DENIED hasta que
+     * un administrador apruebe): reintentar cada minuto durante horas sería red tirada.
+     */
+    private const val LIVE_RETRY_AFTER_ERROR_MS = 60_000L
+    private const val LIVE_RETRY_MAX_MS = 15 * 60_000L
+
+    private val liveLock = Any()
+    @Volatile private var liveRef: DatabaseReference? = null
+    @Volatile private var liveListener: ValueEventListener? = null
+    @Volatile private var liveRetryAtMs = 0L
+    @Volatile private var liveBackoffMs = LIVE_RETRY_AFTER_ERROR_MS
+
+    /** ¿Hay un listener en vivo puesto en este proceso? */
+    val isLive: Boolean get() = liveListener != null
+
+    /**
+     * ¿Este equipo tiene que escuchar su buzón en vivo? Solo si se SABE que no tiene FCM.
+     * Mientras no se sabe (la primera sincronización lo averigua en segundos) no se
+     * arranca nada: arrancar "por las dudas" en cada equipo sería el gasto que el
+     * encabezado explica que no hay que pagar.
+     */
+    fun shouldListenLive(context: Context): Boolean {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        if (prefs.getBoolean("locksuite_purged", false)) return false
+        return FirebaseDeviceSync.fcmAvailable(context) == false
+    }
+
+    /**
+     * Pone o saca el listener en vivo según haga falta. Barata a propósito: la llama el
+     * ciclo de 20 s del servicio de primer plano, y en el caso normal son dos lecturas
+     * de preferencias y una comparación.
+     */
+    fun ensureLiveChannel(context: Context) {
+        val ctx = context.applicationContext
+        if (shouldListenLive(ctx)) {
+            attachLive(ctx)
+        } else if (liveListener != null) {
+            stopLiveChannel(ctx, if (FirebaseDeviceSync.fcmAvailable(ctx) == true) "tiene FCM" else "no hace falta")
+        }
+    }
+
+    private fun attachLive(ctx: Context) {
+        synchronized(liveLock) {
+            if (liveListener != null) return
+            val ahora = SystemClock.elapsedRealtime()
+            if (ahora < liveRetryAtMs) return
+            liveRetryAtMs = ahora + LIVE_RETRY_AFTER_ERROR_MS
+            val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+            if (dpm == null || !dpm.isDeviceOwnerApp(ctx.packageName)) return
+            val ref = FirebaseDatabase.getInstance()
+                .getReference("devices/${FirebaseDeviceSync.deviceId(ctx)}/pendingCommands")
+            val listener = object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    // Llega al poner el listener (con lo que ya hubiera) y con cada cambio.
+                    // Los borrados del propio drenado también avisan: si no queda nada,
+                    // no se hace nada; si queda, drainNow() ya sabe juntarlos.
+                    liveBackoffMs = LIVE_RETRY_AFTER_ERROR_MS
+                    if (snapshot.hasChildren()) drainAsync(ctx, "en vivo")
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    // Casi siempre es PERMISSION_DENIED: el equipo cambió de uid anónimo
+                    // (reinstalación) y espera que un administrador lo re-vincule
+                    // (FirebaseDeviceSync.requestRebind). Se reintenta con espera creciente.
+                    android.util.Log.w(TAG, "Escucha en vivo del buzón cancelada: ${error.message}")
+                    synchronized(liveLock) {
+                        if (liveListener === this) {
+                            liveListener = null
+                            liveRef = null
+                        }
+                    }
+                    liveRetryAtMs = SystemClock.elapsedRealtime() + liveBackoffMs
+                    liveBackoffMs = (liveBackoffMs * 2).coerceAtMost(LIVE_RETRY_MAX_MS)
+                    reportLive(ctx, false, "la base cortó la escucha: ${error.message}")
+                }
+            }
+            liveListener = listener
+            liveRef = ref
+            FirebaseDeviceSync.runAuthenticated {
+                val sigue = synchronized(liveLock) { liveListener === listener }
+                if (sigue) {
+                    ref.addValueEventListener(listener)
+                    android.util.Log.i(TAG, "Buzón: escuchando en vivo (el equipo no tiene FCM).")
+                    reportLive(ctx, true, "sin FCM: escucha en vivo")
+                }
+            }
+        }
+    }
+
+    /** Saca el listener en vivo, si había. */
+    fun stopLiveChannel(context: Context?, motivo: String) {
+        val (ref, listener) = synchronized(liveLock) {
+            val par = liveRef to liveListener
+            liveRef = null
+            liveListener = null
+            par
+        }
+        if (ref != null && listener != null) {
+            try {
+                ref.removeEventListener(listener)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "No se pudo sacar la escucha en vivo: ${e.message}")
+            }
+            if (context != null) reportLive(context.applicationContext, false, motivo)
+        }
+    }
+
+    // ── Lo que se le cuenta al panel ─────────────────────────────────────────
+
+    @Volatile private var ultimoInformado: String? = null
+    @Volatile private var ultimoInformadoAt = 0L
+    @Volatile private var ultimoVivoInformado: Boolean? = null
+
+    /**
+     * Publica cuándo se revisó el buzón y qué se encontró. Un "sin pendientes" igual al
+     * anterior se publica como mucho cada 14 min (una vez por vuelta del Worker), y no
+     * pisa durante 10 min el aviso de lo último que se aplicó: si no, el panel nunca
+     * llegaría a ver "aplicó 2", porque el drenado siguiente lo borraría al instante.
+     */
+    private fun reportCheck(ctx: Context, resultado: String) {
+        val ahora = SystemClock.elapsedRealtime()
+        val previo = ultimoInformado
+        val desde = ahora - ultimoInformadoAt
+        if (resultado == RESULTADO_VACIO && previo != null) {
+            if (previo == RESULTADO_VACIO && desde < 14 * 60_000L) return
+            if (previo.startsWith("aplicó") && desde < 10 * 60_000L) return
+        }
+        ultimoInformado = resultado
+        ultimoInformadoAt = ahora
+        FirebaseDeviceSync.reportFields(
+            ctx,
+            mapOf(
+                "mailboxLastCheckAt" to com.google.firebase.database.ServerValue.TIMESTAMP,
+                "mailboxLastResult" to resultado.take(200)
+            )
+        )
+    }
+
+    private fun reportLive(ctx: Context, vivo: Boolean, motivo: String) {
+        if (ultimoVivoInformado == vivo) return
+        ultimoVivoInformado = vivo
+        FirebaseDeviceSync.reportFields(
+            ctx,
+            mapOf("mailboxLive" to vivo, "mailboxLiveReason" to motivo.take(160))
+        )
     }
 
     /** Borra una entrada del buzón. Best effort: si falla, el próximo drenado la ve ya procesada. */

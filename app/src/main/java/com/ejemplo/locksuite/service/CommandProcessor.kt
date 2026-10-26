@@ -66,6 +66,18 @@ class CommandProcessor(private val context: Context) {
         /** Tope del registro de commandId ya procesados (ver recordCommand). */
         private const val MAX_PROCESSED_IDS = 600
 
+        /**
+         * Comandos que se están procesando AHORA en este proceso (26/10/2026, B.95).
+         *
+         * Con el buzón escuchado en vivo, un mismo comando puede entrar por dos vías casi a
+         * la vez (FCM y el buzón, o dos drenados). `isReplay()` no alcanza para eso: el id
+         * se registra recién DESPUÉS de verificar la firma, así que dos hilos que lleguen
+         * juntos pasan los dos el chequeo y el comando se aplica dos veces — inofensivo en
+         * un BLOCK_X, no en LOCK_DEVICE o UPDATE_APP. El segundo, ahora, se va en silencio.
+         */
+        private val IN_FLIGHT: MutableSet<String> =
+            java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
         /** ¿Ya se aplicó este comando? Lo usa el buzón para no repetir lo que llegó por FCM. */
         fun alreadyProcessed(context: Context, commandId: String): Boolean {
             val prefs = com.ejemplo.locksuite.util.PrefsHelper.getEncryptedPrefs(context)
@@ -75,6 +87,23 @@ class CommandProcessor(private val context: Context) {
     }
 
     fun process(data: Map<String, String>, source: Source) {
+        val cid = data["commandId"]
+        if (cid.isNullOrBlank()) {
+            processInternal(data, source)
+            return
+        }
+        if (!IN_FLIGHT.add(cid)) {
+            android.util.Log.i("LockSuiteFCM", "Comando $cid ya se está procesando por la otra vía; se ignora el duplicado (${source.name}).")
+            return
+        }
+        try {
+            processInternal(data, source)
+        } finally {
+            IN_FLIGHT.remove(cid)
+        }
+    }
+
+    private fun processInternal(data: Map<String, String>, source: Source) {
         val command = data["command"] ?: return
         var commandId = data["commandId"]
         // El id original: `commandId` se pone en null cuando el ack lo escribe una
@@ -132,11 +161,14 @@ class CommandProcessor(private val context: Context) {
         }
         if (rejection != null) {
             android.util.Log.w("LockSuiteFCM", "Comando FCM rechazado ($rejection): $command")
-            // Un commandId ausente o en blanco no da dónde escribir el ack; y si falló la
-            // firma HMAC, solo se escribe el ack cuando viene del buzón autenticado de
-            // Firebase (donde solo escribe un admin/Cloud Function) para no permitir que
-            // un tercero sin clave llene commandAcks.
-            if (!commandId.isNullOrBlank()) {
+            // Un commandId ausente o en blanco no da dónde escribir el ack.
+            //
+            // 26/10/2026 (B.95): REPLAY tampoco escribe. Es el MISMO comando que ya se
+            // procesó y que llegó otra vez por la otra vía (primero por el buzón y
+            // después, tarde, por FCM): su ack verdadero —applied o failed— ya está
+            // escrito, y un "rejected: REPLAY" encima lo PISABA, así que el panel
+            // mostraba "rechazado" para algo que el celular había aplicado bien.
+            if (!commandId.isNullOrBlank() && rejection != "REPLAY") {
                 writeRejectionAck(commandId, command, rejection)
             }
             // BAD_SIGNATURE es la firma de que el secreto de comandos se desincronizó.

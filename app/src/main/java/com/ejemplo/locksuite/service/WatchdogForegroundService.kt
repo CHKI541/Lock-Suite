@@ -316,6 +316,18 @@ class WatchdogForegroundService : Service() {
                 }
             }
 
+            // 26/10/2026 (B.95) — Buzón de comandos EN VIVO para los equipos sin FCM.
+            // Sin FCM, el buzón es la única vía de un comando del panel, y hasta hoy se
+            // revisaba cada 15 min (Worker): "le mando y no pasa nada". Esto pone o saca
+            // un listener sobre devices/<id>/pendingCommands según el equipo tenga FCM o
+            // no. En el caso normal (con FCM) son dos lecturas de preferencias. Ver
+            // util/CommandMailbox.kt.
+            try {
+                com.ejemplo.locksuite.util.CommandMailbox.ensureLiveChannel(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             handler.postDelayed(this, 20000L)
         }
     }
@@ -660,6 +672,12 @@ class WatchdogForegroundService : Service() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        // El listener en vivo del buzón cuelga de este servicio (ver checkRunnable).
+        try {
+            com.ejemplo.locksuite.util.CommandMailbox.stopLiveChannel(applicationContext, "servicio detenido")
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         handler.removeCallbacks(checkRunnable)
         handler.removeCallbacks(enforcerRunnable)
         handler.removeCallbacks(nagRunnable)

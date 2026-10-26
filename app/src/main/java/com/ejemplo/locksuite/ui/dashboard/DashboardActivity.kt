@@ -45,8 +45,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
@@ -1331,7 +1333,9 @@ fun AppManagerTabContent(context: Context) {
     val policyManager = remember { PolicyManager(context) }
     var appsList by remember { mutableStateOf<List<AppInfoData>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
+    // Arranca en true: así la primera pasada muestra el spinner y no un "no hay apps"
+    // de un instante, antes de que LaunchedEffect llegue a pedir la lista.
+    var isLoading by remember { mutableStateOf(true) }
     var selectedFilter by remember { mutableStateOf("Todas") }
     var appToUninstall by remember { mutableStateOf<AppInfoData?>(null) }
     var blockPopularState by remember { mutableStateOf(policyManager.isBlockPopularNonKosherEnabled()) }
@@ -1347,7 +1351,11 @@ fun AppManagerTabContent(context: Context) {
                 appsList = list
                 blockPopularState = popularEnabled
                 isLoading = false
-                com.ejemplo.locksuite.util.FirebaseDeviceSync.syncDeviceInfo(context)
+                // 26/10/2026: por la vía coalescida y fuera del hilo principal. Antes era
+                // un syncDeviceInfo() completo (enumera TODAS las apps y arma ~80 campos)
+                // en el hilo de la pantalla, después de cada interruptor: en un equipo de
+                // 2 GB eso es la lista trabada justo cuando uno la está usando.
+                com.ejemplo.locksuite.util.FirebaseDeviceSync.requestSync(context)
             }
         }
     }
@@ -1426,161 +1434,221 @@ fun AppManagerTabContent(context: Context) {
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        // Interruptor maestro: Bloquear apps populares no kosher
+    // ── LAYOUT DE LA PESTAÑA (26/10/2026, B.96) ─────────────────────────────────
+    //
+    // Reporte del dueño: "en la sección Aplicaciones se tapa bastante pantalla y casi no
+    // se ve la lista de apps, y en pantallas pequeñas no se ve ninguna y no puedo hacer
+    // scroll". La causa: la tarjeta de "apps populares", el buscador y los filtros
+    // vivían en una Column FIJA, y la lista era una LazyColumn con weight(1f) DEBAJO; o
+    // sea que la lista recibía solo lo que sobraba. En un CAT S22 Flip o un Qin F21 Pro
+    // (≈ 320 × 427 dp, menos la barra de arriba y la fila de pestañas) no sobraba nada:
+    // la cabecera ocupaba toda la altura, la lista quedaba en cero, y como la cabecera no
+    // se desplazaba, no había forma de llegar a ninguna app.
+    //
+    // Ahora TODO es una sola LazyColumn: la cabecera son sus primeros ítems y se va con
+    // el scroll, así que la lista usa la pantalla entera en cuanto uno baja. En pantallas
+    // chicas además la cabecera y cada fila se compactan (`compacto`).
+    //
+    // ⚠️ No volver a poner la cabecera afuera de la LazyColumn "para que el buscador
+    // quede fijo": es exactamente lo que dejó la lista sin altura.
+    //
+    // De paso: el recargo después de cada interruptor ya no reemplaza la lista por un
+    // spinner a pantalla completa. Eso la sacaba de la composición y devolvía el scroll
+    // al principio cada vez que se tocaba algo, justo en las apps de más abajo. El
+    // spinner grande queda para la PRIMERA carga; las siguientes muestran una barrita y
+    // la lista se queda donde estaba.
+    // "Pantalla chica" se decide por el TAMAÑO DE LA PANTALLA y no por el espacio que
+    // le toca a esta pestaña: si no, al abrir el teclado del buscador el alto bajaba, el
+    // modo compacto se prendía solo y la lista cambiaba de forma mientras uno escribía.
+    val configuracion = LocalConfiguration.current
+    val compacto = configuracion.screenWidthDp < 360 || configuracion.screenHeightDp < 600
+    run {
+        val margen = if (compacto) 8.dp else 16.dp
         var isUpdatingPopular by remember { mutableStateOf(false) }
+        val normalApps = remember(filteredApps) { filteredApps.filter { !it.isCritical } }
+        val criticalApps = remember(filteredApps) { filteredApps.filter { it.isCritical } }
 
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp),
-            shape = RoundedCornerShape(12.dp)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = margen, vertical = margen),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                    Text(
-                        text = "Bloquear apps populares no kosher",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
-                    )
-                    Text(
-                        text = "Oculta en el momento navegadores, tiendas no kosher, redes y bloatware. Podés desbloquear individualmente las que necesites.",
-                        color = Color.LightGray,
-                        fontSize = 11.sp
-                    )
-                }
-                if (isUpdatingPopular) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = Color(0xFFF1C40F),
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Switch(
-                        checked = blockPopularState,
-                        onCheckedChange = { checked ->
-                            isUpdatingPopular = true
-                            scope.launch(Dispatchers.IO) {
-                                val ok = policyManager.setBlockPopularNonKosher(checked)
-                                withContext(Dispatchers.Main) {
-                                    isUpdatingPopular = false
-                                    if (ok) {
-                                        blockPopularState = checked
-                                        refreshApps()
-                                        val msg = if (checked) "Apps populares no kosher bloqueadas" else "Apps populares no kosher desbloqueadas"
-                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, "Error al actualizar política", Toast.LENGTH_SHORT).show()
+            // Interruptor maestro: Bloquear apps populares no kosher
+            item(key = "cab_populares") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E3E62)),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(if (compacto) 10.dp else 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Bloquear apps populares no kosher",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = if (compacto) 13.sp else 14.sp
+                            )
+                            Text(
+                                text = if (compacto)
+                                    "Oculta navegadores, tiendas, redes y bloatware. Después podés desbloquear una por una."
+                                else
+                                    "Oculta en el momento navegadores, tiendas no kosher, redes y bloatware. Podés desbloquear individualmente las que necesites.",
+                                color = Color.LightGray,
+                                fontSize = 11.sp
+                            )
+                        }
+                        if (isUpdatingPopular) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = Color(0xFFF1C40F),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Switch(
+                                checked = blockPopularState,
+                                onCheckedChange = { checked ->
+                                    isUpdatingPopular = true
+                                    scope.launch(Dispatchers.IO) {
+                                        val ok = policyManager.setBlockPopularNonKosher(checked)
+                                        withContext(Dispatchers.Main) {
+                                            isUpdatingPopular = false
+                                            if (ok) {
+                                                blockPopularState = checked
+                                                refreshApps()
+                                                val msg = if (checked) "Apps populares no kosher bloqueadas" else "Apps populares no kosher desbloqueadas"
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Error al actualizar política", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
                                     }
-                                }
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF0B192C),
-                            checkedTrackColor = Color(0xFFF1C40F)
-                        )
-                    )
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF0B192C),
+                                    checkedTrackColor = Color(0xFFF1C40F)
+                                )
+                            )
+                        }
+                    }
                 }
             }
-        }
 
-        // Buscador
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Buscar aplicación...", color = Color.Gray) },
-            leadingIcon = { Icon(Icons.Default.Search, "Buscar", tint = Color.Gray) },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFFF1C40F),
-                unfocusedBorderColor = Color(0xFF1E3E62),
-                focusedContainerColor = Color(0xFF1E3E62).copy(alpha = 0.3f),
-                unfocusedContainerColor = Color(0xFF1E3E62).copy(alpha = 0.3f),
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 12.dp),
-            shape = RoundedCornerShape(12.dp)
-        )
-
-        // Fila de chips de filtro (Scrolleable horizontalmente)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val blockedCount = remember(appsList) {
-                appsList.count { it.isHidden || it.isSuspended || it.isWebViewBlocked || it.imageBlockingMode != "none" }
-            }
-            val filterOptions = remember(blockedCount) {
-                listOf(
-                    "Todas" to "Todas",
-                    "Bloqueadas" to "Bloqueadas ($blockedCount)",
-                    "Usuario" to "Usuario",
-                    "Sistema" to "Sistema",
-                    "Preinstaladas" to "Preinstaladas"
+            // Buscador
+            item(key = "cab_buscador") {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Buscar aplicación...", color = Color.Gray) },
+                    leadingIcon = { Icon(Icons.Default.Search, "Buscar", tint = Color.Gray) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFFF1C40F),
+                        unfocusedBorderColor = Color(0xFF1E3E62),
+                        focusedContainerColor = Color(0xFF1E3E62).copy(alpha = 0.3f),
+                        unfocusedContainerColor = Color(0xFF1E3E62).copy(alpha = 0.3f),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
                 )
             }
-            filterOptions.forEach { (filterKey, filterLabel) ->
-                val isSelected = selectedFilter == filterKey
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { selectedFilter = filterKey },
-                    label = { Text(filterLabel, fontSize = 12.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFF1C40F),
-                        selectedLabelColor = Color(0xFF0B192C),
-                        containerColor = Color(0xFF1E3E62).copy(alpha = 0.5f),
-                        labelColor = Color.White
+
+            // Fila de chips de filtro (Scrolleable horizontalmente)
+            item(key = "cab_filtros") {
+                val blockedCount = remember(appsList) {
+                    appsList.count { it.isHidden || it.isSuspended || it.isWebViewBlocked || it.imageBlockingMode != "none" }
+                }
+                val filterOptions = remember(blockedCount) {
+                    listOf(
+                        "Todas" to "Todas",
+                        "Bloqueadas" to "Bloqueadas ($blockedCount)",
+                        "Usuario" to "Usuario",
+                        "Sistema" to "Sistema",
+                        "Preinstaladas" to "Preinstaladas"
                     )
-                )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    filterOptions.forEach { (filterKey, filterLabel) ->
+                        val isSelected = selectedFilter == filterKey
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { selectedFilter = filterKey },
+                            label = { Text(filterLabel, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = Color(0xFFF1C40F),
+                                selectedLabelColor = Color(0xFF0B192C),
+                                containerColor = Color(0xFF1E3E62).copy(alpha = 0.5f),
+                                labelColor = Color.White
+                            )
+                        )
+                    }
+                }
             }
-        }
 
-        if (isLoading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(color = Color(0xFFF1C40F))
-            }
-        } else {
-            val normalApps = filteredApps.filter { !it.isCritical }
-            val criticalApps = filteredApps.filter { it.isCritical }
+            if (isLoading && appsList.isEmpty()) {
+                // Primera carga: todavía no hay nada que mostrar.
+                item(key = "cargando") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = Color(0xFFF1C40F))
+                    }
+                }
+            } else {
+                if (isLoading) {
+                    // Recargando después de un cambio: la lista se queda donde está.
+                    item(key = "recargando") {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFF1C40F)
+                        )
+                    }
+                }
 
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
+                if (filteredApps.isEmpty()) {
+                    item(key = "vacia") {
+                        Text(
+                            text = if (searchQuery.isNotBlank() || selectedFilter != "Todas")
+                                "No hay aplicaciones que coincidan con la búsqueda o el filtro."
+                            else
+                                "No se encontraron aplicaciones.",
+                            color = Color.LightGray,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(vertical = 16.dp)
+                        )
+                    }
+                }
+
                 // Sección de Apps Administrables
                 if (normalApps.isNotEmpty()) {
-                    item {
+                    item(key = "sec_administrables") {
                         Text(
-                            text = "Aplicaciones Administrables",
+                            text = "Aplicaciones Administrables (${normalApps.size})",
                             color = Color(0xFFF1C40F),
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
-                            modifier = Modifier.padding(vertical = 8.dp)
+                            modifier = Modifier.padding(top = 4.dp)
                         )
                     }
                     items(normalApps, key = { it.packageName }) { app ->
                         AppRowItem(
                             app = app,
+                            compacto = compacto,
                             onHideChange = { hide, onComplete ->
                                 scope.launch(Dispatchers.IO) {
                                     val success = appController.hideApp(app.packageName, hide)
@@ -1629,11 +1697,11 @@ fun AppManagerTabContent(context: Context) {
                                                      } else {
                                                          context.startService(startServiceIntent)
                                                      }
-                                                     
+                                                 
                                                      // Bloquear la configuración de VPN automáticamente para que no la desactive
                                                      val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)
                                                      policyManager.setVpnConfigBlocked(true)
-                                                     
+                                                 
                                                      Toast.makeText(
                                                          context,
                                                          "VPN activa y configuración bloqueada automáticamente (Lockdown).",
@@ -1664,18 +1732,19 @@ fun AppManagerTabContent(context: Context) {
 
                 // Sección de Apps Críticas
                 if (criticalApps.isNotEmpty()) {
-                    item {
+                    item(key = "sec_criticas") {
                         Text(
                             text = "Herramientas Críticas del Sistema (No Bloqueables)",
                             color = Color.LightGray,
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp,
-                            modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
+                            modifier = Modifier.padding(top = 12.dp)
                         )
                     }
                     items(criticalApps, key = { it.packageName }) { app ->
                         AppRowItem(
                             app = app,
+                            compacto = compacto,
                             onHideChange = { _, onComplete -> onComplete(false) },
                             onSuspendChange = { _, onComplete -> onComplete(false) },
                             onWebViewChange = { _, onComplete -> onComplete(false) },
@@ -1689,9 +1758,20 @@ fun AppManagerTabContent(context: Context) {
     }
 }
 
+/**
+ * Una app de la pestaña Aplicaciones.
+ *
+ * `compacto` (26/10/2026, B.96): en pantallas chicas (CAT S22 Flip, Qin F21 Pro) la fila
+ * de tres interruptores con su texto no entraba en ~300 dp de ancho —el último quedaba
+ * aplastado o cortado— y el ícono de 48 dp se comía media fila. En modo compacto el ícono
+ * baja a 36 dp, el nombre y el paquete van en una línea con "…", y los tres interruptores
+ * pasan a ser chips que se pueden deslizar de costado: nunca se cortan, y el estado se lee
+ * igual (amarillo con ✓ = activo). En pantallas normales se ve exactamente como antes.
+ */
 @Composable
 fun AppRowItem(
     app: AppInfoData,
+    compacto: Boolean = false,
     onHideChange: (Boolean, (Boolean) -> Unit) -> Unit,
     onSuspendChange: (Boolean, (Boolean) -> Unit) -> Unit,
     onWebViewChange: (Boolean, (Boolean) -> Unit) -> Unit,
@@ -1720,10 +1800,11 @@ fun AppRowItem(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp)
     ) {
+        val iconoDp = if (compacto) 36.dp else 48.dp
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(if (compacto) 8.dp else 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Icono de la App (Ya es un Bitmap precargado en background)
@@ -1732,13 +1813,13 @@ fun AppRowItem(
                     bitmap = app.icon.asImageBitmap(),
                     contentDescription = app.label,
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(iconoDp)
                         .clip(RoundedCornerShape(8.dp))
                 )
             } else {
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(iconoDp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color.Gray.copy(alpha = 0.3f)),
                     contentAlignment = Alignment.Center
@@ -1751,7 +1832,7 @@ fun AppRowItem(
                 }
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(if (compacto) 8.dp else 12.dp))
 
             // Información
             Column(
@@ -1761,12 +1842,16 @@ fun AppRowItem(
                     text = app.label,
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
+                    fontSize = if (compacto) 14.sp else 15.sp,
+                    maxLines = if (compacto) 1 else 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = app.packageName,
                     color = Color.LightGray,
-                    fontSize = 12.sp
+                    fontSize = if (compacto) 11.sp else 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
@@ -1798,7 +1883,29 @@ fun AppRowItem(
         if (!app.isCritical) {
             HorizontalDivider(color = Color(0xFF0B192C), thickness = 1.dp)
 
-            Row(
+            if (compacto) {
+                // Pantalla chica: chips deslizables de costado (ver el KDoc de arriba).
+                // Mismo contrato que los Switch de abajo: si el cambio falla, vuelve al
+                // valor anterior.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    InterruptorCompacto("Ocultar", hideState) { nuevo ->
+                        onHideChange(nuevo) { ok -> hideState = if (ok) nuevo else !nuevo }
+                    }
+                    InterruptorCompacto("Suspender", suspendState) { nuevo ->
+                        onSuspendChange(nuevo) { ok -> suspendState = if (ok) nuevo else !nuevo }
+                    }
+                    InterruptorCompacto("WebView", webviewState) { nuevo ->
+                        onWebViewChange(nuevo) { ok -> webviewState = if (ok) nuevo else !nuevo }
+                    }
+                }
+            } else Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 4.dp),
@@ -1959,6 +2066,25 @@ fun AppRowItem(
             }
         }
     }
+}
+
+/**
+ * Un interruptor de una app en modo compacto (26/10/2026, B.96): un chip que ocupa lo
+ * que su texto, en vez de texto + Switch. Amarillo con ✓ = activo.
+ */
+@Composable
+private fun InterruptorCompacto(etiqueta: String, activo: Boolean, alCambiar: (Boolean) -> Unit) {
+    FilterChip(
+        selected = activo,
+        onClick = { alCambiar(!activo) },
+        label = { Text((if (activo) "✓ " else "") + etiqueta, fontSize = 12.sp) },
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = Color(0xFFF1C40F),
+            selectedLabelColor = Color(0xFF0B192C),
+            containerColor = Color(0xFF0B192C),
+            labelColor = Color.White
+        )
+    )
 }
 
 /**

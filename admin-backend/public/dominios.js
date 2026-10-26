@@ -387,7 +387,7 @@
     $("d-envio-card").style.display = "";
     const log = $("d-envio");
     log.innerHTML = "";
-    let ok = 0, mal = 0;
+    let ok = 0, mal = 0, pend = 0;
     for (const id of ids) {
       const d = S.devices[id] || {};
       const nombre = d.deviceName || (d.info && d.info.deviceName) || d.model || id.slice(0, 10);
@@ -397,13 +397,18 @@
       log.appendChild(l);
       const r = await LS.sendCommand(id, "SYNC_WHITELIST", null, null,
         { nombre: nombre, timeoutMs: 20000 });
-      if (r.ok) { ok++; l.className = "ok"; l.textContent = "✓ " + nombre; }
+      if (r.ok && r.pendiente) {
+        // 26/10/2026 (B.95): en el buzón del celular, sin confirmar todavía. No es una
+        // falla: lo aplica solo cuando lo levante.
+        pend++; l.className = "wait"; l.textContent = "⏳ " + nombre + " — en su buzón, sin confirmar todavía";
+      }
+      else if (r.ok) { ok++; l.className = "ok"; l.textContent = "✓ " + nombre; }
       else { mal++; l.className = "bad"; l.textContent = "✗ " + nombre + " — " + (r.reason || r.status); }
     }
     this.disabled = false;
-    LS.toast(ok + " aplicaron, " + mal + " no contestaron." +
-      (mal ? " Los que no contestaron lo van a leer igual en su próxima sincronización." : ""),
-      mal ? "warn" : "ok");
+    LS.toast(ok + " aplicaron" + (pend ? ", " + pend + " en su buzón" : "") + ", " + mal + " no contestaron." +
+      ((mal || pend) ? " Los que no contestaron lo van a leer igual en su próxima sincronización." : ""),
+      (mal || pend) ? "warn" : "ok");
   });
 
   /* ── Listas fijas (solo lectura) ─────────────────────────────────────── */

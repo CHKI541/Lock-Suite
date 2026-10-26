@@ -50,15 +50,70 @@ object FirebaseDeviceSync {
     fun deviceId(context: Context): String =
         Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // ¿ESTE EQUIPO TIENE FCM?  (26/10/2026, B.95)
+    //
+    // Se anota en preferencias el resultado de pedirle el token a FCM. Lo usa el buzón de
+    // comandos para decidir si tiene que escucharse en vivo (ver CommandMailbox): un
+    // equipo sin FCM no tiene otra forma de enterarse a tiempo de un comando del panel.
+    // ─────────────────────────────────────────────────────────────────────────
+    private const val KEY_FCM_OK = "fcm_token_ok"
+    private const val KEY_FCM_REASON = "fcm_token_reason"
+
+    /** true = tiene token de FCM; false = no lo pudo conseguir; null = todavía no se sabe. */
+    fun fcmAvailable(context: Context): Boolean? {
+        val prefs = PrefsHelper.getMdmPrefs(context)
+        return if (prefs.contains(KEY_FCM_OK)) prefs.getBoolean(KEY_FCM_OK, false) else null
+    }
+
+    fun markFcmState(context: Context, ok: Boolean, reason: String?) {
+        try {
+            PrefsHelper.getMdmPrefs(context).edit()
+                .putBoolean(KEY_FCM_OK, ok)
+                .putString(KEY_FCM_REASON, reason ?: "")
+                .putLong("fcm_token_checked_at", System.currentTimeMillis())
+                .apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Escribe campos sueltos de diagnóstico en `devices/<id>` (solo en la raíz, sin la
+     * copia en `info/` ni el `lastSeen` de [writeFields]: son datos para mirar, no estado
+     * que el resto del panel lea). Un valor null borra el campo.
+     */
+    fun reportFields(context: Context, fields: Map<String, Any?>) {
+        val ctx = context.applicationContext
+        withAuth {
+            try {
+                FirebaseDatabase.getInstance()
+                    .getReference("devices/${deviceId(ctx)}")
+                    .updateChildren(fields)
+                    .addOnFailureListener { e ->
+                        android.util.Log.w("FirebaseDeviceSync", "reportFields: ${e.message}")
+                    }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     fun syncToken(context: Context, token: String) {
+        markFcmState(context, true, null)
         withAuth {
             val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
-            val payload = mutableMapOf<String, Any>(
+            val payload = mutableMapOf<String, Any?>(
                 "fcmToken" to token,
                 "info/fcmToken" to token,
                 "lastSeen" to ServerValue.TIMESTAMP,
-                "info/lastSeen" to ServerValue.TIMESTAMP
+                "info/lastSeen" to ServerValue.TIMESTAMP,
+                // 26/10/2026: con token, el error viejo de FCM ya no es cierto. Antes
+                // quedaba pegado para siempre en la base (nadie lo borraba), y ahora que
+                // el panel lo muestra, mentiría.
+                "fcmTokenError" to null,
+                "info/fcmTokenError" to null
             )
             if (authUid.isNotEmpty()) {
                 payload["ownerUid"] = authUid
@@ -484,13 +539,13 @@ object FirebaseDeviceSync {
         try {
             com.google.firebase.messaging.FirebaseMessaging.getInstance().token
                 .addOnCompleteListener { task ->
-                    if (task.isSuccessful) {
-                        task.result?.let { token ->
-                            syncToken(context, token)
-                        }
+                    if (task.isSuccessful && !task.result.isNullOrBlank()) {
+                        syncToken(context, task.result!!)
                     } else {
                         // FIX #1: ver nota al principio del archivo.
-                        val reason = task.exception?.message ?: "desconocido"
+                        val reason = task.exception?.message ?: "FCM no devolvió ningún token"
+                        // 26/10/2026 (B.95): sin FCM, el buzón pasa a escucharse en vivo.
+                        markFcmState(context, false, reason)
                         task.exception?.printStackTrace()
                         withAuth {
                             val ref = FirebaseDatabase.getInstance().getReference("devices/${deviceId(context)}")
@@ -504,6 +559,8 @@ object FirebaseDeviceSync {
                     }
                 }
         } catch (e: Exception) {
+            // Sin Play Services, FirebaseMessaging puede ni siquiera inicializarse.
+            markFcmState(context, false, e.message ?: e.javaClass.simpleName)
             e.printStackTrace()
         }
 

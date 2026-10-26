@@ -584,6 +584,15 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       }
     }
 
+    // 26/10/2026 (B.95) — `delivered` y `channel` en la respuesta.
+    //
+    // `queued` dice que quedó la copia en el buzón, y eso pasa con CASI TODO comando
+    // (siempre que el equipo tenga secreto de firma), haya salido el FCM o no. B.94 hizo
+    // que el panel leyera `queued` como "no salió, quedó en cola": desde entonces el
+    // panel decía "encolado, hasta 15 min" y devolvía el interruptor a como estaba en
+    // TODOS los celulares, aunque el FCM hubiera llegado y el equipo lo aplicara en dos
+    // segundos. `delivered` contesta la pregunta que el panel necesita: ¿Google aceptó el
+    // FCM? Si sí, hay que esperar el ack; si no, el comando va solo por el buzón.
     if (!token) {
       if (queued) {
         await deviceRef.child(`commandAcks/${commandId}`).update({ status: "queued", reason: "El equipo aún no registró token FCM; quedó en el buzón del equipo" }).catch(() => {});
@@ -591,7 +600,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
           command, commandId, packages: payload.packages || null,
           sentBy: adminUid, sentAt: admin.database.ServerValue.TIMESTAMP, fcmError: "NO_FCM_TOKEN",
         }).catch(() => {});
-        res.json({ success: true, commandId, queued: true, fcmError: "NO_FCM_TOKEN" });
+        res.json({ success: true, commandId, queued: true, delivered: false, channel: "buzon", fcmError: "NO_FCM_TOKEN" });
         return;
       }
       res.status(404).json({ error: "El dispositivo no tiene FCM token." });
@@ -614,7 +623,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
           command, commandId, packages: payload.packages || null,
           sentBy: adminUid, sentAt: admin.database.ServerValue.TIMESTAMP, fcmError: String(code),
         }).catch(() => {});
-        res.json({ success: true, commandId, queued: true, fcmError: String(code) });
+        res.json({ success: true, commandId, queued: true, delivered: false, channel: "buzon", fcmError: String(code) });
         return;
       }
       throw e;
@@ -626,7 +635,10 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       sentBy: adminUid, sentAt: admin.database.ServerValue.TIMESTAMP,
     });
 
-    res.json({ success: true, commandId, queued });
+    // `queued` sigue viajando (la copia del buzón existe), pero el panel NO lo tiene que
+    // leer como "no llegó": `delivered: true` dice que el FCM salió y que hay que
+    // esperar el ack del celular. Ver el comentario de arriba.
+    res.json({ success: true, commandId, queued, delivered: true, channel: "fcm" });
   } catch (e) {
     console.error("sendCommandV3 error:", e);
     const status = e.status || 500;

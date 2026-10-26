@@ -379,6 +379,11 @@
         <div class="sidebar-content">
           <!-- Pestaña 1: Políticas -->
           <div id="panel-policies" class="tab-panel active">
+            <!-- 26/10/2026 (B.95) — Canal de comandos: por dónde le llegan los comandos a
+                 este equipo y qué está esperando en su buzón. Oculta mientras todo está
+                 bien (FCM y buzón vacío); la llena pintarCanalDeComandos() en app.js. -->
+            <div class="sidebar-card" id="device-command-channel" style="display:none"></div>
+
             <!-- Suspensión temporal de LockSuite -->
             <div class="sidebar-card" id="suspend-card">
               <h3 id="suspend-card-title">⏸️ Suspender LockSuite</h3>
@@ -995,6 +1000,10 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
   <script src="firebase-config.js"></script>
   <script src="qr.js?v=1"></script>
-  <script src="app.js?v=41"></script>
+  <!-- 26/10/2026 (B.95): app.js usa policies.js para saber qué interruptor toca cada
+       comando pendiente (marca «⏳ pendiente»). Es el mismo archivo generado que ya usa
+       la ficha nueva; si faltara, la barra funciona igual, solo sin esa marca. -->
+  <script src="policies.js?v=1"></script>
+  <script src="app.js?v=42"></script>
 </body>
 </html>

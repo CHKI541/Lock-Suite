@@ -266,6 +266,13 @@ function renderDevicesList(e) {
         } else if (fresco && !fcm) {
             c.textContent = "Sin FCM";
             c.className = "badge warning";
+            // 26/10/2026 (B.95): el porqué, que el celular publica desde el 2/9 y nadie
+            // mostraba. Sin FCM los comandos van solo por el buzón del equipo.
+            const errFcm = field(t, "fcmTokenError", "");
+            const vivoBuzon = field(t, "mailboxLive", null) === true;
+            c.title = "Este celular no tiene FCM" + (errFcm ? " (" + errFcm + ")" : "") +
+                ". Los comandos le llegan por su buzón" +
+                (vivoBuzon ? ", que escucha en vivo." : ": desde LockSuite 0.6.67 lo escucha en vivo; antes, cada 15 min.");
         } else if (visto && fcm) {
             c.textContent = "En reposo";
             c.className = "badge warning";
@@ -516,6 +523,15 @@ function updateSidebarUI(e, t) {
                         || n === "whitelistSharedCdn" || n === "nokiaTouchEnabled");
         e.checked = field(t, n, defVal) === true;
     });
+    // 26/10/2026 (B.95): lo que todavía está en camino se muestra como pedido, con la
+    // marca «⏳», en vez de "volver solo" al valor viejo. Y la tarjeta del canal de
+    // comandos dice por dónde le llegan las cosas a este equipo. Ver cada función.
+    try {
+        marcarInterruptoresPendientes(t);
+        pintarCanalDeComandos(t);
+    } catch (err) {
+        console.warn("canal de comandos: no se pudo dibujar", err);
+    }
 
     // ── Resumen y auditoría de la lista blanca ──
     try {
@@ -1091,6 +1107,228 @@ function followUpdateFlow(deviceId, buttonEl, onDone) {
     activeUpdateFlowHandler = handler;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CANAL DE COMANDOS: ¿SALIÓ EL FCM?, ¿QUÉ ESTÁ PENDIENTE?  (26/10/2026, B.95)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ¿El comando salió por FCM? Es lo que decide si hay que esperar el ack del celular o
+ * si va solo por el buzón. La Cloud Function nueva lo dice en `delivered`. La anterior
+ * (desplegada hasta 0.6.66) mandaba `queued: true` SIEMPRE —la copia del buzón se deja
+ * en todo comando—, y lo único que distinguía un FCM que no salió era `fcmError`.
+ */
+function commandWentByFcm(resData) {
+    if (resData && typeof resData.delivered === "boolean") return resData.delivered;
+    return !(resData && resData.fcmError);
+}
+
+/** El motivo de un FCM que no salió, en castellano y entre paréntesis (o vacío). */
+function describeFcmError(code) {
+    if (!code) return "";
+    if (code === "NO_FCM_TOKEN") return " (el equipo nunca registró FCM)";
+    if (/registration-token-not-registered|invalid-registration-token|invalid-argument/i.test(code)) {
+        return " (su token de FCM ya no sirve)";
+    }
+    return " (FCM: " + code + ")";
+}
+
+/**
+ * Sigue el ack de un comando que quedó sin confirmar, hasta 16 min (el Worker del
+ * celular revisa el buzón cada 15). Cuando el celular lo aplica, lo dice en la línea de
+ * estado — si se sigue mirando ese mismo equipo; si no, se calla. Antes, pasado el
+ * timeout el panel no volvía a decir nada nunca más, y un comando aplicado diez minutos
+ * después era indistinguible de uno perdido.
+ */
+const acksEnSegundoPlano = new Map();
+function seguirAckEnSegundoPlano(deviceId, commandId, comando) {
+    if (!deviceId || !commandId || acksEnSegundoPlano.has(commandId)) return;
+    const ref = database.ref(`devices/${deviceId}/commandAcks/${commandId}`);
+    const soltar = () => {
+        const x = acksEnSegundoPlano.get(commandId);
+        if (!x) return;
+        acksEnSegundoPlano.delete(commandId);
+        clearTimeout(x.timer);
+        try { x.ref.off("value", x.handler); } catch (err) {}
+    };
+    const handler = ref.on("value", (snap) => {
+        const v = snap.val();
+        if (!v || v.status === "sent" || v.status === "queued") return;
+        soltar();
+        if (selectedDeviceId !== deviceId) return;
+        if (v.status === "applied") {
+            setCommandStatus("✓ " + comando + ": el celular lo aplicó (llegó por el buzón).");
+        } else {
+            setCommandStatus("✗ " + comando + ": el celular lo " +
+                (v.status === "rejected" ? "rechazó" : "intentó aplicar y falló") +
+                (v.reason ? " (" + v.reason + ")" : "") + ".");
+        }
+    });
+    const timer = setTimeout(soltar, 16 * 60 * 1000);
+    acksEnSegundoPlano.set(commandId, { ref, handler, timer });
+}
+
+/**
+ * comando → [campo del interruptor, valor que pide]. Sale de `policies.js` (generado de
+ * index.html + app.js por tools/gen_policies_js.py, así que no se puede desincronizar a
+ * mano) más los tres que ese archivo deja aparte porque piden confirmación propia.
+ */
+let mapaComandoAInterruptor = null;
+function comandoAInterruptor(cmd) {
+    if (!mapaComandoAInterruptor) {
+        const m = {};
+        const pol = (window.LOCKSUITE_POLICIES && window.LOCKSUITE_POLICIES.policies) || [];
+        pol.forEach(p => {
+            if (p.on) m[p.on] = [p.field, true];
+            if (p.off) m[p.off] = [p.field, false];
+        });
+        m.SUSPEND_LOCKSUITE = ["locksuiteSuspended", true];
+        m.RESUME_LOCKSUITE = ["locksuiteSuspended", false];
+        m.ENABLE_KIOSK_LOCK_TASK = ["kioskLockTaskEnabled", true];
+        m.DISABLE_KIOSK_LOCK_TASK = ["kioskLockTaskEnabled", false];
+        m.ENABLE_NOKIA_TOUCH = ["nokiaTouchEnabled", true];
+        m.DISABLE_NOKIA_TOUCH = ["nokiaTouchEnabled", false];
+        mapaComandoAInterruptor = m;
+    }
+    return mapaComandoAInterruptor[cmd] || null;
+}
+
+/** Comandos que siguen esperando en el buzón del equipo (sin los ya vencidos). */
+function comandosEnBuzon(t) {
+    const pend = (t && t.pendingCommands) || {};
+    const ahora = Date.now();
+    return Object.keys(pend).map(k => {
+        const x = pend[k] || {};
+        const d = x.data || {};
+        return { key: k, command: d.command || "?", packages: d.packages || "",
+                 at: Number(d.timestamp) || Number(x.queuedAt) || 0, expiresAt: Number(x.expiresAt) || 0 };
+    }).filter(x => !(x.expiresAt && x.expiresAt < ahora)).sort((a, b) => a.at - b.at);
+}
+
+/**
+ * INTERRUPTORES CON UN COMANDO EN CAMINO.
+ *
+ * La barra lateral dibuja cada interruptor con lo que REPORTA el celular. Apenas se
+ * manda un comando, la Cloud Function escribe su ack y su copia del buzón adentro del
+ * mismo nodo del equipo, eso redibuja la barra, y el interruptor vuelve a mostrar el
+ * valor viejo porque el celular todavía no lo aplicó. Para el administrador eso se lee
+ * como "lo toqué y se volvió solo" = "no lo mandó". Con FCM dura dos o tres segundos; en
+ * un equipo sin FCM, hasta que levanta el buzón.
+ *
+ * Ahora, mientras haya un comando de ese interruptor en el buzón —o aplicado hace menos
+ * de 45 s y el reporte del equipo todavía sin reflejarlo (la sincronización del celular
+ * sale ~2,5 s después del ack)— se muestra el valor PEDIDO con la marca «⏳». Cuando el
+ * reporte coincide, la marca se va sola. Nada de esto escribe en ningún lado.
+ */
+function marcarInterruptoresPendientes(t) {
+    const pedidos = {};
+    comandosEnBuzon(t).forEach(x => {
+        const par = comandoAInterruptor(x.command);
+        if (!par) return;
+        if (!pedidos[par[0]] || pedidos[par[0]].at <= x.at) pedidos[par[0]] = { valor: par[1], at: x.at, enBuzon: true };
+    });
+    const acks = (t && t.commandAcks) || {};
+    const ahora = Date.now();
+    Object.keys(acks).forEach(k => {
+        const v = acks[k] || {};
+        if (v.status !== "applied") return;
+        const at = Number(v.timestamp) || 0;
+        if (!at || ahora - at > 45000) return;
+        const par = comandoAInterruptor(v.command);
+        if (!par) return;
+        if (!pedidos[par[0]] || pedidos[par[0]].at < at) pedidos[par[0]] = { valor: par[1], at, enBuzon: false };
+    });
+    sidebar.querySelectorAll(".policy-switch").forEach(sw => {
+        const campo = sw.getAttribute("data-policy");
+        const row = sw.closest(".toggle-row");
+        let marca = row ? row.querySelector(".ls-pendiente") : null;
+        const p = pedidos[campo];
+        if (!p || sw.checked === p.valor) {
+            if (marca) marca.remove();
+            return;
+        }
+        sw.checked = p.valor;
+        if (!marca && row) {
+            marca = document.createElement("small");
+            marca.className = "ls-pendiente";
+            marca.style.cssText = "color:#f0b429; font-size:11px; margin-left:6px; white-space:nowrap;";
+            const span = row.querySelector("span");
+            (span || row).appendChild(marca);
+        }
+        if (marca) {
+            marca.textContent = p.enBuzon ? "⏳ pendiente" : "⏳ aplicando";
+            marca.title = p.enBuzon
+                ? "El comando está en el buzón del celular: todavía no lo aplicó."
+                : "El celular ya lo aplicó; falta que reporte su estado nuevo.";
+        }
+    });
+}
+
+function haceCuanto(ms) {
+    if (!ms) return "nunca";
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return "hace " + s + " s";
+    const m = Math.round(s / 60);
+    if (m < 90) return "hace " + m + " min";
+    const h = Math.round(m / 60);
+    if (h < 36) return "hace " + h + " h";
+    return "hace " + Math.round(h / 24) + " días";
+}
+
+/**
+ * Tarjeta «📡 Canal de comandos». Se calla cuando todo está bien (FCM y buzón vacío),
+ * por la misma regla que la pestaña Inicio del celular: un aviso que se muestra siempre
+ * no se mira. Cuando algo no está bien, dice QUÉ: si el equipo no tiene FCM y por qué,
+ * si escucha su buzón en vivo, cuándo lo revisó por última vez y qué hay esperando.
+ * Sin esto, "el panel no le manda nada a este celular" no se podía diagnosticar desde
+ * el panel: el motivo de FCM (`fcmTokenError`) se publicaba desde el 2/9 y nadie lo dibujaba.
+ */
+function pintarCanalDeComandos(t) {
+    const el = document.getElementById("device-command-channel");
+    if (!el) return;
+    const fcm = field(t, "fcmToken", "");
+    const fcmErr = field(t, "fcmTokenError", "");
+    const vivo = field(t, "mailboxLive", null);
+    const vivoMotivo = field(t, "mailboxLiveReason", "");
+    const ultimo = field(t, "mailboxLastCheckAt", 0);
+    const resultado = field(t, "mailboxLastResult", "");
+    const enCola = comandosEnBuzon(t);
+    if (fcm && enCola.length === 0) {
+        el.style.display = "none";
+        el.textContent = "";
+        return;
+    }
+    const lineas = [];
+    if (!fcm) {
+        lineas.push("⚠ Este celular no tiene FCM" + (fcmErr ? " — " + fcmErr : "") +
+            ". Los comandos le llegan solo por su buzón.");
+        if (vivo === true) lineas.push("✓ Escucha su buzón en vivo: los comandos se aplican en segundos mientras tenga red.");
+        else if (vivo === false) lineas.push("⚠ Ahora NO está escuchando su buzón en vivo" + (vivoMotivo ? " (" + vivoMotivo + ")" : "") + ": lo revisa cada 15 min.");
+        else lineas.push("Con su versión de LockSuite revisa el buzón cada 15 min. Desde 0.6.67 lo escucha en vivo.");
+    }
+    if (enCola.length) {
+        const muestra = enCola.slice(0, 5).map(x =>
+            x.command + (x.packages ? " " + x.packages : "") + " (" + haceCuanto(x.at) + ")").join(" · ");
+        lineas.push("📬 " + enCola.length + " comando(s) esperando en su buzón: " + muestra +
+            (enCola.length > 5 ? " · …" : ""));
+    }
+    if (ultimo) lineas.push("Último chequeo del buzón: " + haceCuanto(ultimo) + (resultado ? " — " + resultado : "") + ".");
+    else if (enCola.length) lineas.push("Este equipo todavía no informó ningún chequeo del buzón (versión anterior a 0.6.67).");
+
+    el.style.display = "block";
+    el.style.borderLeft = "3px solid #f0b429";
+    el.textContent = "";
+    const h = document.createElement("h3");
+    h.textContent = "📡 Canal de comandos";
+    el.appendChild(h);
+    lineas.forEach(txt => {
+        const p = document.createElement("p");
+        p.className = "hint-text";
+        p.style.margin = "4px 0";
+        p.textContent = txt;
+        el.appendChild(p);
+    });
+}
+
 async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParams = null) {
     a && (a.disabled = !0), setCommandStatus("Enviando comando al celular...");
     let d = verifiedDevicePins[e] || null,
@@ -1129,13 +1367,28 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
         const resData = await response.json();
         const commandId = resData.commandId;
         if (commandId) {
-            if (resData.queued) {
-                const reason = resData.fcmError ? ` (${resData.fcmError})` : "";
-                setCommandStatus("ℹ Comando encolado en el buzón" + reason + ". Se aplicará automáticamente en el próximo ciclo (hasta 15 min).");
-                if (a) a.disabled = false;
-                if (i) i();
-                return true;
-            }
+            // ─────────────────────────────────────────────────────────────────────
+            // 26/10/2026 (B.95) — "EL PANEL NO MANDA LOS COMANDOS".
+            //
+            // B.94 cortaba acá apenas la Cloud Function contestaba `queued: true`, con
+            // el texto "Comando encolado en el buzón… hasta 15 min" y DESHACIENDO el
+            // interruptor. Pero la Function contesta `queued: true` en CASI TODO comando:
+            // significa "quedó la copia en el buzón", y esa copia se deja SIEMPRE, haya
+            // salido el FCM o no. Resultado: en TODOS los celulares el panel decía que no
+            // había llegado y volvía el interruptor atrás, aunque el equipo lo aplicara en
+            // dos segundos. La pregunta que importa es otra: ¿salió el FCM?
+            //
+            //  · Salió  → se espera el ack del celular, como siempre (10 s).
+            //  · No salió (equipo sin FCM, o FCM rechazado) → el comando va SOLO por el
+            //    buzón. Un celular con LockSuite 0.6.67+ lo escucha en vivo y lo aplica en
+            //    segundos; uno más viejo lo levanta en su vuelta de 15 min.
+            //
+            // En ningún caso "en cola" deshace el interruptor: el comando NO falló, está
+            // en camino, y la barra ya muestra lo que el celular reporta (con la marca
+            // «⏳ pendiente» mientras tanto, ver marcarInterruptoresPendientes()). Solo un
+            // `failed`/`rejected` real llama a `i` (deshacer).
+            // ─────────────────────────────────────────────────────────────────────
+            const salioPorFcm = commandWentByFcm(resData);
             const isSelfUpdateCmd = (t === "UPDATE_LOCKSUITE");
             // 3/9/2026: UPDATE_APP quedaba fuera de esta bandera, asi que se le
             // aplicaba el timeout corto y el mensaje generico. Ahora tiene su
@@ -1144,12 +1397,25 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
             // telefono. Era el pedido textual del dueno: "tiene que pasar lo
             // mismo que si el usuario actualiza desde su cel".
             const isAppUpdateCmd = (t === "UPDATE_APP");
-            const timeoutMs = isSelfUpdateCmd ? 120000 : 10000;
-            setCommandStatus(isSelfUpdateCmd ? "Esperando descarga y actualización del celular..." : "Comando enviado. Esperando respuesta del celular...");
+            // Un celular sin FCM que ya escucha su buzón en vivo (lo reporta en
+            // `mailboxLive`) lo aplica en segundos: vale la pena esperarlo un rato. Uno
+            // que no (versión vieja) recién lo ve en su vuelta de 15 min: esperarlo con
+            // el botón trabado no sirve de nada, se avisa y se sigue en segundo plano.
+            const buzonEnVivo = !!(c && field(c, "mailboxLive", false) === true);
+            // Sin FCM y sin escucha en vivo, no hay a quién esperar: ni siquiera la
+            // autoactualización (llega en la vuelta de 15 min del Worker).
+            const sinNadieQueEscuche = !salioPorFcm && !buzonEnVivo;
+            const timeoutMs = sinNadieQueEscuche ? 1500 : (isSelfUpdateCmd ? 120000 : (salioPorFcm ? 10000 : 25000));
+            const motivoBuzon = describeFcmError(resData.fcmError);
+            if (salioPorFcm) {
+                setCommandStatus(isSelfUpdateCmd ? "Esperando descarga y actualización del celular..." : "Comando enviado. Esperando respuesta del celular...");
+            } else {
+                setCommandStatus("⏳ Este celular no recibe FCM" + motivoBuzon + ": el comando quedó en su buzón. Esperando que lo levante...");
+            }
             const ackRef = database.ref(`devices/${e}/commandAcks/${commandId}`);
             const timeoutId = setTimeout(() => {
                 ackRef.off();
-                if (isSelfUpdateCmd) {
+                if (isSelfUpdateCmd && !sinNadieQueEscuche) {
                     setCommandStatus("✓ Comando enviado. El celular se está actualizando en segundo plano.");
                 } else {
                     // ⚠️ NO PONER UN ✓ ACA. Esto NO es un exito: es silencio.
@@ -1158,50 +1424,53 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                     // del celular)", con tilde verde. Es indistinguible de que haya
                     // funcionado, y es exactamente lo que el dueno reporto como
                     // "mando actualizar desde la web y no pasa nada": el panel
-                    // decia que si. Un equipo que no contesta en 10 s esta dormido,
-                    // sin red, o con el canal de comandos desincronizado — y esa
-                    // ultima causa (B.26) se arregla con el boton "Re-vincular",
-                    // asi que hay que nombrarla donde el administrador la lee.
+                    // decia que si. Un equipo que no contesta esta dormido, sin red,
+                    // o con el canal de comandos desincronizado — y esa ultima causa
+                    // (B.26) se arregla con el boton "Re-vincular".
                     // 22/9/2026: el comando no se pierde — quedó en el buzón del equipo
                     // (devices/<id>/pendingCommands) y se aplica solo cuando se conecte.
-                    setCommandStatus("⚠ El celular no confirmó en 10 s (dormido o sin red). El comando quedó en cola y se aplica solo cuando se conecte (hasta 15 min). Si nunca se aplica, revisá el aviso de canal de comandos y probá \"Re-vincular\".");
+                    // 26/10/2026: y el panel lo sigue esperando en segundo plano, así que
+                    // cuando el celular lo aplica, lo dice acá mismo.
+                    setCommandStatus(salioPorFcm
+                        ? "⏳ El celular no confirmó en 10 s (dormido o sin red). El comando NO se perdió: quedó en su buzón y se aplica solo cuando se conecte (hasta 15 min). Te aviso acá cuando lo confirme. Si nunca llega, revisá el aviso de canal de comandos y probá \"Re-vincular\"."
+                        : (buzonEnVivo
+                            ? "⏳ Sigue en el buzón: el celular no lo levantó todavía (dormido o sin red). Se aplica solo cuando se conecte; te aviso acá cuando lo confirme."
+                            : "⏳ En el buzón del celular" + motivoBuzon + ". Este equipo todavía no escucha su buzón en vivo (LockSuite anterior a 0.6.67): lo levanta en su próxima vuelta, hasta 15 min. Te aviso acá cuando lo aplique."));
+                    seguirAckEnSegundoPlano(e, commandId, t);
                 }
                 if (a) a.disabled = false;
-                if (i) i();
             }, timeoutMs);
 
             ackRef.on("value", (snap) => {
-                if (snap.exists()) {
-                    const status = snap.val().status;
-                    if (status === "applied") {
-                        clearTimeout(timeoutId);
-                        ackRef.off();
-                        if (isAppUpdateCmd) {
-                            // El ack "applied" de UPDATE_APP solo dice que el flujo
-                            // ARRANCO. Lo que importa recien pasa despues, y el
-                            // celular lo publica en vivo: seguirlo.
-                            setCommandStatus("El celular abrió Google Play. Siguiendo la actualización...");
-                            followUpdateFlow(e, a, i);
-                        } else {
-                            setCommandStatus("✓ Comando aplicado con éxito en el celular");
-                            if (a) a.disabled = false;
-                        }
-                    } else if (status === "queued") {
-                        clearTimeout(timeoutId);
-                        ackRef.off();
-                        const reason = snap.val().reason ? ` (${snap.val().reason})` : "";
-                        setCommandStatus("ℹ Comando encolado en el buzón" + reason + ". Se aplicará automáticamente en el próximo ciclo (hasta 15 min).");
+                if (!snap.exists()) return;
+                const v = snap.val() || {};
+                const status = v.status;
+                // "sent" y "queued" NO son desenlaces: los escribe la Cloud Function antes
+                // de contestar, así que casi siempre son lo primero que se ve. Se sigue
+                // esperando el del celular.
+                if (status === "applied") {
+                    clearTimeout(timeoutId);
+                    ackRef.off();
+                    if (isAppUpdateCmd) {
+                        // El ack "applied" de UPDATE_APP solo dice que el flujo
+                        // ARRANCO. Lo que importa recien pasa despues, y el
+                        // celular lo publica en vivo: seguirlo.
+                        setCommandStatus("El celular abrió Google Play. Siguiendo la actualización...");
+                        followUpdateFlow(e, a, i);
+                    } else {
+                        setCommandStatus(salioPorFcm
+                            ? "✓ Comando aplicado con éxito en el celular"
+                            : "✓ Comando aplicado en el celular (llegó por el buzón)");
                         if (a) a.disabled = false;
-                        if (i) i();
-                    } else if (status === "failed" || status === "rejected") {
-                        clearTimeout(timeoutId);
-                        ackRef.off();
-                        const reason = snap.val().reason ? ` (${snap.val().reason})` : "";
-                        const prefix = status === "rejected" ? "✗ El comando fue rechazado por el celular" : "✗ El comando falló en el celular";
-                        setCommandStatus(prefix + reason);
-                        if (a) a.disabled = false;
-                        if (i) i();
                     }
+                } else if (status === "failed" || status === "rejected") {
+                    clearTimeout(timeoutId);
+                    ackRef.off();
+                    const reason = v.reason ? ` (${v.reason})` : "";
+                    const prefix = status === "rejected" ? "✗ El comando fue rechazado por el celular" : "✗ El comando falló en el celular";
+                    setCommandStatus(prefix + reason);
+                    if (a) a.disabled = false;
+                    if (i) i();
                 }
             });
             return true;

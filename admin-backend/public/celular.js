@@ -206,6 +206,7 @@
     };
 
     let fallaron = 0;
+    let enCola = 0;   // 26/10/2026 (B.95): mandados pero sin confirmar (en el buzón)
 
     // ── 1. APPS: todo a la base, y UN SOLO comando al final ──────────────
     const apps = Object.keys(S.pendApps);
@@ -230,7 +231,13 @@
         const l2 = linea("Avisándole al celular que relea la configuración…");
         const r = await LS.sendCommand(deviceId, "SYNC_WHITELIST", null, null,
           { nombre: nombreDispositivo(), timeoutMs: 25000 });
-        if (r.ok) { l2.textContent = "✓ El celular aplicó la configuración de apps"; l2.className = "ok"; }
+        if (r.ok && r.pendiente) {
+          // 26/10/2026 (B.95): no confirmó todavía, pero NO falló — está en el buzón del
+          // celular y se aplica solo. No se cuenta como falla ni se pide reintentar.
+          enCola++;
+          l2.className = "wait";
+          l2.textContent = "⏳ El celular todavía no confirmó: " + r.reason;
+        } else if (r.ok) { l2.textContent = "✓ El celular aplicó la configuración de apps"; l2.className = "ok"; }
         else {
           fallaron++;
           l2.className = "bad";
@@ -254,7 +261,14 @@
       const l = linea("… " + def.label);
       const r = await LS.sendCommand(deviceId, cmd, null, null,
         { nombre: nombreDispositivo(), timeoutMs: 12000 });
-      if (r.ok) {
+      if (r.ok && r.pendiente) {
+        // 26/10/2026 (B.95): está en el buzón del celular. Se saca del carrito porque
+        // la orden ya quedó guardada del lado del equipo (reenviarla no agrega nada).
+        enCola++;
+        l.className = "wait";
+        l.textContent = "⏳ " + def.label + " — en el buzón del celular, sin confirmar todavía";
+        delete S.pendPol[campoNombre];
+      } else if (r.ok) {
         l.className = "ok";
         l.textContent = "✓ " + def.label;
         delete S.pendPol[campoNombre];
@@ -267,7 +281,13 @@
       }
     }
 
-    if (!fallaron) {
+    if (!fallaron && enCola) {
+      S.pendApps = {};
+      S.pendPol = {};
+      linea("⏳ " + enCola + " cambio(s) quedaron en el buzón del celular sin confirmar todavía. " +
+        "No hace falta mandarlos de nuevo: se aplican solos cuando el celular los levante.", "wait");
+      LS.toast("Mandado. " + enCola + " sin confirmar todavía: quedaron en el buzón del celular.", "warn");
+    } else if (!fallaron) {
       S.pendApps = {};
       S.pendPol = {};
       linea("✓ Listo, todo aplicado.", "ok");
@@ -530,7 +550,7 @@
         null, null, { nombre: nombreDispositivo() });
       this.disabled = false;
       if (!r.ok) { this.checked = !this.checked; LS.toast("No se pudo cambiar: " + (r.reason || r.status), "error"); }
-      else LS.toast("Listo.", "ok");
+      else LS.toast(...LS.resultado(r, "Listo."));
     });
   }
 
@@ -561,8 +581,11 @@
       pasos.push("ENABLE_WHITELIST_MODE");
       pasos.push(destino === "simulacion" ? "SET_WHITELIST_SIMULATION" : "SET_WHITELIST_ENFORCE");
     }
+    let ultimoModo = null;
     for (const cmd of pasos) {
       const r = await LS.sendCommand(deviceId, cmd, null, null, { nombre: nombreDispositivo() });
+      // Si alguno quedó pendiente (en el buzón), el aviso final lo dice con ⏳.
+      if (!ultimoModo || !ultimoModo.pendiente) ultimoModo = r;
       if (!r.ok) {
         LS.toast("No se pudo cambiar el modo: " + (r.reason || r.status), "error");
         b.disabled = false;
@@ -570,7 +593,7 @@
       }
     }
     b.disabled = false;
-    LS.toast("Modo cambiado.", "ok");
+    LS.toast(...LS.resultado(ultimoModo, "Modo cambiado."));
   });
 
   /* ═════════════════════════════════════════════════════════════════════════
@@ -696,12 +719,34 @@
       { nombre: nombreDispositivo() });
     inp.disabled = false;
     if (!r.ok) { inp.checked = !enc; LS.toast("No se pudo: " + (r.reason || r.status), "error"); }
-    else LS.toast(def.label + ": listo.", "ok");
+    else LS.toast(...LS.resultado(r, def.label + ": listo."));
   });
 
   /* ═════════════════════════════════════════════════════════════════════════
    * RESUMEN
    * ═══════════════════════════════════════════════════════════════════════ */
+  /**
+   * «Canal de comandos» del Resumen (26/10/2026, B.95): por dónde le llegan los comandos
+   * a este equipo. FCM es lo normal; sin FCM, solo por su buzón (`pendingCommands`), en
+   * vivo desde 0.6.67 o cada 15 min antes. Devuelve HTML ya escapado.
+   */
+  function canalDeComandos() {
+    const pend = campo("pendingCommands", null) || {};
+    const ahora = Date.now();
+    const enCola = Object.keys(pend).filter((k) => {
+      const x = pend[k] || {};
+      return !(x.expiresAt && x.expiresAt < ahora);
+    }).length;
+    const cola = enCola ? ' · <span class="ls-chip warn">' + enCola + " en su buzón</span>" : "";
+    if (campo("fcmToken", "")) return '<span class="ls-chip ok">FCM</span>' + cola;
+    const vivo = campo("mailboxLive", null);
+    const ult = campo("mailboxLastCheckAt", 0);
+    return '<span class="ls-chip warn">sin FCM</span> · ' +
+      (vivo === true ? "buzón en vivo" : vivo === false ? "buzón cada 15 min (sin conexión en vivo)" : "buzón cada 15 min") +
+      (ult ? "<br><small>último chequeo " + esc(LS.fecha(ult)) + " — " + esc(String(campo("mailboxLastResult", ""))) + "</small>" : "") +
+      cola;
+  }
+
   function pintarResumen() {
     const kv = (k, v) => '<div class="ls-kv"><span>' + esc(k) + "</span><span>" + v + "</span></div>";
 
@@ -731,6 +776,7 @@
         : accActiva === false
           ? '<span class="ls-chip bad">caída</span>' : "—") +
       kv("Dominios en el filtro", esc(String(campo("whitelistDomainCount", "—")))) +
+      kv("Canal de comandos", canalDeComandos()) +
       (exitReason ? kv("Última salida", esc(String(exitReason)) + (exitTs ? " · " + LS.fecha(exitTs) : "")) : "");
 
     const m = MODOS.find((x) => x.id === modoActual());
@@ -755,6 +801,14 @@
     }
     if (campo("commandSecretMismatch", false)) {
       avisos.push(["bad", "El canal de comandos está desincronizado: los comandos del panel no llegan. Usá «Re-vincular» en Acciones."]);
+    }
+    // 26/10/2026 (B.95): un equipo sin FCM solo recibe por su buzón. Si además no lo
+    // escucha en vivo, cada cambio tarda hasta 15 min y parece que "el panel no manda".
+    if (!campo("fcmToken", "") && campo("mailboxLive", null) !== true) {
+      avisos.push(["warn", "Este celular no tiene FCM" +
+        (campo("fcmTokenError", "") ? " (" + campo("fcmTokenError", "") + ")" : "") +
+        " y no está escuchando su buzón en vivo: los comandos le llegan cada 15 min. " +
+        "Actualizalo a LockSuite 0.6.67+ para que le lleguen en segundos."]);
     }
     if (campo("policyDriftCount", 0) > 0) {
       avisos.push(["warn", campo("policyDriftCount") + " políticas figuran encendidas pero el sistema no las tiene puestas."]);
@@ -912,8 +966,7 @@
     const r = await LS.sendCommand(deviceId, "APPLY_MASTER_PROFILE", null, extra,
       { nombre: nombreDispositivo(), timeoutMs: 20000 });
     b.disabled = false;
-    if (r.ok) LS.toast("Perfil aplicado.", "ok");
-    else LS.toast("No se pudo aplicar: " + (r.reason || r.status), "error");
+    LS.toast(...LS.resultado(r, "Perfil aplicado."));
   });
 
   function pintarGracia() {
@@ -937,7 +990,7 @@
       const r = await LS.sendCommand(deviceId, "CANCEL_GRACE_PERIOD", null, null,
         { nombre: nombreDispositivo() });
       this.disabled = false;
-      LS.toast(r.ok ? "Vencimiento cancelado." : "No se pudo: " + (r.reason || r.status), r.ok ? "ok" : "error");
+      LS.toast(...LS.resultado(r, "Vencimiento cancelado."));
     });
   }
 
@@ -973,7 +1026,7 @@
       });
       const r = await LS.sendCommand(deviceId, "APPLY_PROFILE", null, { profileId: cloudId },
         { nombre: nombreDispositivo(), timeoutMs: 20000 });
-      LS.toast(r.ok ? "Perfil aplicado." : "No se pudo: " + (r.reason || r.status), r.ok ? "ok" : "error");
+      LS.toast(...LS.resultado(r, "Perfil aplicado."));
     } catch (err) {
       LS.toast("No se pudo publicar el perfil: " + err.message, "error");
     }
@@ -1029,8 +1082,7 @@
   async function reglaDns(dominio, tipo) {
     const cmd = tipo === "REMOVE" ? "REMOVE_DOMAIN_RULE" : "SET_DOMAIN_RULE_" + tipo;
     const r = await LS.sendCommand(deviceId, cmd, dominio, null, { nombre: nombreDispositivo() });
-    LS.toast(r.ok ? "Regla aplicada en el celular." : "No se pudo: " + (r.reason || r.status),
-      r.ok ? "ok" : "error");
+    LS.toast(...LS.resultado(r, "Regla aplicada en el celular."));
   }
 
   $("c-dns-add").addEventListener("click", async function () {
@@ -1213,7 +1265,7 @@
     const r = await LS.sendCommand(deviceId, b.dataset.cmd, null, null,
       { nombre: nombreDispositivo(), timeoutMs: b.dataset.cmd === "UPDATE_LOCKSUITE" ? 120000 : 15000 });
     b.disabled = false;
-    LS.toast(r.ok ? "Listo." : "No se pudo: " + (r.reason || r.status), r.ok ? "ok" : "error");
+    LS.toast(...LS.resultado(r, "Listo."));
   });
 
   $("c-peligro").addEventListener("click", async (e) => {
@@ -1222,7 +1274,7 @@
     b.disabled = true;
     const r = await LS.sendCommand(deviceId, b.dataset.cmd, null, null, { nombre: nombreDispositivo() });
     b.disabled = false;
-    LS.toast(r.ok ? "Listo." : "No se pudo: " + (r.reason || r.status), r.ok ? "ok" : "error");
+    LS.toast(...LS.resultado(r, "Listo."));
   });
 
   $("c-upd-btn").addEventListener("click", async function () {
@@ -1233,7 +1285,9 @@
     const r = await LS.sendCommand(deviceId, "UPDATE_APP", pkg, null,
       { nombre: nombreDispositivo(), timeoutMs: 20000 });
     this.disabled = false;
-    $("c-upd-estado").textContent = r.ok
+    $("c-upd-estado").textContent = r.ok && r.pendiente
+      ? "⏳ Todavía no arrancó: " + r.reason
+      : r.ok
       ? "El flujo arrancó. Mirá el progreso acá abajo."
       : "No arrancó: " + (r.reason || r.status);
   });
@@ -1258,7 +1312,7 @@
     const r = await LS.sendCommand(deviceId, "CHANGE_PIN", null, { newPin: v },
       { nombre: nombreDispositivo() });
     this.disabled = false;
-    if (r.ok) { $("c-pin-nuevo").value = ""; LS.pins[deviceId] = v; LS.toast("PIN cambiado.", "ok"); }
+    if (r.ok) { $("c-pin-nuevo").value = ""; LS.pins[deviceId] = v; LS.toast(...LS.resultado(r, "PIN cambiado.")); }
     else LS.toast("No se pudo: " + (r.reason || r.status), "error");
   });
 

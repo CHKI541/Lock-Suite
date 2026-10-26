@@ -159,55 +159,86 @@
 
       const data = await res.json();
       if (!data.commandId) return { ok: true, status: "enviado", reason: "" };
-      if (data.queued) {
-        return {
-          ok: true,
-          status: "queued",
-          reason: data.fcmError ? "Encolado en el buzón (" + data.fcmError + ")" : "Encolado en el buzón"
-        };
+
+      // ─────────────────────────────────────────────────────────────────────
+      // 26/10/2026 (B.95) — B.94 devolvía acá "encolado" apenas la Function decía
+      // `queued: true`, sin esperar al celular. Pero `queued: true` viene en CASI TODO
+      // comando (la copia del buzón se deja siempre, haya salido el FCM o no), así que
+      // la ficha daba por "listo" lo que no sabía si había llegado, y nunca mostraba el
+      // ✓ real. Lo que decide es si salió el FCM (`delivered`; con la Function vieja,
+      // la ausencia de `fcmError`). Si salió, se espera el ack como siempre. Si no, el
+      // comando va solo por el buzón: un celular que lo escucha en vivo (0.6.67+,
+      // `mailboxLive`) lo aplica en segundos y se lo espera un rato; uno viejo lo ve en
+      // su vuelta de 15 min y no tiene sentido trabar la pantalla esperándolo.
+      //
+      // Contrato de lo que devuelve, para quien llama:
+      //   { ok: true,  status: "applied" }                     → el celular lo aplicó.
+      //   { ok: true,  status: "pendiente", pendiente: true }  → NO falló: está en el
+      //       buzón del celular y se aplica solo cuando lo levante. Mostrarlo con ⏳,
+      //       nunca con ✓ (ver LS.resultado()).
+      //   { ok: false, status: "failed" | "rejected" | … }     → falló de verdad.
+      // ─────────────────────────────────────────────────────────────────────
+      const porFcm = (typeof data.delivered === "boolean") ? data.delivered : !data.fcmError;
+      let esperaMs = timeoutMs;
+      if (!porFcm) {
+        let enVivo = false;
+        try {
+          enVivo = (await LS.db.ref("devices/" + deviceId + "/mailboxLive").once("value")).val() === true;
+        } catch (e) { enVivo = false; }
+        esperaMs = enVivo ? Math.max(timeoutMs, 20000) : 1500;
       }
+      const motivo = data.fcmError === "NO_FCM_TOKEN" ? "el equipo no tiene FCM"
+        : data.fcmError ? "FCM: " + data.fcmError : "";
 
       return await new Promise((resolve) => {
         const ref = LS.db.ref("devices/" + deviceId + "/commandAcks/" + data.commandId);
-        let ultimo = "";
         const t = setTimeout(() => {
           ref.off();
           resolve({
-            ok: false,
-            status: "timeout",
+            ok: true,
+            pendiente: true,
+            status: "pendiente",
             // El texto nombra las causas reales, como pide B.42. Desde el 22/9 además
             // dice que el comando NO se perdió: quedó en el buzón del equipo
             // (devices/<id>/pendingCommands) y se aplica solo cuando vuelva a tener red.
-            reason: "El celular no confirmó en " + Math.round(timeoutMs / 1000) +
-              " s (dormido o sin red). El comando quedó en cola y se aplica solo cuando el equipo se conecte (hasta 15 min)." +
-              (ultimo === "queued" ? " FCM no lo pudo entregar ahora." : "") +
-              " Si nunca se aplica, revisá el canal de comandos (\"Re-vincular\")."
+            reason: porFcm
+              ? "El celular no confirmó en " + Math.round(esperaMs / 1000) + " s (dormido o sin red). " +
+                "Quedó en su buzón y se aplica solo cuando se conecte (hasta 15 min). " +
+                "Si nunca se aplica, revisá el canal de comandos (\"Re-vincular\")."
+              : "Quedó en el buzón del celular" + (motivo ? " (" + motivo + ")" : "") + ". " +
+                "Se aplica solo cuando lo levante: en segundos si está con red y tiene LockSuite 0.6.67+, " +
+                "si no, en su próxima vuelta (hasta 15 min)."
           });
-        }, timeoutMs);
+        }, esperaMs);
         ref.on("value", (snap) => {
           if (!snap.exists()) return;
           const v = snap.val() || {};
           // ⚠️ 22/9/2026 — "sent" NO es un desenlace final: lo escribe la Cloud
           // Function ANTES de responder, así que casi siempre es lo PRIMERO que se ve.
-          if (v.status === "sent") { ultimo = v.status; return; }
-          if (v.status === "queued") {
-            clearTimeout(t);
-            ref.off();
-            resolve({
-              ok: true,
-              status: "queued",
-              reason: v.reason || "El comando quedó en cola en el buzón (sin FCM o en reposo). Se aplicará cuando el equipo conecte (hasta 15 min)."
-            });
-            return;
-          }
+          // "queued" tampoco: es la Function diciendo que el FCM no salió. Se sigue
+          // esperando lo que diga el celular.
+          if (v.status === "sent" || v.status === "queued") return;
           clearTimeout(t);
           ref.off();
-          if (v.status === "applied") resolve({ ok: true, status: "applied", reason: "" });
+          if (v.status === "applied") resolve({ ok: true, status: "applied", reason: porFcm ? "" : "llegó por el buzón" });
           else resolve({ ok: false, status: v.status || "failed", reason: v.reason || v.error || "" });
         });
       });
     }
     return { ok: false, status: "sin_pin", reason: "Hace falta el PIN de este celular." };
+  };
+
+  /**
+   * Texto y tipo de aviso para el resultado de LS.sendCommand (26/10/2026, B.95).
+   * `textoOk` es lo que se dice cuando el celular CONFIRMÓ. Un comando pendiente no es
+   * un error ni un éxito: se avisa con ⏳ y tipo "warn", y no se deshace nada en
+   * pantalla — está en el buzón del celular y se va a aplicar solo.
+   * @returns {[string, string]} [texto, tipo de toast]
+   */
+  LS.resultado = function (r, textoOk) {
+    if (r && r.ok && r.pendiente) return ["⏳ Todavía sin confirmar: " + (r.reason || "quedó en el buzón del celular."), "warn"];
+    if (r && r.ok) return [textoOk || "Listo.", "ok"];
+    return ["No se pudo: " + ((r && (r.reason || r.status)) || "error desconocido"), "error"];
   };
 
   /* ─────────────────────────────────────────────────────────────────────────

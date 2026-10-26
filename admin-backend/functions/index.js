@@ -433,11 +433,14 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
       await deviceRef.child("trustedAdmins").remove().catch(() => {});
       await deviceRef.child("info/trustedAdmins").remove().catch(() => {});
     } else if (command === "UPDATE_ALLOWLIST") {
-      if (!Array.isArray(packages)) {
+      const pkgList = Array.isArray(packages)
+        ? packages
+        : (typeof packages === "string" && packages.trim().length > 0 ? packages.split(",") : []);
+      if (pkgList.length === 0) {
         res.status(400).json({ error: "Falta la lista de paquetes." });
         return;
       }
-      const clean = packages.map(p => String(p).trim()).filter(p => /^[a-zA-Z0-9_.]+$/.test(p));
+      const clean = pkgList.map(p => String(p).trim()).filter(p => /^[a-zA-Z0-9_.]+$/.test(p));
       payload.packages = clean.join(",");
       await deviceRef.child("allowedPackages").set(clean);
       await deviceRef.child("info/allowedPackages").set(clean).catch(() => {});

@@ -159,6 +159,13 @@
 
       const data = await res.json();
       if (!data.commandId) return { ok: true, status: "enviado", reason: "" };
+      if (data.queued) {
+        return {
+          ok: true,
+          status: "queued",
+          reason: data.fcmError ? "Encolado en el buzón (" + data.fcmError + ")" : "Encolado en el buzón"
+        };
+      }
 
       return await new Promise((resolve) => {
         const ref = LS.db.ref("devices/" + deviceId + "/commandAcks/" + data.commandId);
@@ -180,12 +187,19 @@
         ref.on("value", (snap) => {
           if (!snap.exists()) return;
           const v = snap.val() || {};
-          // ⚠️ 22/9/2026 — "sent" y "queued" NO son un desenlace: los escribe la Cloud
-          // Function ANTES de responder, así que casi siempre son lo PRIMERO que se ve.
-          // Hasta hoy este listener resolvía con el primer valor, o sea que la ficha
-          // mostraba "No se pudo: sent" y revertía el interruptor en casi TODOS los
-          // comandos, aunque el celular los aplicara un segundo después.
-          if (v.status === "sent" || v.status === "queued") { ultimo = v.status; return; }
+          // ⚠️ 22/9/2026 — "sent" NO es un desenlace final: lo escribe la Cloud
+          // Function ANTES de responder, así que casi siempre es lo PRIMERO que se ve.
+          if (v.status === "sent") { ultimo = v.status; return; }
+          if (v.status === "queued") {
+            clearTimeout(t);
+            ref.off();
+            resolve({
+              ok: true,
+              status: "queued",
+              reason: v.reason || "El comando quedó en cola en el buzón (sin FCM o en reposo). Se aplicará cuando el equipo conecte (hasta 15 min)."
+            });
+            return;
+          }
           clearTimeout(t);
           ref.off();
           if (v.status === "applied") resolve({ ok: true, status: "applied", reason: "" });

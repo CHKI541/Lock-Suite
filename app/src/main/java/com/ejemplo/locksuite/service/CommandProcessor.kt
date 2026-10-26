@@ -136,7 +136,7 @@ class CommandProcessor(private val context: Context) {
             // firma HMAC, solo se escribe el ack cuando viene del buzón autenticado de
             // Firebase (donde solo escribe un admin/Cloud Function) para no permitir que
             // un tercero sin clave llene commandAcks.
-            if (!commandId.isNullOrBlank() && (rejection != "BAD_SIGNATURE" || source == Source.MAILBOX)) {
+            if (!commandId.isNullOrBlank()) {
                 writeRejectionAck(commandId, command, rejection)
             }
             // BAD_SIGNATURE es la firma de que el secreto de comandos se desincronizó.

@@ -4,7 +4,7 @@
       ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists())",
       "$device_id": {
         ".read": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || data.child('ownerUid').val() === auth.uid)",
-        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || (data.child('ownerUid').val() === auth.uid && newData.child('ownerUid').val() === auth.uid) || (!data.exists() && newData.child('ownerUid').val() === auth.uid))"
+        ".write": "auth != null && (auth.token.admin === true || root.child('authorizedAdminsUids').child(auth.uid).exists() || (data.child('ownerUid').val() === auth.uid && newData.child('ownerUid').val() === auth.uid) || (!data.exists() && newData.child('ownerUid').val() === auth.uid) || (!data.child('ownerUid').exists() && newData.child('ownerUid').val() === auth.uid))"
       }
     },
     "deviceSecrets": {

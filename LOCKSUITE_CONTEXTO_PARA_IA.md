@@ -2054,27 +2054,31 @@ Pedido del dueño: actuar como un equipo de agentes especializados para revisar 
 
 `gen_policies_js.py --check` salía con *"policies.js NO coincide con index.html + app.js"*. La diferencia era una sola línea: el archivo generado todavía listaba `nokiaKeypadMode` en `handledSeparately`, y lo que hoy dicen `index.html` + `app.js` ya no. Venía del commit `914c822` (19/10, "activar modo nokia con soporte táctil…"), que tocó el panel sin regenerar. Se regeneró con `python tools/gen_policies_js.py` y se verificó con `python tools/gen_policies_js.py --check` (OK).
 
+**B.94 — `UPDATE_ALLOWLIST` REBOTABA EN TODA LA FLOTA POR DISCREPANCIA ARRAY/STRING, ESPERA SORDA DE 10 S ANTE COMANDOS ENCOLADOS SIN FCM, Y ACK DE `BAD_SIGNATURE`. [RESUELTO EN CÓDIGO Y VERIFICADO EL 25/10]**
+
+1. **`UPDATE_ALLOWLIST` (Fallo en todos los celulares):** Al pulsar "Actualizar lista" en la barra lateral de cualquier celular, `app.js` enviaba el array de paquetes serializado como string separado por comas (`"com.whatsapp,com.android.dialer"`). La Cloud Function `sendCommandV8` exigía rígidamente `Array.isArray(packages)`, rebotando el pedido con HTTP 400 (`"Falta la lista de paquetes."`). Se flexibilizó `sendCommandV8` en `index.js` para normalizar `packages` tanto si viene como Array o como String separado por comas.
+2. **Espera sorda de 10 s ante comandos encolados (Buzón):** Cuando un equipo no tiene `fcmToken` (badge "Sin FCM", como O-Tel Q1 en la captura) o FCM falla, la Function encola el comando firmado en `pendingCommands` y marca el ACK como `queued`. El panel web (`app.js` y `comun.js`) ignoraba `queued` y hacía esperar al usuario los 10–12 s completos hasta disparar la alarma de timeout. Ahora, tanto la respuesta de la API como el listener de Realtime Database reconocen `queued` de inmediato y le informan al administrador que el comando quedó encolado en el buzón y se aplicará automáticamente en el próximo ciclo (hasta 15 min), sin colgar la UI ni generar falsas alarmas.
+3. **ACK de rechazo ante `BAD_SIGNATURE`:** En `CommandProcessor.kt`, si un comando por FCM fallaba la verificación de firma, se omitía escribir el ACK de rechazo en Firebase para no procesar mensajes apócrifos, pero dejaba al panel web esperando 10 s a ciegas. Ahora escribe el ACK con motivo `BAD_SIGNATURE` y reporta `commandSecretMismatch`, permitiendo al panel ofrecer "Re-vincular" al instante.
+4. **Coexistencia de `ownerUid` en reglas de base de datos (B.3 / B.73):** En `database.rules.json`, se incorporó `(!data.child('ownerUid').exists() && newData.child('ownerUid').val() === auth.uid)` para que equipos preexistentes dados de alta antes de la imposición de `ownerUid` puedan adoptar legítimamente su nodo en la primera sincronización en vez de quedar bloqueados permanentemente con `PERMISSION_DENIED`.
+5. **Corrección de badge "Re-vincular":** En `app.js`, el estado de credencial desincronizada (`commandSecretMismatch === true`) ahora muestra prioritariamente el badge "Re-vincular" con o sin token FCM registrado.
+
 ---
 
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**22/10 — Antigravity & Claude: auditoría, escáner QR, SMS validado, compilación limpia y preparación de despliegue 0.6.65 (B.92) + fix panel (B.93).**
+**25/10 — Antigravity: corrección de `UPDATE_ALLOWLIST` en toda la flota, manejo instantáneo de comandos encolados sin FCM en el panel, ACK de `BAD_SIGNATURE` y reglas de base de datos (B.94).**
 
-- **B.92 (Microvisor de Google, QR y SMS):**
-  - **Diagnóstico y solución:** Se resolvió que Google exige mandar un SMS desde el teléfono (`/devicephoneverification/consent`) con `Send SMS` (antes bloqueado), se implementó escáner QR interno con CameraX + ZXing (debido a que la cámara nativa en Android 12+ deriva a navegador suspendido), widget 1x1 y botón en Ajustes Kosher. Se blindó contra caídas con `onRenderProcessGone`.
-  - **Pruebas y Verificación en PC:**
-    - 33 pruebas unitarias puras en verde (`GoogleVerificationPolicyTest` y `QrLuminanceDecoderTest`).
-    - Suite completa de pruebas unitarias (`:app:testDebugUnitTest`) en verde (100% pass en 47s).
-    - Compilación de Debug (`:app:assembleDebug`) y Release con R8 (`:app:assembleRelease`) 100% exitosas sin errores ni advertencias de clases faltantes.
-    - Chequeos de sincronización (`check_command_sync.py`, `check_panel_commands.py`, `check_whitelist_sync.py`, `check_profile_sync.py`) todos en verde.
-    - Commit independiente de B.92 realizado (`b55dfe9`) previo al script de despliegue.
-- **B.93 (Sincronización de policies.js):**
-  - Se regeneró `admin-backend/public/policies.js` con `tools/gen_policies_js.py`, pasando exitosamente `--check`.
-- **Despliegue completado:**
-  - Desplegado exitosamente a producción vía `deploy_all.ps1 -VersionName "0.6.65"` (versionCode 128) en Firebase Hosting/Database/Functions y GitHub.
-  - El dueño autorizó que en adelante Antigravity puede ejecutar el script de deploy automáticamente sin necesidad de confirmación previa. Pendiente: prueba de escaneo QR y SMS en celular físico (B.92 §6).
+- **Diagnóstico y solución:**
+  - Se analizó la captura enviada por el dueño sobre el celular "R shaul said" (O-Tel Q1, "Sin FCM") con el aviso de 10 s de espera. Se diagnosticó que los equipos sin FCM o con FCM en reposo quedaban esperando 10–12 s a ciegas cuando la Function ya había respondido `queued: true` en el buzón.
+  - Se corrigió el bug crítico de `UPDATE_ALLOWLIST` en `functions/index.js` que impedía actualizar la lista de paquetes permitidos en todos los celulares del panel (rebotaba con 400 por esperar un Array mientras el panel enviaba string separado por comas).
+  - Se actualizó `app.js` y `comun.js` para procesar el estado `queued` de forma inmediata informando que el comando quedó en cola en el buzón y se aplicará automáticamente cuando el celular conecte (hasta 15 min).
+  - En `CommandProcessor.kt`, se habilitó la escritura del ACK de rechazo ante `BAD_SIGNATURE` para no silenciar fallos de firma.
+  - En `database.rules.json`, se agregó soporte para que equipos existentes sin `ownerUid` adopten su nodo sin `PERMISSION_DENIED`.
+- **Verificación:**
+  - 100% de pruebas unitarias (`:app:testDebugUnitTest`) pasando en verde (BUILD SUCCESSFUL en 4m 37s).
+  - Herramientas de consistencia `tools/` (`check_command_sync.py`, `check_panel_commands.py`, `check_whitelist_sync.py`, `check_profile_sync.py`, `gen_catalog_js.py --check`, `gen_policies_js.py --check`) todas en verde.
 
 
 

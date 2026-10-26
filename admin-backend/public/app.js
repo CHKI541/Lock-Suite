@@ -254,7 +254,7 @@ function renderDevicesList(e) {
             visto = s && Date.now() - s < 864e5;
         n.querySelector(".device-name").textContent = i, n.querySelector(".device-model-label").textContent = d, n.querySelector(".device-id").textContent = e;
         const c = n.querySelector(".status-badge");
-        if (secretMismatch && fcm) {
+        if (secretMismatch) {
             // El equipo late y recibe, pero descarta cada comando por firma inválida.
             // Es el peor estado posible de diagnosticar si no se nombra.
             c.textContent = "Re-vincular";
@@ -1129,6 +1129,13 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
         const resData = await response.json();
         const commandId = resData.commandId;
         if (commandId) {
+            if (resData.queued) {
+                const reason = resData.fcmError ? ` (${resData.fcmError})` : "";
+                setCommandStatus("ℹ Comando encolado en el buzón" + reason + ". Se aplicará automáticamente en el próximo ciclo (hasta 15 min).");
+                if (a) a.disabled = false;
+                if (i) i();
+                return true;
+            }
             const isSelfUpdateCmd = (t === "UPDATE_LOCKSUITE");
             // 3/9/2026: UPDATE_APP quedaba fuera de esta bandera, asi que se le
             // aplicaba el timeout corto y el mensaje generico. Ahora tiene su
@@ -1179,6 +1186,13 @@ async function runCommandOnDevice(e, t, n = null, a = null, i = null, extraParam
                             setCommandStatus("✓ Comando aplicado con éxito en el celular");
                             if (a) a.disabled = false;
                         }
+                    } else if (status === "queued") {
+                        clearTimeout(timeoutId);
+                        ackRef.off();
+                        const reason = snap.val().reason ? ` (${snap.val().reason})` : "";
+                        setCommandStatus("ℹ Comando encolado en el buzón" + reason + ". Se aplicará automáticamente en el próximo ciclo (hasta 15 min).");
+                        if (a) a.disabled = false;
+                        if (i) i();
                     } else if (status === "failed" || status === "rejected") {
                         clearTimeout(timeoutId);
                         ackRef.off();

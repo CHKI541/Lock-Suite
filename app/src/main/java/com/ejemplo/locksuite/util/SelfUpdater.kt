@@ -196,15 +196,48 @@ object SelfUpdater {
      *   `ApkSignatureVerifier` (B.37) no tiene contra qué comparar, y sin el hash
      *   cualquiera que pueda cambiar el contenido servido en `apkUrl` consigue ejecución
      *   silenciosa con privilegios en toda la flota.
+     *
+     * Parámetros agregados el 26/10/2026 (B.97) para la actualización silenciosa de apps
+     * desde la Tienda (`HostedAppUpdater`). Los tres tienen valores por omisión que dejan
+     * la Tienda del celular EXACTAMENTE como estaba:
+     *
+     * @param quiet sin los Toast de "Iniciando descarga…" / "Instalando…": la
+     *   actualización tiene su propia notificación y su registro paso a paso.
+     * @param isCancelled se consulta entre bloques de la descarga; si devuelve true se
+     *   corta, se borra el archivo y no se levanta ninguna restricción.
+     * @param preInstallCheck se llama con el APK YA BAJADO y con su sha256 YA VERIFICADO,
+     *   y ANTES de levantar las restricciones de instalación y de abrir la sesión de
+     *   PackageInstaller. Si devuelve un texto, no se instala y ese texto es el error. Es
+     *   donde la actualización mira que la copia sea más nueva, de la misma firma y de una
+     *   arquitectura que corra en el equipo — preguntas que la Tienda (primera
+     *   instalación) no necesita hacerse.
+     *
+     * ⚠️ `onProgress` tiene que seguir siendo el ÚLTIMO parámetro: la Tienda del celular
+     * (LoginActivity) lo pasa como lambda final, `downloadAndInstallApk(...) { progress -> }`,
+     * y Kotlin le da la lambda final al último parámetro. Con otro parámetro de tipo
+     * función al final, esa llamada deja de compilar (y el chequeo de tipos sin Compose no
+     * lo ve, porque LoginActivity queda afuera).
      */
-    suspend fun downloadAndInstallApk(context: Context, apkUrl: String, packageName: String, label: String, sha256: String? = null, onProgress: ((Int) -> Unit)? = null): String? {
+    suspend fun downloadAndInstallApk(
+        context: Context,
+        apkUrl: String,
+        packageName: String,
+        label: String,
+        sha256: String? = null,
+        quiet: Boolean = false,
+        isCancelled: (() -> Boolean)? = null,
+        preInstallCheck: ((File) -> String?)? = null,
+        onProgress: ((Int) -> Unit)? = null
+    ): String? {
         return withContext(Dispatchers.IO) {
             var temporaryInstallAccessPrepared = false
             var installCommitSubmitted = false
             val tempFile = File(context.cacheDir, "store_${packageName}_update.apk")
             try {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Iniciando descarga de $label...", Toast.LENGTH_SHORT).show()
+                if (!quiet) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Iniciando descarga de $label...", Toast.LENGTH_SHORT).show()
+                    }
                 }
 
                 val urlWithCacheBuster = if (apkUrl.contains("?")) "$apkUrl&t=${System.currentTimeMillis()}" else "$apkUrl?t=${System.currentTimeMillis()}"
@@ -222,6 +255,9 @@ object SelfUpdater {
                         var bytesRead: Int
                         var lastReportedProgress = -1
                         while (input.read(buffer).also { bytesRead = it } != -1) {
+                            if (isCancelled?.invoke() == true) {
+                                throw IOException("Descarga cancelada")
+                            }
                             output.write(buffer, 0, bytesRead)
                             bytesDownloaded += bytesRead
                             if (totalBytes > 0) {
@@ -249,14 +285,32 @@ object SelfUpdater {
                 // BYPASS` adentro: una verificación que parece existir y no existe).
                 com.ejemplo.locksuite.util.ApkChecksum.blockStoreInstall(tempFile, sha256, label)?.let { error ->
                     tempFile.delete()
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                    if (!quiet) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                        }
                     }
                     return@withContext error
                 }
 
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Instalando $label en segundo plano...", Toast.LENGTH_SHORT).show()
+                // B.97: el juicio de quien llama, con el archivo ya verificado y TODAVÍA
+                // sin haber tocado ninguna restricción. Ver el KDoc.
+                if (preInstallCheck != null) {
+                    val rechazo = preInstallCheck(tempFile)
+                    if (rechazo != null) {
+                        tempFile.delete()
+                        return@withContext rechazo
+                    }
+                }
+                if (isCancelled?.invoke() == true) {
+                    tempFile.delete()
+                    return@withContext "Actualización cancelada"
+                }
+
+                if (!quiet) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Instalando $label en segundo plano...", Toast.LENGTH_SHORT).show()
+                    }
                 }
 
                 // 22/9/2026 — anotar QUÉ paquete está instalando la Tienda, antes del
@@ -298,7 +352,11 @@ object SelfUpdater {
                         }
                     }
 
+                    // B.97: el paquete va también en un extra propio. EXTRA_PACKAGE_NAME no lo
+                    // ponen todos los Android en las fallas, y sin él PackageInstallStatusReceiver
+                    // no sabría a qué actualización corresponde el resultado.
                     val intent = Intent(context, com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver::class.java)
+                        .putExtra(com.ejemplo.locksuite.receiver.PackageInstallStatusReceiver.EXTRA_LS_PACKAGE, packageName)
                     val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
                     } else {

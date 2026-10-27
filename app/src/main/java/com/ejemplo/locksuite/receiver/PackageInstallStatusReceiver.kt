@@ -8,10 +8,20 @@ import android.util.Log
 import android.widget.Toast
 
 class PackageInstallStatusReceiver : BroadcastReceiver() {
+
+    companion object {
+        /**
+         * El paquete que se está instalando, puesto por SelfUpdater en el PendingIntent
+         * (26/10/2026, B.97). `EXTRA_PACKAGE_NAME` no viene siempre en las fallas.
+         */
+        const val EXTRA_LS_PACKAGE = "com.ejemplo.locksuite.extra.INSTALL_PACKAGE"
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         val packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
+            ?: intent.getStringExtra(EXTRA_LS_PACKAGE)
 
         // Restaurar restricciones de instalación del MDM tras completar o fallar el proceso
         // (solo si no hay un flujo de Play Store en curso, para no cortarle permisos a mitad)
@@ -39,6 +49,20 @@ class PackageInstallStatusReceiver : BroadcastReceiver() {
             alarmManager.cancel(pendingIntent)
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+
+        // B.97 — ¿es la instalación silenciosa de una actualización en curso (ruta de la
+        // Tienda)? Entonces el resultado es del flujo: lo cierra, o sigue por Google Play si
+        // el sistema rechazó la copia, y avisa con su propia notificación y su registro.
+        val delFlujo = try {
+            com.ejemplo.locksuite.util.UpdateFlowManager.onHostedInstallStatus(context, packageName, status, message)
+        } catch (e: Exception) {
+            Log.w("PackageInstallStatus", "No se pudo pasar el resultado al flujo de actualización: ${e.message}")
+            false
+        }
+        if (delFlujo) {
+            Log.i("PackageInstallStatus", "Resultado de $packageName (status=$status) entregado al flujo de actualización")
+            return
         }
 
         if (status == PackageInstaller.STATUS_SUCCESS) {

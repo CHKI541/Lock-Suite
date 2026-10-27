@@ -24,6 +24,7 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Base64
 import com.ejemplo.locksuite.mdm.PolicyManager
+import com.ejemplo.locksuite.mdm.UpdateStepLog
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
@@ -288,14 +289,22 @@ object FirebaseDeviceSync {
         }
     }
 
+    /** El último registro paso a paso que se subió (B.97): se sube solo cuando cambia. */
+    @Volatile private var lastStepsSent: String? = null
+
     fun syncUpdateFlow(context: Context) {
         val prefs = PrefsHelper.getMdmPrefs(context)
-        val running = prefs.getBoolean(UpdateFlowManager.KEY_IN_PROGRESS, false) &&
-            !prefs.getString(UpdateFlowManager.KEY_PKG, null).isNullOrBlank()
+        // B.97: "en curso" = hay un flujo abierto, por el camino que sea. Antes exigía
+        // además `mdm_install_in_progress`, que la ruta de la Tienda no prende mientras
+        // baja: el panel la habría mostrado como terminada.
+        val running = UpdateFlowManager.hasOpenFlow(context)
         val stage = prefs.getString(UpdateFlowManager.KEY_STAGE, UpdateFlowManager.STAGE_IDLE)
             ?: UpdateFlowManager.STAGE_IDLE
         val detail = prefs.getString(UpdateFlowManager.KEY_DETAIL, null)
         val pkg = prefs.getString(UpdateFlowManager.KEY_PKG, "") ?: ""
+        val stepsRaw = prefs.getString(UpdateFlowManager.KEY_STEPS, "") ?: ""
+        val baseVc = prefs.getLong(UpdateFlowManager.KEY_BASE_VERSION, -1L)
+        val baseVn = prefs.getString(UpdateFlowManager.KEY_BASE_VERSION_NAME, "") ?: ""
 
         withAuth {
             val authUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
@@ -317,15 +326,41 @@ object FirebaseDeviceSync {
                 // convierte eso en algo accionable ("faltan 180 MB"), y el espacio
                 // libre permite ver el problema ANTES de mandar la actualizacion.
                 "lastResultReason" to (prefs.getString(UpdateFlowManager.KEY_LAST_RESULT_REASON, "") ?: ""),
-                "freeSpaceMb" to UpdateFlowManager.freeSpaceMb(context)
+                "freeSpaceMb" to UpdateFlowManager.freeSpaceMb(context),
+                // ── 26/10/2026 (B.97): el proceso entero a la vista ──
+                // Por qué camino va (Google Play / Tienda), por qué, cuánto lleva bajado,
+                // quién instaló la app, de qué versión a qué versión, y si el flujo está
+                // esperando que desbloqueen el celular.
+                "route" to (prefs.getString(UpdateFlowManager.KEY_ROUTE, "") ?: ""),
+                "routePref" to (prefs.getString(UpdateFlowManager.KEY_ROUTE_PREF, "") ?: ""),
+                "routeWhy" to (prefs.getString(UpdateFlowManager.KEY_ROUTE_WHY, "") ?: ""),
+                "progress" to prefs.getInt(UpdateFlowManager.KEY_PROGRESS, -1),
+                "installer" to (prefs.getString(UpdateFlowManager.KEY_INSTALLER, "") ?: ""),
+                "versionBefore" to (if (baseVc >= 0L) "$baseVn ($baseVc)" else baseVn),
+                "versionAfter" to (prefs.getString(UpdateFlowManager.KEY_VERSION_AFTER, "") ?: ""),
+                "keyguardLocked" to (running && UpdateFlowManager.isKeyguardLocked(context)),
+                "stepsCount" to UpdateStepLog.decode(stepsRaw).size
             )
             val payload = mutableMapOf<String, Any>(
                 "updateFlow" to flow,
                 "info/updateFlow" to flow,
                 "lastSeen" to ServerValue.TIMESTAMP
             )
+            // El registro paso a paso va en su propio nodo y SOLO cuando cambia: son hasta
+            // 40 líneas, y el resto del estado se sube cada 1,5 s mientras dura el flujo.
+            // Va una sola vez (sin la copia en info/), que es donde lo lee la ficha.
+            if (stepsRaw != lastStepsSent) {
+                payload["updateFlowSteps"] = UpdateStepLog.decode(stepsRaw).map { st ->
+                    mapOf("t" to st.at, "k" to st.kind, "m" to st.msg)
+                }
+                lastStepsSent = stepsRaw
+            }
             if (authUid.isNotEmpty()) payload["ownerUid"] = authUid
-            ref.updateChildren(payload).addOnFailureListener { it.printStackTrace() }
+            ref.updateChildren(payload).addOnFailureListener {
+                // Si no se pudo subir, la próxima vez se vuelve a mandar el registro.
+                lastStepsSent = null
+                it.printStackTrace()
+            }
         }
     }
 
@@ -816,10 +851,14 @@ object FirebaseDeviceSync {
         try {
             val appController = com.ejemplo.locksuite.mdm.AppController(context)
             val apps = appController.getUserApps(loadIcon = false)
+            // B.97 — la versión de cada app, para la ficha del panel (sección Actualizaciones:
+            // ver de qué versión a qué versión quedó cada una). UNA sola llamada al sistema
+            // para todas, no una por app (ver el cuidado de batería del 27/9).
+            val versiones = installedVersions(context)
             val appsMap = mutableMapOf<String, Any>()
             for (app in apps) {
                 val safePackageName = app.packageName.replace(".", "_")
-                appsMap[safePackageName] = mapOf(
+                val datos = mutableMapOf<String, Any>(
                     "packageName" to app.packageName,
                     "label" to app.label,
                     "isHidden" to app.isHidden,
@@ -830,6 +869,11 @@ object FirebaseDeviceSync {
                     "appType" to app.appType,
                     "isCritical" to app.isCritical
                 )
+                versiones[app.packageName]?.let { (vn, vc) ->
+                    datos["versionName"] = vn
+                    datos["versionCode"] = vc
+                }
+                appsMap[safePackageName] = datos
             }
             // 2/9/2026 — Va DENTRO de withAuth y reafirmando `ownerUid` en la misma
             // escritura. Antes eran dos setValue() sueltos, sin autenticar y sin ownerUid:
@@ -858,6 +902,23 @@ object FirebaseDeviceSync {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    /** paquete → (versionName, versionCode) de todo lo instalado, en una sola llamada. */
+    private fun installedVersions(context: Context): Map<String, Pair<String, Long>> = try {
+        val pm = context.packageManager
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            android.content.pm.PackageManager.MATCH_UNINSTALLED_PACKAGES
+        } else {
+            0
+        }
+        pm.getInstalledPackages(flags).associate { pi ->
+            val vc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pi.longVersionCode
+            else @Suppress("DEPRECATION") pi.versionCode.toLong()
+            pi.packageName to ((pi.versionName ?: "") to vc)
+        }
+    } catch (e: Exception) {
+        emptyMap()
     }
 
     /**

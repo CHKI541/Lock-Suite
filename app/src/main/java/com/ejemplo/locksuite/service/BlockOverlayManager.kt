@@ -407,6 +407,17 @@ class BlockOverlayManager(private val service: AccessibilityService) {
     private var blockingCancelable = false
     private var blockingCancelAction: (() -> Unit)? = null
     private var blockingView: android.widget.LinearLayout? = null
+    /**
+     * Últimos pasos del registro de la actualización (26/10/2026, B.97). Se guardan acá
+     * para que, si la vista se rearma (cambia si es cancelable), no se pierdan.
+     */
+    private var blockingStepsText: String = ""
+    /**
+     * Porcentaje REAL de la descarga (0..100), o null si no se sabe (B.97). Con valor, la
+     * ruedita se cambia por una barra que avanza: "que muestre exactamente el proceso".
+     * Guardado acá por lo mismo que los pasos: la vista se puede rearmar.
+     */
+    private var blockingPct: Int? = null
 
     fun isBlockingMessageVisible(): Boolean = blockingView != null
 
@@ -467,8 +478,43 @@ class BlockOverlayManager(private val service: AccessibilityService) {
                 })
 
                 addView(android.widget.ProgressBar(service).apply {
+                    tag = "spinner"
                     isIndeterminate = true
+                    visibility = if (blockingPct == null) android.view.View.VISIBLE else android.view.View.GONE
                 })
+
+                // B.97 — la barra con el porcentaje real, cuando se sabe (sesión de
+                // instalación de Google Play o barra con valor en la ficha).
+                addView(android.widget.ProgressBar(service, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    tag = "pct"
+                    isIndeterminate = false
+                    max = 100
+                    progress = blockingPct ?: 0
+                    visibility = if (blockingPct == null) android.view.View.GONE else android.view.View.VISIBLE
+                }, android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = dp(32); rightMargin = dp(32) })
+
+                // B.97 — qué está pasando, paso a paso: las últimas líneas del registro de
+                // la actualización ("+12s › Apreté «Actualizar»"). El dueño pidió ver
+                // EXACTAMENTE el proceso; la línea de arriba dice en qué etapa está, esto
+                // dice cómo llegó ahí. Chico y gris a propósito: es para quien quiera
+                // mirarlo, no para tapar el mensaje principal.
+                addView(android.widget.TextView(service).apply {
+                    tag = "steps"
+                    text = blockingStepsText
+                    visibility = if (blockingStepsText.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+                    setTextColor(Color.parseColor("#6B7A8C"))
+                    textSize = 11.5f
+                    gravity = Gravity.START
+                    maxLines = 6
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(8), dp(20), dp(8), 0)
+                }, android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ))
 
                 if (cancelable) {
                     addView(android.widget.Button(service).apply {
@@ -534,11 +580,50 @@ class BlockOverlayManager(private val service: AccessibilityService) {
 
     fun updateBlockingMessageSubtitle(subtitle: String) = updateBlockingMessage(null, subtitle)
 
+    /** Las últimas líneas del registro paso a paso (B.97). Se puede llamar desde cualquier hilo. */
+    fun updateBlockingSteps(text: String) {
+        onMain {
+            blockingStepsText = text
+            val tv = blockingView?.findViewWithTag<android.widget.TextView>("steps") ?: return@onMain
+            tv.text = text
+            tv.visibility = if (text.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+        }
+    }
+
+    /**
+     * El porcentaje real de la descarga (0..100), o null para volver a la ruedita (B.97).
+     * Se puede llamar desde cualquier hilo y tantas veces como se quiera: si no cambió,
+     * no toca la vista.
+     */
+    fun updateBlockingProgress(percent: Int?) {
+        onMain {
+            val pct = percent?.coerceIn(0, 100)
+            if (pct == blockingPct) return@onMain
+            blockingPct = pct
+            val overlay = blockingView ?: return@onMain
+            overlay.findViewWithTag<android.widget.ProgressBar>("pct")?.let {
+                if (pct != null) it.progress = pct
+                it.visibility = if (pct == null) android.view.View.GONE else android.view.View.VISIBLE
+            }
+            overlay.findViewWithTag<android.widget.ProgressBar>("spinner")?.visibility =
+                if (pct == null) android.view.View.VISIBLE else android.view.View.GONE
+        }
+    }
+
     fun hideBlockingMessageOverlay() {
         onMain {
             blockingCancelAction = null
             blockingCancelable = false
+            blockingPct = null
             removeBlockingView()
+        }
+    }
+
+    /** Se llama al cerrar un flujo: la próxima pantalla negra arranca sin pasos ni barra viejos. */
+    fun clearBlockingSteps() {
+        onMain {
+            blockingStepsText = ""
+            blockingPct = null
         }
     }
 
@@ -568,6 +653,7 @@ class BlockOverlayManager(private val service: AccessibilityService) {
             removeBlockingView()
             blockingCancelAction = null
             blockingCancelable = false
+            blockingPct = null
         }
     }
 }

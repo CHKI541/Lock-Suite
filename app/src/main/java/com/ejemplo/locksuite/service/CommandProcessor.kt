@@ -560,11 +560,15 @@ class CommandProcessor(private val context: Context) {
                         commandErrorReason = "No package specified"
                         false
                     } else {
+                        // B.97: el panel puede elegir el camino ("auto" / "play" / "hosted").
+                        // Viene dentro del payload firmado; un valor desconocido o ausente es
+                        // "auto" (UpdateRoutePlanner.normalizePref), igual que un panel viejo.
                         val error = com.ejemplo.locksuite.util.UpdateFlowManager.start(
                             context = context,
                             packageName = packageName,
                             source = com.ejemplo.locksuite.util.UpdateFlowManager.SOURCE_PANEL,
-                            cancelable = true
+                            cancelable = true,
+                            routePref = data["route"] ?: com.ejemplo.locksuite.mdm.UpdateRoutePlanner.PREF_AUTO
                         )
                         if (error != null) {
                             commandErrorReason = error
@@ -575,7 +579,10 @@ class CommandProcessor(private val context: Context) {
                     }
                 }
                 "CANCEL_UPDATE_APP" -> {
-                    if (com.ejemplo.locksuite.util.UpdateFlowManager.isRunning(context)) {
+                    // B.97: hasOpenFlow y no isRunning — una actualización por la Tienda está
+                    // abierta sin la marca de instalación prendida, y requestCancel es el que
+                    // sabe decir "ya no se puede frenar" si la instalación ya arrancó.
+                    if (com.ejemplo.locksuite.util.UpdateFlowManager.hasOpenFlow(context)) {
                         com.ejemplo.locksuite.util.UpdateFlowManager.requestCancel(context)
                         true
                     } else {

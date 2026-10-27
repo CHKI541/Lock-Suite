@@ -350,7 +350,7 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
 
     const {
       deviceId, command, packages, devicePin, rememberDevice, newPin,
-      enabled, presetJson, profileId, level, graceMs, graceTarget
+      enabled, presetJson, profileId, level, graceMs, graceTarget, route
     } = req.body || {};
 
     if (!deviceId || typeof deviceId !== "string") {
@@ -528,6 +528,21 @@ exports.sendCommandV8 = onRequest(FUNCTION_OPTIONS, async (req, res) => {
     } else if (Array.isArray(packages) && packages.length > 0) {
       const clean = packages.map(p => String(p).trim()).filter(p => pkgRegex.test(p));
       if (clean.length > 0) payload.packages = clean.join(",");
+    }
+
+    // 26/10/2026 (B.97) — UPDATE_APP puede elegir el camino: "auto" (lo de siempre),
+    // "play" (solo Google Play) o "hosted" (solo la copia de la Tienda de LockSuite, en
+    // silencio). Va DENTRO del payload firmado. "auto" no se manda: es lo que hace el
+    // celular sin el campo, y así un comando de siempre queda idéntico al de antes. Un
+    // celular anterior a B.97 ignora el campo (la firma lo incluye igual de los dos lados,
+    // ver canonicalCommandPayload) y actualiza por Google Play como siempre.
+    if (command === "UPDATE_APP" && route !== undefined && route !== null && route !== "") {
+      const UPDATE_ROUTES = new Set(["auto", "play", "hosted"]);
+      if (typeof route !== "string" || !UPDATE_ROUTES.has(route)) {
+        res.status(400).json({ error: `Camino de actualización desconocido: ${route}` });
+        return;
+      }
+      if (route !== "auto") payload.route = route;
     }
 
     if (hasCommandSecret) {

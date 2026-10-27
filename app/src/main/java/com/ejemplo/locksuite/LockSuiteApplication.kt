@@ -253,6 +253,17 @@ class LockSuiteApplication : Application() {
             e.printStackTrace()
         }
 
+        // 1c. (26/10/2026, B.97) Una actualización de app por la Tienda de LockSuite que
+        // quedó a mitad porque el proceso murió: su trabajo murió con él, así que se cierra
+        // ya con el motivo, en vez de dejarla "en curso" hasta el watchdog de 10 minutos
+        // (y rechazando pedidos nuevos mientras tanto). Va antes de que cualquier comando
+        // pendiente se procese. Lo de Google Play no se toca: lo retoma la Accesibilidad.
+        try {
+            com.ejemplo.locksuite.util.UpdateFlowManager.closeOrphanedAfterRestart(this)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "No se pudo revisar la actualización a medias: ${e.message}")
+        }
+
         // 2. Re-aplicar restricciones MDM locales fuera del hilo principal.
         // En instalaciones nuevas (y en arranques con muchas apps instaladas),
         // reapplyAllRestrictions() realiza decenas de llamadas IPC a DevicePolicyManager,

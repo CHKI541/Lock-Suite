@@ -289,6 +289,27 @@ object PlayButtonFinder {
         val dialogs: List<Candidate>,
         val sawProgressBar: Boolean,
         /**
+         * Hay una barra de progreso DENTRO de la franja de botones (26/10/2026, B.97).
+         *
+         * `sawProgressBar` mira TODA la pantalla, y una ficha de Play Store tiene
+         * indicadores de carga en lugares que no tienen nada que ver con una descarga:
+         * las capturas y el video de la app mientras cargan. El flujo leía cualquiera de
+         * esos como "ya está descargando", decía "Descargando actualización…" y NO
+         * apretaba el botón; si el indicador quedaba girando (un video que no carga), la
+         * pantalla se quedaba así hasta el watchdog de 10 minutos. La barra de una
+         * descarga de verdad aparece donde estaban los botones: eso es lo que mide esto.
+         */
+        val progressInBand: Boolean,
+        /**
+         * Porcentaje de la barra de la franja de botones, si es una barra con valor
+         * (`RangeInfo`), o -1 (26/10/2026, B.97). Una descarga de verdad avanza; una
+         * barra indeterminada ("Pendiente…", "Esperando…") no. Con esto el flujo
+         * distingue "Google Play está bajando sin sesión de instalación todavía" de
+         * "Google Play dejó la descarga en cola y no arranca", que antes se veían igual
+         * y esperaban los 10 minutos del watchdog.
+         */
+        val bandProgressPct: Int,
+        /**
          * Etiquetas de los nodos clickeables de la franja de botones. Sirve para
          * diagnosticar sin ADB cuando el escaneo no reconoce nada: se publican en
          * `updateFlow.debugLabels` y el panel las muestra. Sin esto, cada equipo en
@@ -313,7 +334,13 @@ object PlayButtonFinder {
         /** El texto exacto que disparó el diagnóstico. Va al panel y al log. */
         val diagnosisEvidence: String?,
         /** Un nodo desplazable de la ficha, para bajar si el botón quedó fuera. */
-        val scrollable: AccessibilityNodeInfo?
+        val scrollable: AccessibilityNodeInfo?,
+        /**
+         * Los números que hay en pantalla ("45 %", "12 MB de 30 MB"), juntos (26/10/2026,
+         * B.97). Si cambia, la descarga se movió aunque su barra no informe el valor. Ver
+         * UpdateRoutePlanner.progressSignature.
+         */
+        val progressSignature: String = ""
     ) {
         val isEmpty: Boolean get() = actions.isEmpty() && opens.isEmpty() && dialogs.isEmpty()
         /** true si la ficha ya tiene contenido dibujado (no es una pantalla en blanco). */
@@ -368,11 +395,14 @@ object PlayButtonFinder {
             opens = opens.sortedWith(byConfidence),
             dialogs = dialogs.sortedWith(byConfidence),
             sawProgressBar = state.sawProgressBar,
+            progressInBand = state.progressInBand,
+            bandProgressPct = state.bandProgressPct,
             debugLabels = labels,
             renderedNodes = state.textNodes,
             diagnosis = diagnosis,
             diagnosisEvidence = evidence,
-            scrollable = state.scrollable
+            scrollable = state.scrollable,
+            progressSignature = com.ejemplo.locksuite.mdm.UpdateRoutePlanner.progressSignature(notices)
         )
     }
 
@@ -408,6 +438,8 @@ object PlayButtonFinder {
         /** Nodos con texto o descripción propios: mide si la ficha ya se dibujó. */
         var textNodes = 0
         var sawProgressBar = false
+        var progressInBand = false
+        var bandProgressPct = -1
         var scrollable: AccessibilityNodeInfo? = null
         val rect = Rect()
 
@@ -434,6 +466,24 @@ object PlayButtonFinder {
         val minWidth = (screenWidth * MIN_BUTTON_WIDTH_FRACTION).toInt()
     }
 
+    /**
+     * El porcentaje de una barra con valor (`RangeInfo` de tipo entero, real o
+     * porcentaje), o -1 si es indeterminada o no lo informa. Los tipos se comparan por
+     * número para no depender de constantes de API nuevas (Android 16 agregó un tipo
+     * "indeterminado", que acá cae en -1 como cualquier otro desconocido).
+     */
+    private fun rangePercent(node: AccessibilityNodeInfo): Int = try {
+        val ri = node.rangeInfo
+        if (ri == null || ri.type !in 0..2) {
+            -1
+        } else {
+            val span = ri.max - ri.min
+            if (span <= 0f) -1 else (((ri.current - ri.min) / span) * 100f).toInt().coerceIn(0, 100)
+        }
+    } catch (e: Exception) {
+        -1
+    }
+
     private fun walk(
         node: AccessibilityNodeInfo?,
         depth: Int,
@@ -448,7 +498,8 @@ object PlayButtonFinder {
         state.nodes++
 
         val className = node.className?.toString() ?: ""
-        if (className.endsWith("ProgressBar")) state.sawProgressBar = true
+        val isProgress = className.endsWith("ProgressBar")
+        if (isProgress) state.sawProgressBar = true
         if (state.scrollable == null && node.isScrollable) state.scrollable = node
 
         val rawText = node.text?.toString()?.trim() ?: ""
@@ -462,6 +513,10 @@ object PlayButtonFinder {
         val onScreen = !state.rect.isEmpty && top >= 0 && top < state.screenHeight
         val inPreferred = onScreen && top >= state.bandTop && top <= state.preferredBottom
         val inBand = onScreen && top >= state.bandTop && top <= state.bandBottom
+        if (isProgress && inBand) {
+            state.progressInBand = true
+            if (state.bandProgressPct < 0) state.bandProgressPct = rangePercent(node)
+        }
 
         val probe = fold(if (rawText.isNotEmpty()) rawText else rawDesc)
         if (probe.isNotEmpty()) state.textNodes++

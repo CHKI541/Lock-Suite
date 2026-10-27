@@ -3007,7 +3007,9 @@ class PolicyManager(private val context: Context) {
                 // políticas: si no, quedaría una pantalla negra encima de un
                 // equipo que ya no tiene ninguna restricción.
                 try {
-                    if (com.ejemplo.locksuite.util.UpdateFlowManager.isRunning(context)) {
+                    // B.97: hasOpenFlow — también una actualización por la Tienda (que no
+                    // prende la marca de instalación mientras baja).
+                    if (com.ejemplo.locksuite.util.UpdateFlowManager.hasOpenFlow(context)) {
                         com.ejemplo.locksuite.util.UpdateFlowManager.forceCleanup(
                             context,
                             com.ejemplo.locksuite.util.UpdateFlowManager.RESULT_CANCELLED

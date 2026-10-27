@@ -17,6 +17,8 @@ import android.os.SystemClock
 import android.os.UserManager
 import android.util.Log
 import com.ejemplo.locksuite.mdm.PolicyManager
+import com.ejemplo.locksuite.mdm.UpdateRoutePlanner
+import com.ejemplo.locksuite.mdm.UpdateStepLog
 import com.ejemplo.locksuite.receiver.DeviceAdminReceiver
 import com.ejemplo.locksuite.receiver.PackageReceiver
 import com.ejemplo.locksuite.service.LockSuiteAccessibilityService
@@ -46,6 +48,34 @@ import com.ejemplo.locksuite.service.LockSuiteAccessibilityService
  *  4. La alarma watchdog se cancela recien cuando las restricciones ya quedaron
  *     restauradas, no antes: si el proceso muere en el medio, la alarma sigue
  *     siendo la unica garantia de que el equipo no quede desbloqueado.
+ *
+ * ── 26/10/2026 (B.97): DOS CAMINOS, Y TODO EL PROCESO A LA VISTA ──
+ *
+ *  5. Hay dos caminos y los elige `UpdateRoutePlanner` (puro, con pruebas): Google
+ *     Play manejada por la Accesibilidad (lo de siempre) o la copia de la Tienda de
+ *     LockSuite instalada EN SILENCIO como Device Owner (`HostedAppUpdater`), que no
+ *     depende de idioma, versión de Play Store, velocidad del equipo ni pantalla. En
+ *     "automático" se usa la copia de la Tienda solo si existe, tiene huella y resulta
+ *     MÁS NUEVA, de la misma firma y de una arquitectura que corra en el equipo; si no,
+ *     Google Play. El porqué completo está en la cabecera de UpdateRoutePlanner.
+ *  6. La ruta efectiva vive en KEY_ROUTE y manda sobre TODO lo que toca la pantalla:
+ *     el overlay negro, el ticker de la Accesibilidad, el relanzamiento de Play Store y
+ *     el ir a INICIO al terminar solo existen en la ruta de Google Play. En la ruta de
+ *     la Tienda el usuario sigue usando el teléfono (con todos los filtros andando) y
+ *     ve una notificación con el progreso.
+ *  7. Cada decisión deja un PASO con su hora en KEY_STEPS (`UpdateStepLog`): se ve
+ *     en vivo en la pantalla negra y entero en la ficha del panel, y queda guardado
+ *     hasta la próxima actualización. Era el pedido textual del dueño: "que muestre
+ *     exactamente el proceso y qué está pasando".
+ *  8. Con el celular BLOQUEADO no se tapa la pantalla: el overlay es una ventana de
+ *     accesibilidad y queda POR ENCIMA del keyguard y de la barra de navegación (capa
+ *     31 contra 17 de la pantalla de bloqueo, medido en WindowManagerPolicy de AOSP),
+ *     así que antes el usuario no podía desbloquear y Google Play —abierta detrás del
+ *     keyguard— nunca se veía. Ahora se espera a que lo desbloqueen (ver
+ *     LockSuiteAccessibilityService.scanAndAct) con un aviso en la pantalla de bloqueo.
+ *  9. finish() corre SIEMPRE en el hilo principal. Ahora hay cierres que llegan desde
+ *     hilos de fondo (la ruta de la Tienda, el WatchdogWorker): serializarlos en un solo
+ *     hilo es lo que hace seguro el `finishing` de abajo.
  */
 object UpdateFlowManager {
 
@@ -75,23 +105,50 @@ object UpdateFlowManager {
     /** Espacio libre medido en la ultima verificacion previa, en MB. */
     const val KEY_LAST_FREE_MB = "update_flow_last_free_mb"
 
-    // ── Etapas ──
-    const val STAGE_IDLE = "IDLE"
-    const val STAGE_PREPARING = "PREPARING"
-    const val STAGE_OPENING_STORE = "OPENING_STORE"
-    const val STAGE_WAITING_STORE = "WAITING_STORE"
-    const val STAGE_LOOKING_BUTTON = "LOOKING_BUTTON"
-    const val STAGE_CONFIRMING = "CONFIRMING"
-    const val STAGE_DOWNLOADING = "DOWNLOADING"
-    const val STAGE_INSTALLING = "INSTALLING"
-    const val STAGE_FINISHING = "FINISHING"
+    // ── 26/10/2026 (B.97) ──
+    /** Ruta efectiva: ROUTE_PLAY_STORE, ROUTE_HOSTED o "" (todavía eligiendo). */
+    const val KEY_ROUTE = "update_flow_route"
+    /** Lo que pidió el panel: auto / play / hosted. */
+    const val KEY_ROUTE_PREF = "update_flow_route_pref"
+    /** Por qué se eligió esa ruta, en castellano. */
+    const val KEY_ROUTE_WHY = "update_flow_route_why"
+    /** Registro paso a paso (formato de UpdateStepLog). Sobrevive al cierre. */
+    const val KEY_STEPS = "update_flow_steps"
+    /** Porcentaje de la descarga en curso, o -1. */
+    const val KEY_PROGRESS = "update_flow_progress"
+    /** Quién instaló la app que se está actualizando (Play Store, la Tienda, ADB…). */
+    const val KEY_INSTALLER = "update_flow_installer"
+    const val KEY_BASE_VERSION_NAME = "update_flow_base_version_name"
+    /** Versión con la que quedó la app al cerrar el último flujo. */
+    const val KEY_VERSION_AFTER = "update_flow_version_after"
+
+    // ── Rutas ──
+    const val ROUTE_PLAY_STORE = UpdateRoutePlanner.ROUTE_PLAY_STORE
+    const val ROUTE_HOSTED = UpdateRoutePlanner.ROUTE_HOSTED
+
+    // ── Etapas ── (los textos viven en UpdateRoutePlanner, que es puro y tiene pruebas)
+    const val STAGE_IDLE = UpdateRoutePlanner.STAGE_IDLE
+    const val STAGE_PREPARING = UpdateRoutePlanner.STAGE_PREPARING
+    const val STAGE_CHOOSING_ROUTE = UpdateRoutePlanner.STAGE_CHOOSING_ROUTE
+    const val STAGE_OPENING_STORE = UpdateRoutePlanner.STAGE_OPENING_STORE
+    const val STAGE_WAITING_STORE = UpdateRoutePlanner.STAGE_WAITING_STORE
+    const val STAGE_WAITING_UNLOCK = UpdateRoutePlanner.STAGE_WAITING_UNLOCK
+    const val STAGE_LOOKING_BUTTON = UpdateRoutePlanner.STAGE_LOOKING_BUTTON
+    const val STAGE_CONFIRMING = UpdateRoutePlanner.STAGE_CONFIRMING
+    const val STAGE_QUEUED = UpdateRoutePlanner.STAGE_QUEUED
+    const val STAGE_DOWNLOADING = UpdateRoutePlanner.STAGE_DOWNLOADING
+    const val STAGE_INSTALLING = UpdateRoutePlanner.STAGE_INSTALLING
+    const val STAGE_HOSTED_DOWNLOADING = UpdateRoutePlanner.STAGE_HOSTED_DOWNLOADING
+    const val STAGE_HOSTED_VERIFYING = UpdateRoutePlanner.STAGE_HOSTED_VERIFYING
+    const val STAGE_HOSTED_INSTALLING = UpdateRoutePlanner.STAGE_HOSTED_INSTALLING
+    const val STAGE_FINISHING = UpdateRoutePlanner.STAGE_FINISHING
 
     // ── Resultados ──
-    const val RESULT_UPDATED = "UPDATED"
-    const val RESULT_UP_TO_DATE = "UP_TO_DATE"
-    const val RESULT_CANCELLED = "CANCELLED"
-    const val RESULT_TIMEOUT = "TIMEOUT"
-    const val RESULT_ERROR = "ERROR"
+    const val RESULT_UPDATED = UpdateRoutePlanner.RESULT_UPDATED
+    const val RESULT_UP_TO_DATE = UpdateRoutePlanner.RESULT_UP_TO_DATE
+    const val RESULT_CANCELLED = UpdateRoutePlanner.RESULT_CANCELLED
+    const val RESULT_TIMEOUT = UpdateRoutePlanner.RESULT_TIMEOUT
+    const val RESULT_ERROR = UpdateRoutePlanner.RESULT_ERROR
 
     // Resultados nuevos (3/9/2026). Antes TODOS estos casos terminaban como
     // RESULT_UP_TO_DATE ("la app ya esta actualizada") o como un RESULT_ERROR
@@ -99,13 +156,13 @@ object UpdateFlowManager {
     // problema en el lugar equivocado: el sintoma "actualizo y no pasa nada" del
     // 3/9 en el CAT S22 Flip era, medido en el equipo, falta de espacio.
     /** No hay espacio suficiente en el almacenamiento del equipo. */
-    const val RESULT_NO_SPACE = "NO_SPACE"
+    const val RESULT_NO_SPACE = UpdateRoutePlanner.RESULT_NO_SPACE
     /** Play Store pide iniciar sesion: el equipo no tiene cuenta de Google. */
-    const val RESULT_NEEDS_ACCOUNT = "NEEDS_ACCOUNT"
+    const val RESULT_NEEDS_ACCOUNT = UpdateRoutePlanner.RESULT_NEEDS_ACCOUNT
     /** La ficha no existe, o Play Store dice que la app no es compatible. */
-    const val RESULT_NOT_AVAILABLE = "NOT_AVAILABLE"
+    const val RESULT_NOT_AVAILABLE = UpdateRoutePlanner.RESULT_NOT_AVAILABLE
     /** Error de red o del servidor de Play Store. */
-    const val RESULT_STORE_ERROR = "STORE_ERROR"
+    const val RESULT_STORE_ERROR = UpdateRoutePlanner.RESULT_STORE_ERROR
 
     // ──────────────────────────────────────────────
     // Verificacion de espacio libre
@@ -185,6 +242,12 @@ object UpdateFlowManager {
     const val RESTORE_DELAY_MS = 600L
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Corre en el hilo principal (ya, si se está en él). Lo usa la ruta de la Tienda. */
+    fun runOnMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
+    }
+
     @Volatile private var lastSyncAt = 0L
     @Volatile private var finishing = false
     private var finishRunnable: Runnable? = null
@@ -220,9 +283,106 @@ object UpdateFlowManager {
     // Consultas
     // ──────────────────────────────────────────────
 
+    /**
+     * ¿Hay un flujo con las restricciones de instalación levantadas? Es la definición de
+     * siempre: `mdm_install_in_progress` + paquete. Desde B.97 la marca solo se prende en
+     * la ruta de Google Play (y, por segundos, durante la instalación silenciosa de la
+     * Tienda, la prende SelfUpdater): mientras se elige el camino o se baja la copia de la
+     * Tienda, el equipo sigue con todas sus restricciones — ningún "exento porque hay una
+     * instalación en curso" de PolicyManager, AppController o la Accesibilidad aplica.
+     * Para "¿hay una actualización abierta, por el camino que sea?" está [hasOpenFlow].
+     */
     fun isRunning(context: Context): Boolean {
         val p = PrefsHelper.getMdmPrefs(context)
         return p.getBoolean(KEY_IN_PROGRESS, false) && !p.getString(KEY_PKG, null).isNullOrBlank()
+    }
+
+    /** ¿Hay una actualización abierta, por cualquier camino (B.97)? Solo mira el paquete. */
+    fun hasOpenFlow(context: Context): Boolean =
+        !PrefsHelper.getMdmPrefs(context).getString(KEY_PKG, null).isNullOrBlank()
+
+    /**
+     * ¿El flujo abierto sigue VIVO? Lo usa [start] para no rechazar un pedido nuevo por
+     * culpa de uno muerto. Muerto es: un flujo de Google Play al que alguien le bajó la
+     * marca de instalación (restoreInstallRestrictions() desde otro lado: sin la marca, el
+     * ciclo de la Accesibilidad ya no lo atiende), o uno que lleva más que cualquier flujo
+     * legítimo (STALE_AFTER_MS). Antes de B.97 [start] miraba [isRunning], que daba lo
+     * mismo para el primer caso; el segundo es nuevo porque la ruta de la Tienda no tiene
+     * la marca prendida mientras baja.
+     */
+    fun hasLiveFlow(context: Context): Boolean {
+        val p = PrefsHelper.getMdmPrefs(context)
+        if (p.getString(KEY_PKG, null).isNullOrBlank()) return false
+        val route = p.getString(KEY_ROUTE, ROUTE_PLAY_STORE) ?: ROUTE_PLAY_STORE
+        if (route == ROUTE_PLAY_STORE && !p.getBoolean(KEY_IN_PROGRESS, false)) return false
+        val started = p.getLong(KEY_STARTED_AT, 0L)
+        val now = System.currentTimeMillis()
+        if (started > 0L && now >= started && now - started > STALE_AFTER_MS) return false
+        return true
+    }
+
+    /**
+     * Identidad del flujo abierto: su hora de arranque. Quien trabaja en segundo plano
+     * para un flujo (la ruta de la Tienda) la guarda al empezar y pregunta con
+     * [isSameFlow]: así un flujo NUEVO del mismo paquete nunca se confunde con el viejo.
+     */
+    fun flowToken(context: Context): Long =
+        PrefsHelper.getMdmPrefs(context).getLong(KEY_STARTED_AT, 0L)
+
+    fun isSameFlow(context: Context, packageName: String, token: Long): Boolean =
+        isActiveFor(context, packageName) && flowToken(context) == token
+
+    /**
+     * La ruta efectiva del flujo. Una clave AUSENTE se lee como Google Play a propósito:
+     * es el estado que deja un flujo arrancado por una versión anterior a B.97 (por
+     * ejemplo, el proceso murió a mitad y volvió ya actualizado), y para esos el único
+     * camino que existía era Play Store. Los flujos nuevos escriben "" mientras eligen.
+     */
+    fun currentRoute(context: Context): String =
+        PrefsHelper.getMdmPrefs(context).getString(KEY_ROUTE, ROUTE_PLAY_STORE) ?: ROUTE_PLAY_STORE
+
+    /**
+     * ¿Hay un flujo POR GOOGLE PLAY en curso? Es lo único que habilita lo que toca la
+     * pantalla: el overlay negro, el ticker, relanzar Play Store y dejar abrir Play Store
+     * sin rebotarla. Con la ruta de la Tienda (o mientras se elige) el teléfono se usa
+     * normal y los filtros siguen andando.
+     */
+    fun isPlayStoreFlowRunning(context: Context): Boolean =
+        isRunning(context) && currentRoute(context) == ROUTE_PLAY_STORE
+
+    /**
+     * ¿El flujo de ESTE paquete sigue abierto? A diferencia de [isRunning] no mira
+     * `mdm_install_in_progress`: `SelfUpdater` lo pone en false cuando falla a mitad de
+     * una instalación (restoreInstallRestrictions) y eso no significa que el flujo haya
+     * terminado — puede seguir por Google Play. Lo que dice que terminó es que [finish]
+     * borró el paquete.
+     */
+    fun isActiveFor(context: Context, packageName: String): Boolean =
+        !finishing && PrefsHelper.getMdmPrefs(context).getString(KEY_PKG, null) == packageName
+
+    /**
+     * ¿Está la pantalla de bloqueo puesta? Con el keyguard arriba no se tapa nada: ver la
+     * regla 8 de la cabecera.
+     */
+    @Volatile private var keyguardCachedAt = 0L
+    @Volatile private var keyguardCached = false
+
+    /**
+     * Se consulta en cada evento de accesibilidad mientras dura el flujo (hasta diez por
+     * segundo) y es una llamada al sistema: se recuerda 300 ms.
+     */
+    fun isKeyguardLocked(context: Context): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (keyguardCachedAt != 0L && now - keyguardCachedAt < 300L) return keyguardCached
+        val v = try {
+            (context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager)
+                ?.isKeyguardLocked == true
+        } catch (e: Exception) {
+            false
+        }
+        keyguardCached = v
+        keyguardCachedAt = now
+        return v
     }
 
     fun wasRecentlyUpdated(context: Context, packageName: String): Boolean {
@@ -262,7 +422,12 @@ object UpdateFlowManager {
     fun healStaleInstall(context: Context, source: String): Boolean {
         val ctx = context.applicationContext
         val p = PrefsHelper.getMdmPrefs(ctx)
-        if (!p.getBoolean(KEY_IN_PROGRESS, false)) {
+        // B.97: un flujo de la ruta de la Tienda puede quedar con el paquete puesto y
+        // `mdm_install_in_progress` en false (SelfUpdater la baja si un intento falla y el
+        // flujo sigue por Google Play). Si el proceso muere justo ahí, eso también es un
+        // flujo colgado: se cuenta como "en curso" para esta red de seguridad.
+        val hayFlujo = p.getBoolean(KEY_IN_PROGRESS, false) || !p.getString(KEY_PKG, null).isNullOrBlank()
+        if (!hayFlujo) {
             if (p.contains(KEY_PREV_UNINSTALL_PKG)) {
                 restorePreviousUninstallBlock(ctx)
             }
@@ -285,12 +450,48 @@ object UpdateFlowManager {
         Log.w(TAG, "Instalación colgada desde hace ${(now - seenAt) / 60000} min ($token), vista desde $source: se cierra.")
         p.edit().remove(KEY_STALE_TOKEN).remove(KEY_STALE_SEEN_AT).apply()
         restorePreviousUninstallBlock(ctx)
-        if (isRunning(ctx)) {
+        if (isRunning(ctx) || !currentPackage(ctx).isNullOrBlank()) {
             forceCleanup(ctx, RESULT_TIMEOUT)
         } else {
             PolicyManager(ctx).restoreInstallRestrictions()
         }
         return true
+    }
+
+    /**
+     * 26/10/2026 (B.97) — CIERRA UN FLUJO QUE QUEDÓ HUÉRFANO AL REINICIARSE EL PROCESO.
+     *
+     * Elegir el camino y bajar/verificar la copia de la Tienda corre en una corrutina de
+     * este proceso (HostedAppUpdater): si el proceso muere a mitad, nadie lo termina. Sin
+     * esto el flujo quedaba "en curso" hasta el watchdog de 10 minutos —el panel mostraba
+     * una descarga que ya no existía y un pedido nuevo se rechazaba con "ya hay una
+     * actualización en curso"—. Qué se cierra y qué no lo decide
+     * UpdateRoutePlanner.orphanReasonAfterRestart (con pruebas): la ruta de Google Play la
+     * retoma la Accesibilidad (B.54) y una instalación ya entregada al sistema la termina
+     * Android.
+     *
+     * La llama LockSuiteApplication al arrancar el proceso, que es justo cuando ningún
+     * trabajo de la Tienda puede estar vivo. No la llames desde otro lado sin pensar en la
+     * ventana entre "HostedAppUpdater terminó" y "beginPlayStoreRoute marcó la ruta".
+     */
+    fun closeOrphanedAfterRestart(context: Context) {
+        val ctx = context.applicationContext
+        val pkg = currentPackage(ctx)
+        if (pkg.isNullOrBlank()) return
+        if (HostedAppUpdater.isWorkingOn(flowToken(ctx))) return
+        val motivo = UpdateRoutePlanner.orphanReasonAfterRestart(currentRoute(ctx), currentStage(ctx)) ?: return
+        Log.w(TAG, "Flujo huérfano al arrancar el proceso ($pkg): $motivo")
+        if (targetAlreadyUpdated(ctx)) {
+            step(ctx, UpdateStepLog.OK, "$motivo, pero la versión nueva ya quedó instalada.")
+            finish(ctx, RESULT_UPDATED, null, "$motivo; la versión nueva ya estaba instalada.")
+            return
+        }
+        // El paso final ("Terminó sin actualizar: <motivo>") lo anota finish().
+        finish(
+            ctx, RESULT_ERROR,
+            "La actualización de ${appLabel(ctx, pkg)} se interrumpió porque LockSuite se reinició. Volvé a intentarlo.",
+            "$motivo."
+        )
     }
 
     fun currentPackage(context: Context): String? =
@@ -313,12 +514,60 @@ object UpdateFlowManager {
         packageName
     }
 
-    private fun versionCodeOf(context: Context, packageName: String): Long = try {
+    fun versionCodeOf(context: Context, packageName: String): Long = try {
         val info = context.packageManager.getPackageInfo(packageName, 0)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode
         else @Suppress("DEPRECATION") info.versionCode.toLong()
     } catch (e: Exception) {
         -1L
+    }
+
+    fun versionNameOf(context: Context, packageName: String): String = try {
+        context.packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    /**
+     * Quién instaló la app (26/10/2026, B.97). Es la primera pregunta cuando "Play Store
+     * no la actualiza": Google Play solo puede reemplazar una app firmada igual que la
+     * suya, y una app que vino de la Tienda de LockSuite, de un APK o de ADB puede estar
+     * firmada por otro (B.66: el Waze de la Tienda lo firma un tercero).
+     */
+    fun installerOf(context: Context, packageName: String): String = try {
+        val pm = context.packageManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val src = pm.getInstallSourceInfo(packageName)
+            src.installingPackageName ?: src.initiatingPackageName ?: ""
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstallerPackageName(packageName) ?: ""
+        }
+    } catch (e: Exception) {
+        ""
+    }
+
+    fun installerLabel(context: Context, installer: String): String = when {
+        installer.isBlank() -> "desconocido (APK suelto, ADB o de fábrica)"
+        installer == PKG_PLAY_STORE -> "Google Play"
+        installer == context.packageName -> "la Tienda de LockSuite"
+        else -> installer
+    }
+
+    /**
+     * ¿Es una app que maneja Google Play? La instaló Play Store, o vino de fábrica (Play
+     * actualiza las apps de Google preinstaladas aunque el instalador figure vacío). Decide
+     * qué camino va primero en automático: ver UpdateRoutePlanner.
+     */
+    fun isPlayManaged(context: Context, packageName: String, installer: String): Boolean {
+        if (installer == PKG_PLAY_STORE) return true
+        if (installer.isNotBlank()) return false
+        return try {
+            val ai = context.packageManager.getApplicationInfo(packageName, 0)
+            (ai.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**
@@ -340,12 +589,18 @@ object UpdateFlowManager {
         if (!detail.isNullOrBlank()) return detail
         return when (stage) {
             STAGE_PREPARING -> "Preparando la actualización..."
+            STAGE_CHOOSING_ROUTE -> "Buscando la mejor forma de actualizar..."
             STAGE_OPENING_STORE -> "Abriendo Google Play..."
             STAGE_WAITING_STORE -> "Esperando a Google Play..."
+            STAGE_WAITING_UNLOCK -> "Desbloqueá el celular para continuar la actualización"
             STAGE_LOOKING_BUTTON -> "Buscando actualización..."
             STAGE_CONFIRMING -> "Confirmando descarga..."
+            STAGE_QUEUED -> "Google Play está preparando la descarga..."
             STAGE_DOWNLOADING -> "Descargando actualización..."
             STAGE_INSTALLING -> "Instalando..."
+            STAGE_HOSTED_DOWNLOADING -> "Descargando de la Tienda de LockSuite..."
+            STAGE_HOSTED_VERIFYING -> "Verificando la copia de la Tienda..."
+            STAGE_HOSTED_INSTALLING -> "Instalando en silencio..."
             STAGE_FINISHING -> "Finalizando y asegurando dispositivo..."
             else -> "Por favor, no toque la pantalla..."
         }
@@ -366,20 +621,134 @@ object UpdateFlowManager {
     }
 
     // ──────────────────────────────────────────────
+    // Registro paso a paso (26/10/2026, B.97)
+    // ──────────────────────────────────────────────
+
+    private val stepsLock = Any()
+    /** Líneas del registro que se muestran en la pantalla negra. */
+    private const val OVERLAY_STEP_LINES = 4
+
+    /**
+     * Anota un paso del flujo: qué decidió, qué vio, qué apretó, qué contestó el
+     * sistema. Se ve en vivo en la pantalla negra (las últimas líneas) y entero en la
+     * ficha del panel. Un paso igual al anterior no se repite (lo garantiza
+     * UpdateStepLog), así que se puede llamar desde el ciclo de 700 ms sin llenarlo.
+     *
+     * @param evenIfIdle anotar aunque no haya un flujo abierto (lo usan [finish] para el
+     *   paso final y [start] para dejar escrito un rechazo previo).
+     */
+    fun step(context: Context, kind: String, msg: String, evenIfIdle: Boolean = false) {
+        val ctx = context.applicationContext
+        val prefs = PrefsHelper.getMdmPrefs(ctx)
+        if (!evenIfIdle && prefs.getString(KEY_PKG, null).isNullOrBlank()) return
+        val raw: String
+        synchronized(stepsLock) {
+            val before = prefs.getString(KEY_STEPS, null)
+            raw = UpdateStepLog.append(before, UpdateStepLog.Step(System.currentTimeMillis(), kind, msg))
+            if (raw == before) return
+            prefs.edit().putString(KEY_STEPS, raw).apply()
+        }
+        Log.i(TAG, "[paso/$kind] $msg")
+        LockSuiteAccessibilityService.instance?.overlayManager
+            ?.updateBlockingSteps(UpdateStepLog.tailForOverlay(raw, OVERLAY_STEP_LINES))
+        syncToPanel(ctx, force = false)
+    }
+
+    fun stepsTail(context: Context): String =
+        UpdateStepLog.tailForOverlay(PrefsHelper.getMdmPrefs(context).getString(KEY_STEPS, null), OVERLAY_STEP_LINES)
+
+    // ──────────────────────────────────────────────
+    // Aviso en la barra de notificaciones (26/10/2026, B.97)
+    //
+    // Dos usos, y los dos son casos donde NO hay pantalla negra: la ruta de la Tienda
+    // (silenciosa: el usuario sigue usando el teléfono) y el celular bloqueado (ahí la
+    // pantalla negra taparía la pantalla de bloqueo). VISIBILITY_PUBLIC para que se lea
+    // también con el teléfono bloqueado, que es justamente cuando más hace falta.
+    // ──────────────────────────────────────────────
+
+    private const val NOTIF_CHANNEL = "locksuite_app_updates"
+    private const val NOTIF_ID = 47_900
+
+    private fun ensureNotifChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+            if (nm.getNotificationChannel(NOTIF_CHANNEL) != null) return
+            val canal = android.app.NotificationChannel(
+                NOTIF_CHANNEL, "Actualización de apps", android.app.NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Progreso de las actualizaciones de apps que manda el administrador"
+                // Sin sonido ni vibración: se actualiza seguido mientras baja.
+                setSound(null, null)
+                enableVibration(false)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            }
+            nm.createNotificationChannel(canal)
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo crear el canal de notificaciones: ${e.message}")
+        }
+    }
+
+    /**
+     * @param progress 0..100, -1 = indeterminado, null = sin barra.
+     * @param ongoing true mientras dura el flujo (no se puede deslizar).
+     */
+    fun notifyUser(context: Context, title: String, text: String, progress: Int?, ongoing: Boolean) {
+        val ctx = context.applicationContext
+        try {
+            ensureNotifChannel(ctx)
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+            val b = androidx.core.app.NotificationCompat.Builder(ctx, NOTIF_CHANNEL)
+                .setSmallIcon(if (ongoing) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_download_done)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(text))
+                .setOnlyAlertOnce(true)
+                .setOngoing(ongoing)
+                .setAutoCancel(!ongoing)
+                .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_DEFAULT)
+            if (progress != null) {
+                if (progress < 0) b.setProgress(0, 0, true) else b.setProgress(100, progress.coerceIn(0, 100), false)
+            }
+            if (!ongoing) b.setTimeoutAfter(10 * 60 * 1000L)
+            nm.notify(NOTIF_ID, b.build())
+        } catch (e: Exception) {
+            // Sin permiso de notificaciones (Android 13+ sin B.55) o un fabricante raro:
+            // el flujo sigue igual, el panel y el registro dicen lo mismo.
+            Log.w(TAG, "No se pudo mostrar la notificación: ${e.message}")
+        }
+    }
+
+    fun cancelUserNotification(context: Context) {
+        try {
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager)
+                ?.cancel(NOTIF_ID)
+        } catch (e: Exception) {
+            // nada
+        }
+    }
+
+    // ──────────────────────────────────────────────
     // Arranque
     // ──────────────────────────────────────────────
 
     /**
+     * @param routePref lo que pidió el panel: "auto" (por omisión), "play" o "hosted". Ver
+     *   UpdateRoutePlanner. Los llamadores viejos (la pantalla del celular, el widget) no
+     *   lo pasan y quedan en automático.
      * @return null si arranco bien; un mensaje de error si no se pudo arrancar.
      */
     fun start(
         context: Context,
         packageName: String,
         source: String,
-        cancelable: Boolean
+        cancelable: Boolean,
+        routePref: String = UpdateRoutePlanner.PREF_AUTO
     ): String? {
         val ctx = context.applicationContext
         val policyManager = PolicyManager(ctx)
+        val pref = UpdateRoutePlanner.normalizePref(routePref)
 
         if (packageName.isBlank()) return "No se indico ninguna aplicacion."
 
@@ -387,7 +756,9 @@ object UpdateFlowManager {
             return "LockSuite esta suspendido: Google Play ya esta libre, actualiza la app directamente."
         }
 
-        if (isRunning(ctx)) {
+        // B.97: hasLiveFlow y no isRunning — un flujo por la Tienda está abierto sin la
+        // marca de instalación prendida, y uno muerto no tiene que trabar los pedidos nuevos.
+        if (hasLiveFlow(ctx)) {
             val other = currentPackage(ctx)
             return if (other == packageName) {
                 "Ya hay una actualizacion en curso para esta aplicacion."
@@ -400,7 +771,11 @@ object UpdateFlowManager {
             return "Hay otra instalacion en curso en este equipo. Espera a que termine."
         }
 
-        if (LockSuiteAccessibilityService.instance == null) {
+        // B.97: la Accesibilidad hace falta SOLO para el camino de Google Play. En
+        // automático todavía puede servir la copia de la Tienda (silenciosa, no toca la
+        // pantalla), así que acá se rechaza únicamente si se pidió Google Play a la fuerza;
+        // en automático lo decide UpdateRoutePlanner con el resto de los datos.
+        if (pref == UpdateRoutePlanner.PREF_PLAY && LockSuiteAccessibilityService.instance == null) {
             return "El servicio de accesibilidad de LockSuite no esta activo. Sin el, la actualizacion dejaria Google Play abierto sin proteccion."
         }
 
@@ -422,17 +797,17 @@ object UpdateFlowManager {
 
         // 1. Play Store instalada y habilitada. Si el administrador la deshabilito
         //    (no suspendida: DESHABILITADA), setPackagesSuspended(false) no la
-        //    revive y el flujo abriria la nada.
-        val storeState = try {
-            ctx.packageManager.getApplicationEnabledSetting(PKG_PLAY_STORE)
-        } catch (e: Exception) {
-            return "Google Play no esta instalada en este equipo, asi que no se puede actualizar por la tienda."
-        }
-        if (storeState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
-            storeState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER
-        ) {
-            return "Google Play esta deshabilitada en este equipo. Habilitala antes de actualizar."
-        }
+        //    revive y el flujo abriria la nada. (B.97: si se pidió Google Play a la
+        //    fuerza se rechaza acá como antes; en automático es un dato más del plan.)
+        val playProblem = playStoreProblem(ctx)
+        if (pref == UpdateRoutePlanner.PREF_PLAY && playProblem != null) return playProblem
+
+        val prefs = PrefsHelper.getMdmPrefs(ctx)
+        val label = appLabel(ctx, packageName)
+        val baseVc = versionCodeOf(ctx, packageName)
+        val baseVn = versionNameOf(ctx, packageName)
+        val installer = installerOf(ctx, packageName)
+        val origen = if (source == SOURCE_LOCAL) "desde el celular" else "desde el panel"
 
         // 2. Espacio libre. Esta es la que aparecio en el CAT S22 Flip del 3/9: el
         //    equipo estaba sin lugar, Play Store creaba la sesion de instalacion y
@@ -440,18 +815,21 @@ object UpdateFlowManager {
         //    sin decir nunca por que.
         val space = checkSpace(ctx, packageName)
         if (space.freeMb != Long.MAX_VALUE) {
-            PrefsHelper.getMdmPrefs(ctx).edit()
-                .putLong(KEY_LAST_FREE_MB, space.freeMb).apply()
+            prefs.edit().putLong(KEY_LAST_FREE_MB, space.freeMb).apply()
         }
         if (!space.ok) {
             val reason = "No hay espacio suficiente: quedan ${space.freeMb} MB libres y hacen " +
                 "falta al menos ${space.neededMb} MB. Liberá ${space.missingMb} MB y volvé a intentar."
+            // B.97: que el rechazo también quede en el registro paso a paso, así la
+            // ficha del panel muestra qué pasó con el último pedido aunque no arrancó.
+            prefs.edit().putString(KEY_STEPS, "").apply()
+            step(ctx, UpdateStepLog.INFO, "Pedido $origen: actualizar $label (versión $baseVn).", evenIfIdle = true)
+            step(ctx, UpdateStepLog.ERROR, "No se arrancó: $reason", evenIfIdle = true)
             recordResult(ctx, RESULT_NO_SPACE, packageName, reason)
             Log.w(TAG, "Actualizacion de $packageName rechazada por espacio: $reason")
             return reason
         }
 
-        val prefs = PrefsHelper.getMdmPrefs(ctx)
         finishRunnable?.let { mainHandler.removeCallbacks(it) }
         restoreRunnable?.let { mainHandler.removeCallbacks(it) }
         finishRunnable = null
@@ -462,18 +840,121 @@ object UpdateFlowManager {
 
         prefs.edit()
             .putString(KEY_PKG, packageName)
-            .putBoolean(KEY_IN_PROGRESS, true)
+            // B.97: la marca de instalación NO se prende acá. La prende el camino que la
+            // necesita, cuando la necesita: beginPlayStoreRoute() para Google Play, y
+            // SelfUpdater por los segundos que dura la instalación silenciosa. Mientras se
+            // elige el camino o se baja la copia de la Tienda, el equipo queda con todas
+            // sus restricciones puestas (ver isRunning).
             .putString(KEY_STAGE, STAGE_PREPARING)
             .remove(KEY_DETAIL)
             .remove(KEY_DEBUG_LABELS)
             .putLong(KEY_STARTED_AT, System.currentTimeMillis())
             .putString(KEY_SOURCE, source)
             .putBoolean(KEY_CANCELABLE, cancelable)
-            .putLong(KEY_BASE_VERSION, versionCodeOf(ctx, packageName))
+            .putLong(KEY_BASE_VERSION, baseVc)
+            // B.97 — ruta todavía sin elegir: hasta que se elija, nada tapa la pantalla
+            // ni maneja Play Store (ver isPlayStoreFlowRunning).
+            .putString(KEY_ROUTE, UpdateRoutePlanner.ROUTE_UNDECIDED)
+            .putString(KEY_ROUTE_PREF, pref)
+            .remove(KEY_ROUTE_WHY)
+            .putInt(KEY_PROGRESS, -1)
+            .putString(KEY_INSTALLER, installer)
+            .putString(KEY_BASE_VERSION_NAME, baseVn)
+            .remove(KEY_VERSION_AFTER)
+            .putString(KEY_STEPS, "")
             .apply()
 
         LockSuiteAccessibilityService.instance?.invalidateFlagsCache()
+        LockSuiteAccessibilityService.instance?.overlayManager?.clearBlockingSteps()
 
+        step(ctx, UpdateStepLog.INFO,
+            "Pedido $origen: actualizar $label (versión $baseVn, código $baseVc). La instaló: ${installerLabel(ctx, installer)}.")
+        if (installer.isNotBlank() && installer != PKG_PLAY_STORE) {
+            step(ctx, UpdateStepLog.WARN,
+                "Ojo: a esta app no la instaló Google Play. Si su firma no es la de la versión de Google Play, " +
+                    "Play Store no va a poder actualizarla (Android no deja reemplazar una app firmada por otro).")
+        }
+        if (space.freeMb != Long.MAX_VALUE) {
+            step(ctx, UpdateStepLog.OK, "Espacio libre: ${space.freeMb} MB (hacen falta ~${space.neededMb} MB).")
+        }
+
+        armWatchdog(ctx)
+        syncToPanel(ctx, force = true)
+        Log.i(TAG, "Flujo de actualizacion iniciado para $packageName (origen=$source, ruta pedida=$pref)")
+
+        if (pref == UpdateRoutePlanner.PREF_PLAY) {
+            return beginPlayStoreRoute(ctx, packageName, "Elegido por el administrador.")
+        }
+
+        // Automático o Tienda: hay que mirar la Tienda de LockSuite, y eso es red. Se
+        // hace en segundo plano; el ack del panel dice "arrancó" y el resto lo cuentan
+        // la etapa, los pasos y el resultado — igual que con Google Play.
+        setStage(ctx, STAGE_CHOOSING_ROUTE)
+        HostedAppUpdater.chooseAndRun(ctx, packageName, pref)
+        return null
+    }
+
+    /**
+     * ¿Se puede usar Google Play en este equipo? `null` = sí; si no, por qué no, listo
+     * para mostrar.
+     */
+    fun playStoreProblem(context: Context): String? {
+        val storeState = try {
+            context.packageManager.getApplicationEnabledSetting(PKG_PLAY_STORE)
+        } catch (e: Exception) {
+            return "Google Play no esta instalada en este equipo, asi que no se puede actualizar por la tienda."
+        }
+        if (storeState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
+            storeState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER
+        ) {
+            return "Google Play esta deshabilitada en este equipo. Habilitala antes de actualizar."
+        }
+        return null
+    }
+
+    /**
+     * El camino de Google Play: destapar Play Store, tapar la pantalla, abrir la ficha y
+     * dejar que la Accesibilidad la maneje. Es lo que hacía start() hasta el 26/10, sin
+     * cambios de comportamiento; ahora se puede llegar también desde la ruta de la
+     * Tienda cuando la copia de la Tienda no sirvió (y entonces se llama desde un hilo
+     * de fondo: todo lo de acá es seguro fuera del hilo principal — el overlay y el
+     * ticker se postean al principal).
+     *
+     * @return null si arrancó; si no, el motivo (y el flujo ya quedó cerrado con él).
+     */
+    fun beginPlayStoreRoute(context: Context, packageName: String, why: String): String? {
+        val ctx = context.applicationContext
+        if (!isActiveFor(ctx, packageName)) return "El flujo de actualizacion ya se cerro."
+        if (LockSuiteAccessibilityService.instance == null) {
+            val msg = "El servicio de accesibilidad de LockSuite no esta activo. Sin el, la actualizacion dejaria Google Play abierto sin proteccion."
+            step(ctx, UpdateStepLog.ERROR, "No se puede ir por Google Play: la Accesibilidad no está activa.")
+            finish(ctx, RESULT_ERROR, msg, msg)
+            return msg
+        }
+        playStoreProblem(ctx)?.let { msg ->
+            step(ctx, UpdateStepLog.ERROR, msg)
+            finish(ctx, RESULT_STORE_ERROR, msg, msg)
+            return msg
+        }
+
+        val prefs = PrefsHelper.getMdmPrefs(ctx)
+        val cancelable = isCancelable(ctx)
+        prefs.edit()
+            .putString(KEY_ROUTE, ROUTE_PLAY_STORE)
+            .putString(KEY_ROUTE_WHY, why)
+            // Si se llegó acá después de un intento por la Tienda que falló, SelfUpdater
+            // pudo haber bajado esta marca al restaurar las restricciones (ver
+            // isActiveFor): sin ella el resto del flujo creería que no hay nada en curso.
+            .putBoolean(KEY_IN_PROGRESS, true)
+            .putInt(KEY_PROGRESS, -1)
+            .apply()
+        step(ctx, UpdateStepLog.INFO, "Camino elegido: Google Play. $why")
+
+        LockSuiteAccessibilityService.instance?.invalidateFlagsCache()
+
+        // Con el celular bloqueado, showOverlay no tapa nada y el ciclo de la Accesibilidad
+        // espera a que lo desbloqueen (lo anota en el registro y avisa en la pantalla de
+        // bloqueo): ver scanAndAct, paso 2-bis.
         showOverlay(ctx, packageName, STAGE_PREPARING, null, cancelable)
 
         try {
@@ -505,27 +986,30 @@ object UpdateFlowManager {
         } catch (e: Exception) {
             Log.w(TAG, "Error preparando politicas para la actualizacion: ${e.message}")
         }
+        step(ctx, UpdateStepLog.ACT,
+            "Google Play destapada y la instalación habilitada; la app quedó protegida contra desinstalación mientras dure.")
 
-        armWatchdog(ctx)
         wakeScreen(ctx)
 
         setStage(ctx, STAGE_OPENING_STORE)
         val opened = openStore(ctx, packageName)
         if (!opened) {
+            step(ctx, UpdateStepLog.ERROR, "Android no pudo abrir la ficha de la app en Google Play.")
             finish(ctx, RESULT_STORE_ERROR, "No se pudo abrir Google Play en este equipo.",
                 "startActivity(market://details) fallo para $packageName")
             return "No se pudo abrir Google Play en este equipo."
         }
+        step(ctx, UpdateStepLog.ACT, "Abrí la ficha de la app en Google Play.")
 
         setStage(ctx, STAGE_WAITING_STORE)
         syncToPanel(ctx, force = true)
-        Log.i(TAG, "Flujo de actualizacion iniciado para $packageName (origen=$source)")
 
         PlayUpdateSessionWatcher.start(
             ctx, packageName,
-            onProgress = { pct -> setStage(ctx, STAGE_DOWNLOADING, "Descargando... $pct%") },
+            onProgress = { pct -> setStage(ctx, STAGE_DOWNLOADING, "Descargando... $pct%", progress = pct) },
             onFinished = { ok ->
                 if (ok) {
+                    step(ctx, UpdateStepLog.OK, "El sistema confirmó que terminó la instalación.")
                     finish(ctx, RESULT_UPDATED, null)
                 } else {
                     // success=false NO es concluyente: Play Store parte descargas
@@ -536,6 +1020,8 @@ object UpdateFlowManager {
                     // sistema abortó la instalacion", que es lo que pasa cuando no
                     // hay espacio. Antes esta rama estaba vacia y el flujo se
                     // quedaba en "Descargando..." hasta el watchdog de 10 minutos.
+                    step(ctx, UpdateStepLog.WARN,
+                        "Una sesión de instalación de Google Play terminó sin éxito (puede ser una intermedia; se sigue mirando).")
                     Log.w(TAG, "Sesion de instalacion abortada por el sistema para $packageName")
                 }
             }
@@ -609,22 +1095,51 @@ object UpdateFlowManager {
     // Progreso
     // ──────────────────────────────────────────────
 
-    fun setStage(context: Context, stage: String, detail: String? = null) {
+    /**
+     * @param progress porcentaje de una descarga (0..100). Al cambiar a una etapa que no
+     *   es de descarga se vuelve a -1 solo, así el panel no muestra una barra vieja.
+     */
+    fun setStage(context: Context, stage: String, detail: String? = null, progress: Int? = null) {
         val ctx = context.applicationContext
-        if (!isRunning(ctx)) return
+        // B.97: isActiveFor y no isRunning — en la ruta de la Tienda, SelfUpdater baja
+        // `mdm_install_in_progress` si un intento falla, y el flujo sigue abierto.
+        val pkg = currentPackage(ctx) ?: return
+        if (!isActiveFor(ctx, pkg)) return
         val prefs = PrefsHelper.getMdmPrefs(ctx)
         val prevStage = prefs.getString(KEY_STAGE, STAGE_IDLE)
         val prevDetail = prefs.getString(KEY_DETAIL, null)
         val effectiveDetail = detail ?: if (stage == prevStage) prevDetail else null
+        val esDescarga = stage == STAGE_DOWNLOADING || stage == STAGE_HOSTED_DOWNLOADING
+        val prevProgress = prefs.getInt(KEY_PROGRESS, -1)
+        val newProgress = when {
+            progress != null -> progress
+            esDescarga -> prevProgress
+            else -> -1
+        }
 
-        if (prevStage == stage && prevDetail == effectiveDetail) return
+        if (prevStage == stage && prevDetail == effectiveDetail && prevProgress == newProgress) return
 
-        val editor = prefs.edit().putString(KEY_STAGE, stage)
+        val editor = prefs.edit().putString(KEY_STAGE, stage).putInt(KEY_PROGRESS, newProgress)
         if (effectiveDetail == null) editor.remove(KEY_DETAIL) else editor.putString(KEY_DETAIL, effectiveDetail)
         editor.apply()
 
-        LockSuiteAccessibilityService.instance?.overlayManager
-            ?.updateBlockingMessage(null, stageLabel(stage, effectiveDetail))
+        LockSuiteAccessibilityService.instance?.overlayManager?.let { om ->
+            om.updateBlockingMessage(null, stageLabel(stage, effectiveDetail))
+            // La barra con el porcentaje real en la pantalla negra (si no se sabe, la ruedita).
+            om.updateBlockingProgress(if (newProgress >= 0) newProgress else null)
+        }
+
+        // Un paso por cada CAMBIO de etapa (no por cada punto del porcentaje: eso va en
+        // KEY_PROGRESS). Las decisiones finas —qué botón, por qué— las anota quien decide.
+        // Si la etapa ya figura entre los últimos pasos no se repite: el ciclo de Google
+        // Play puede ir y venir entre "Esperando a Google Play" y "Buscando actualización"
+        // mientras la ficha se dibuja, y eso llenaría el registro de idas y vueltas
+        // empujando afuera lo que importa (qué apretó).
+        if (prevStage != stage && stage != STAGE_IDLE) {
+            val etiqueta = stageLabel(stage, null).removeSuffix("...").removeSuffix("…")
+            val recientes = UpdateStepLog.decode(prefs.getString(KEY_STEPS, null)).takeLast(4).map { it.msg }
+            if (etiqueta !in recientes) step(ctx, UpdateStepLog.INFO, etiqueta)
+        }
 
         syncToPanel(ctx, force = false)
     }
@@ -638,6 +1153,19 @@ object UpdateFlowManager {
     ) {
         val service = LockSuiteAccessibilityService.instance ?: return
         val ctx = context.applicationContext
+        // B.97 — la pantalla negra existe SOLO en la ruta de Google Play: es la que
+        // protege a Play Store destapada. En la de la Tienda (o mientras se elige) no hay
+        // nada que proteger y el usuario sigue usando el teléfono.
+        if (currentRoute(ctx) != ROUTE_PLAY_STORE) return
+        // Con la pantalla de bloqueo puesta NO se tapa: el overlay queda encima del
+        // keyguard y de la barra de navegación, y el usuario no podría desbloquear. La
+        // Accesibilidad lo vuelve a poner apenas lo desbloquean (ver scanAndAct).
+        if (isKeyguardLocked(ctx)) {
+            if (service.overlayManager.isBlockingMessageVisible()) {
+                service.overlayManager.hideBlockingMessageOverlay()
+            }
+            return
+        }
         val effectiveDetail = detail ?: currentDetail(ctx)
         service.overlayManager.showBlockingMessageOverlay(
             title = "Actualizando ${appLabel(ctx, packageName)}",
@@ -645,6 +1173,9 @@ object UpdateFlowManager {
             cancelable = cancelable,
             onCancel = { requestCancel(ctx) }
         )
+        service.overlayManager.updateBlockingSteps(stepsTail(ctx))
+        val pct = PrefsHelper.getMdmPrefs(ctx).getInt(KEY_PROGRESS, -1)
+        service.overlayManager.updateBlockingProgress(if (pct >= 0) pct else null)
     }
 
     // ──────────────────────────────────────────────
@@ -654,7 +1185,87 @@ object UpdateFlowManager {
     fun requestCancel(context: Context) {
         val ctx = context.applicationContext
         Log.i(TAG, "Cancelacion pedida por el usuario/panel")
+        // B.97: con la instalación silenciosa ya en manos de PackageInstaller no hay forma
+        // de frenarla, y cerrar el flujo acá dejaría el panel diciendo "cancelada" de una
+        // app que se termina de instalar dos segundos después. Se dice la verdad.
+        if (currentRoute(ctx) == ROUTE_HOSTED && currentStage(ctx) == STAGE_HOSTED_INSTALLING) {
+            step(ctx, UpdateStepLog.WARN,
+                "Se pidió cancelar, pero la instalación ya está en manos del sistema y no se puede frenar: se deja terminar.")
+            return
+        }
+        step(ctx, UpdateStepLog.WARN, "Cancelada por el usuario o el administrador.")
         finish(ctx, RESULT_CANCELLED, "Actualización cancelada.")
+    }
+
+    /**
+     * Resultado de la instalación SILENCIOSA de la copia de la Tienda, tal como lo
+     * informa PackageInstaller (lo llama PackageInstallStatusReceiver).
+     *
+     * @return true si correspondía a la actualización en curso (y quien llama no tiene
+     *   que hacer nada más, ni mostrar su propio aviso).
+     */
+    fun onHostedInstallStatus(context: Context, packageName: String?, status: Int, message: String?): Boolean {
+        val ctx = context.applicationContext
+        val pkg = currentPackage(ctx) ?: return false
+        if (packageName != null && packageName != pkg) return false
+        if (currentRoute(ctx) != ROUTE_HOSTED) return false
+
+        if (status == UpdateRoutePlanner.STATUS_SUCCESS) {
+            step(ctx, UpdateStepLog.OK, "El sistema confirmó la instalación de la copia de la Tienda.")
+            finish(ctx, RESULT_UPDATED, null)
+            return true
+        }
+        val falla = UpdateRoutePlanner.hostedInstallFailure(status, message)
+        val pref = PrefsHelper.getMdmPrefs(ctx).getString(KEY_ROUTE_PREF, UpdateRoutePlanner.PREF_AUTO)
+        if (falla.fallbackToPlay && pref == UpdateRoutePlanner.PREF_AUTO) {
+            fallbackToPlayStore(ctx, pkg, "El sistema rechazó la copia de la Tienda: ${falla.reason}.")
+        } else {
+            step(ctx, UpdateStepLog.ERROR, "El sistema rechazó la copia de la Tienda: ${falla.reason}.")
+            finish(ctx, falla.result, "No se pudo instalar la actualización: ${falla.reason}.", falla.reason)
+        }
+        return true
+    }
+
+    /**
+     * La copia de la Tienda no sirvió (B.97): seguir por Google Play, si se puede, como
+     * si el flujo hubiera arrancado por ahí. Corre en el hilo principal.
+     *
+     * Antes de abrir Google Play se vuelve a cerrar TODO lo que la ruta de la Tienda pudo
+     * haber abierto (SelfUpdater levanta también DISALLOW_INSTALL_UNKNOWN_SOURCES, que el
+     * camino de Google Play no necesita): restoreInstallRestrictions() deja el equipo
+     * como antes del pedido y beginPlayStoreRoute() abre exactamente lo de siempre. Y el
+     * watchdog se vuelve a armar: Google Play tiene que tener sus diez minutos aunque la
+     * descarga de la Tienda se haya llevado unos cuantos.
+     */
+    fun fallbackToPlayStore(context: Context, packageName: String, reason: String) {
+        val ctx = context.applicationContext
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { fallbackToPlayStore(ctx, packageName, reason) }
+            return
+        }
+        if (!isActiveFor(ctx, packageName)) return
+        val planB = UpdateRoutePlanner.plan(
+            UpdateRoutePlanner.PREF_PLAY, packageName, null, versionCodeOf(ctx, packageName), null,
+            LockSuiteAccessibilityService.instance != null, playStoreProblem(ctx)
+        )
+        when (planB) {
+            is UpdateRoutePlanner.Plan.PlayStore -> {
+                step(ctx, UpdateStepLog.WARN, "$reason Se sigue por Google Play.")
+                cancelUserNotification(ctx)
+                try {
+                    PolicyManager(ctx).restoreInstallRestrictions()
+                } catch (e: Exception) {
+                    Log.w(TAG, "No se pudieron restaurar las restricciones antes de ir a Google Play: ${e.message}")
+                }
+                armWatchdog(ctx)
+                beginPlayStoreRoute(ctx, packageName, "La copia de la Tienda no sirvió. $reason")
+            }
+            is UpdateRoutePlanner.Plan.Fail -> {
+                step(ctx, UpdateStepLog.ERROR, "$reason Y por Google Play tampoco: ${planB.message}")
+                finish(ctx, RESULT_ERROR, "No se pudo actualizar. $reason ${planB.message}", "$reason | ${planB.message}")
+            }
+            is UpdateRoutePlanner.Plan.Hosted -> finish(ctx, RESULT_ERROR, reason, reason)
+        }
     }
 
     /**
@@ -665,6 +1276,15 @@ object UpdateFlowManager {
      *   siguiente sesion de diagnostico a ciegas.
      */
     fun finish(context: Context, result: String, message: String? = null, reason: String? = null) {
+        // B.97 — SIEMPRE en el hilo principal. Desde el 26/10 hay cierres que llegan de
+        // hilos de fondo (la ruta de la Tienda, el WatchdogWorker vía healStaleInstall) y
+        // otros del principal (PackageReceiver, el ticker, el botón Cancelar). Con un
+        // solo hilo, la marca `finishing` de abajo no puede tener carreras.
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            val appCtx = context.applicationContext
+            mainHandler.post { finish(appCtx, result, message, reason) }
+            return
+        }
         val ctx = context.applicationContext
         val prefs = PrefsHelper.getMdmPrefs(ctx)
         val pkg = prefs.getString(KEY_PKG, null)
@@ -674,25 +1294,63 @@ object UpdateFlowManager {
             LockSuiteAccessibilityService.instance?.overlayManager?.hideBlockingMessageOverlay()
             return
         }
+
+        // B.97: lo que hace falta saber del flujo ANTES de borrarlo.
+        val route = currentRoute(ctx)
+        val stageAlCerrar = prefs.getString(KEY_STAGE, STAGE_IDLE)
+        // Un cierre por TIEMPO dice dónde se quedó (antes era siempre "tardó demasiado").
+        val effectiveReason = reason ?: message
+            ?: if (result == RESULT_TIMEOUT) UpdateRoutePlanner.timeoutReasonForStage(stageAlCerrar) else null
+        val versionDespues = if (!pkg.isNullOrBlank()) {
+            val vn = versionNameOf(ctx, pkg)
+            val vc = versionCodeOf(ctx, pkg)
+            if (vc >= 0L) "$vn ($vc)" else ""
+        } else ""
+
+        // El último paso del registro: el desenlace, con su motivo. Va ANTES de borrar el
+        // paquete (step() no anota sin flujo abierto, salvo evenIfIdle).
+        if (!pkg.isNullOrBlank()) {
+            val kind = when (result) {
+                RESULT_UPDATED, RESULT_UP_TO_DATE -> UpdateStepLog.OK
+                RESULT_CANCELLED -> UpdateStepLog.WARN
+                else -> UpdateStepLog.ERROR
+            }
+            val texto = when (result) {
+                RESULT_UPDATED -> "Listo: actualizada" + (if (versionDespues.isNotEmpty()) " a la versión $versionDespues." else ".")
+                RESULT_UP_TO_DATE -> "Listo: la app ya estaba en la última versión."
+                RESULT_CANCELLED -> "Cancelada."
+                else -> "Terminó sin actualizar ($result)" + (if (!effectiveReason.isNullOrBlank()) ": $effectiveReason" else ".")
+            }
+            step(ctx, kind, texto, evenIfIdle = true)
+        }
+
         finishing = true
 
-        Log.i(TAG, "Cerrando flujo de actualizacion: result=$result pkg=$pkg running=$wasRunning")
+        Log.i(TAG, "Cerrando flujo de actualizacion: result=$result pkg=$pkg running=$wasRunning route=$route")
 
         PlayUpdateSessionWatcher.stop(ctx)
         val service = LockSuiteAccessibilityService.instance
         service?.stopUpdateTicker()
 
-        prefs.edit()
+        val cierre = prefs.edit()
             .remove(KEY_PKG)
             .putBoolean(KEY_IN_PROGRESS, false)
             .putString(KEY_STAGE, STAGE_IDLE)
             .remove(KEY_DETAIL)
             .remove(KEY_BASE_VERSION)
-            .putString(KEY_LAST_RESULT, result)
-            .putString(KEY_LAST_RESULT_PKG, pkg ?: "")
-            .putString(KEY_LAST_RESULT_REASON, reason ?: message ?: "")
-            .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
-            .apply()
+            .putInt(KEY_PROGRESS, -1)
+        // B.97: un cierre SIN flujo (forceCleanup desde "Cancelar" con todo ya limpio, o la
+        // alarma vieja de un flujo que ya terminó) no pisa el resultado del último flujo
+        // real: antes lo reemplazaba por "CANCELLED" / "TIMEOUT" de un paquete vacío, y el
+        // panel perdía el motivo de la última actualización de verdad.
+        if (!pkg.isNullOrBlank()) {
+            cierre.putString(KEY_VERSION_AFTER, versionDespues)
+                .putString(KEY_LAST_RESULT, result)
+                .putString(KEY_LAST_RESULT_PKG, pkg)
+                .putString(KEY_LAST_RESULT_REASON, effectiveReason ?: "")
+                .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
+        }
+        cierre.apply()
 
         // B.86: Restaurar setUninstallBlocked sincrónicamente al cerrar el flujo,
         // sin esperar los 5.6 segundos de lectura del aviso. Así si el proceso muere
@@ -709,7 +1367,7 @@ object UpdateFlowManager {
             RESULT_UPDATED -> message ?: "✓ Actualización completada con éxito."
             RESULT_CANCELLED -> message ?: "Actualización cancelada."
             RESULT_ERROR -> message ?: "No se pudo completar la actualización."
-            RESULT_TIMEOUT -> message ?: "La actualización tardó demasiado y se canceló."
+            RESULT_TIMEOUT -> message ?: effectiveReason ?: "La actualización tardó demasiado y se canceló."
             RESULT_NO_SPACE -> message ?: "No hay espacio suficiente para actualizar $label."
             RESULT_NEEDS_ACCOUNT -> message
                 ?: "Google Play pide iniciar sesión: este equipo no tiene una cuenta de Google configurada."
@@ -717,6 +1375,15 @@ object UpdateFlowManager {
                 ?: "Google Play no ofrece una actualización de $label para este equipo."
             RESULT_STORE_ERROR -> message ?: "Google Play devolvió un error. Probá de nuevo más tarde."
             else -> message
+        }
+
+        // B.97 — el aviso de la barra de notificaciones. En la ruta de la Tienda es lo
+        // ÚNICO que ve el usuario (no hubo pantalla negra), y en la de Google Play cierra
+        // el "desbloqueá el celular" si quedó puesto.
+        if (route == ROUTE_HOSTED && !pkg.isNullOrBlank() && !finalNotice.isNullOrBlank()) {
+            notifyUser(ctx, label, finalNotice, null, ongoing = false)
+        } else {
+            cancelUserNotification(ctx)
         }
 
         val showNoticeOnOverlay = !finalNotice.isNullOrBlank() &&
@@ -727,6 +1394,8 @@ object UpdateFlowManager {
                 title = label,
                 subtitle = finalNotice
             )
+            // Que el cartel final no quede encima de una barra vieja ("No se pudo…" al 45 %).
+            service?.overlayManager?.updateBlockingProgress(null)
         }
 
         // Un aviso que explica QUE hacer (liberar espacio, configurar la cuenta)
@@ -740,19 +1409,26 @@ object UpdateFlowManager {
         val outerRunnable = Runnable {
             finishRunnable = null
             service?.overlayManager?.hideBlockingMessageOverlay()
+            service?.overlayManager?.clearBlockingSteps()
 
-            try {
-                if (service != null) {
-                    service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
-                } else {
-                    val home = Intent(Intent.ACTION_MAIN).apply {
-                        addCategory(Intent.CATEGORY_HOME)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // Volver al INICIO solo si se abrió Google Play (es para sacarla de adelante).
+            // En la ruta de la Tienda el usuario estaba usando el teléfono: mandarlo al
+            // inicio le cerraría lo que tenía abierto sin ningún motivo. Lo mismo si el
+            // flujo nunca llegó a elegir camino.
+            if (route == ROUTE_PLAY_STORE) {
+                try {
+                    if (service != null) {
+                        service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                    } else {
+                        val home = Intent(Intent.ACTION_MAIN).apply {
+                            addCategory(Intent.CATEGORY_HOME)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        ctx.startActivity(home)
                     }
-                    ctx.startActivity(home)
+                } catch (e: Exception) {
+                    Log.w(TAG, "No se pudo volver al inicio: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "No se pudo volver al inicio: ${e.message}")
             }
 
             val innerRunnable = Runnable {
@@ -912,10 +1588,30 @@ object UpdateFlowManager {
         syncToPanel(ctx, force = true)
     }
 
-    /** Publica el estado del flujo en Firebase para que el panel lo vea en vivo. */
+    @Volatile private var syncPendiente = false
+
+    /**
+     * Publica el estado del flujo en Firebase para que el panel lo vea en vivo.
+     *
+     * Con tope de una publicación cada 1,5 s, pero SIN perder la última (B.97): antes, lo
+     * que pasaba dentro de esa ventana no se publicaba hasta el próximo cambio, y con el
+     * registro paso a paso eso dejaba al panel un paso atrás justo cuando el flujo se
+     * quedaba esperando (el celular bloqueado, una descarga lenta). Ahora, si se saltea
+     * una, queda programada una al final de la ventana.
+     */
     fun syncToPanel(context: Context, force: Boolean) {
         val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastSyncAt < 1500L) return
+        if (!force && now - lastSyncAt < 1500L) {
+            if (!syncPendiente) {
+                syncPendiente = true
+                val appCtx = context.applicationContext
+                mainHandler.postDelayed({
+                    syncPendiente = false
+                    syncToPanel(appCtx, force = true)
+                }, (1500L - (now - lastSyncAt)).coerceAtLeast(0L) + 50L)
+            }
+            return
+        }
         lastSyncAt = now
         try {
             FirebaseDeviceSync.syncUpdateFlow(context.applicationContext)

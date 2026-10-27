@@ -30,6 +30,7 @@ import com.ejemplo.locksuite.mdm.PhotoPickerPolicy
 import com.ejemplo.locksuite.mdm.PolicyManager
 import com.ejemplo.locksuite.mdm.WebViewBlockManager
 import com.ejemplo.locksuite.mdm.ImageBlockManager
+import com.ejemplo.locksuite.mdm.UpdateStepLog
 import com.ejemplo.locksuite.util.PrefsHelper
 import com.ejemplo.locksuite.util.UpdateFlowManager
 import com.ejemplo.locksuite.util.PlayButtonFinder
@@ -204,6 +205,23 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         private const val MAX_UPDATE_SCROLLS = 3
         private const val SCROLL_COOLDOWN_MS = 1_200L
 
+        /**
+         * 26/10/2026 (B.97) — cuánto puede quedarse Google Play con la descarga "en
+         * cola" (barra en la fila de botones que NO avanza, y sin sesión de instalación)
+         * antes de cerrar diciendo eso. Antes no había tope: cualquier barra de progreso
+         * en pantalla se leía como "descargando" y la única salida era el watchdog de 10
+         * minutos. Una barra CON valor que avanza reinicia la cuenta: es una descarga de
+         * verdad (versiones de Play Store que bajan antes de abrir la sesión).
+         */
+        private const val QUEUED_STALL_MS = 240_000L
+
+        /**
+         * B.97 — cuánto tiene que SOSTENERSE "Esperando Wi-Fi / esperando red" en la
+         * descarga para cerrar diciéndolo. Un cambio de red hace parpadear ese cartel en
+         * una descarga que sigue sola; cerrar al primer cuadro la cortaba.
+         */
+        private const val WAITING_NETWORK_CONFIRM_MS = 10_000L
+
         // Paquetes que actúan como renderizadores de WebView del sistema
         private val WEBVIEW_PROVIDER_PACKAGES = setOf(
             "com.google.android.webview",
@@ -338,6 +356,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         val vendingSuspended: Boolean,
         val updateInProgress: Boolean,
         val updatingPkg: String?,
+        /**
+         * Ruta del flujo de actualización (B.97). Todo lo que este servicio hace por una
+         * actualización —tapar, manejar Play Store, relanzarla, dejarla abierta, no seguir
+         * el scroll— es SOLO para la ruta de Google Play. La de la Tienda es silenciosa:
+         * el usuario sigue con el teléfono y los filtros tienen que seguir andando.
+         */
+        val updateRoute: String,
         /** "Tapado estricto al desplazar": tapa el contenedor entero mientras dura el fling. */
         val strictScroll: Boolean,
         /** Rebotar al usuario si entra al menú de Accesibilidad de Ajustes. */
@@ -359,7 +384,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         /** Bloquear cambio de idioma del sistema o por app (Android 13+). */
         val localeChangeBlocked: Boolean,
         val takenAt: Long
-    )
+    ) {
+        /** ¿Hay un flujo de actualización POR GOOGLE PLAY en curso? */
+        val playUpdateActive: Boolean
+            get() = updateInProgress && !updatingPkg.isNullOrBlank() &&
+                updateRoute == UpdateFlowManager.ROUTE_PLAY_STORE
+    }
 
     @Volatile private var cachedFlags: Flags? = null
 
@@ -387,6 +417,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             vendingSuspended = p.getBoolean("suspend_$PKG_PLAY_STORE", false),
             updateInProgress = p.getBoolean("mdm_install_in_progress", false),
             updatingPkg = p.getString("updating_package", null),
+            // Ausente = Google Play: es lo que deja un flujo de una versión anterior.
+            updateRoute = p.getString(UpdateFlowManager.KEY_ROUTE, UpdateFlowManager.ROUTE_PLAY_STORE)
+                ?: UpdateFlowManager.ROUTE_PLAY_STORE,
             strictScroll = p.getBoolean("image_block_strict_scroll", false),
             accSettingsBounce = p.getBoolean("acc_protect_bounce_settings", false),
             // Encendido por defecto: ver el comentario de PolicyManager sobre por qué
@@ -466,8 +499,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         override fun run() {
             val ctx = applicationContext
             val pkg = UpdateFlowManager.currentPackage(ctx)
-            if (pkg.isNullOrBlank() || !UpdateFlowManager.isRunning(ctx)) {
-                return   // sin re-encolar: el flujo terminó
+            // B.97: solo la ruta de Google Play tiene ciclo; la de la Tienda no toca la pantalla.
+            if (pkg.isNullOrBlank() || !UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
+                return   // sin re-encolar: el flujo terminó (o no es de Google Play)
             }
             try {
                 scanAndAct(pkg)
@@ -558,7 +592,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // el overlay para que el flujo retome y termine diciendo en que quedo.
         try {
             val ctx = applicationContext
-            if (com.ejemplo.locksuite.util.UpdateFlowManager.isRunning(ctx)) {
+            if (com.ejemplo.locksuite.util.UpdateFlowManager.isPlayStoreFlowRunning(ctx)) {
                 val pkg = com.ejemplo.locksuite.util.UpdateFlowManager.currentPackage(ctx)
                 if (!pkg.isNullOrBlank()) {
                     com.ejemplo.locksuite.util.UpdateFlowManager.showOverlay(
@@ -623,9 +657,14 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         // NOTA: este check va ANTES del check de pantalla apagada, porque UPDATE_APP
         // puede llegar con la pantalla apagada y necesitamos procesar los eventos.
         val updatingPkg = f.updatingPkg
-        if (f.updateInProgress && !updatingPkg.isNullOrBlank()) {
+        if (f.playUpdateActive && !updatingPkg.isNullOrBlank()) {
+            // B.97: con la pantalla de bloqueo puesta no se fuerza la pantalla prendida
+            // (quedaría encendida en el bolsillo hasta el watchdog) ni se relanza Play
+            // Store (se abriría detrás del keyguard, sin que nadie la vea). El flujo espera
+            // a que desbloqueen: ver scanAndAct.
+            val bloqueado = UpdateFlowManager.isKeyguardLocked(applicationContext)
             // Asegurar que la pantalla esté encendida durante la actualización
-            ensureScreenOnForUpdate()
+            if (!bloqueado) ensureScreenOnForUpdate()
             if (packageName == PKG_PLAY_STORE) {
                 handlePlayStoreAutoUpdate(ev, updatingPkg)
                 return
@@ -656,8 +695,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                     UpdateFlowManager.currentStage(applicationContext)
                 )
                 val nowRelaunch = SystemClock.elapsedRealtime()
-                if (nowRelaunch - lastStoreRelaunchAt > STORE_RELAUNCH_MIN_MS) {
+                if (!bloqueado && nowRelaunch - lastStoreRelaunchAt > STORE_RELAUNCH_MIN_MS) {
                     lastStoreRelaunchAt = nowRelaunch
+                    noteStoreRelaunch("el usuario salió de Google Play a $packageName")
                     UpdateFlowManager.openStore(applicationContext, updatingPkg)
                 }
                 return
@@ -689,8 +729,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Bloqueo estricto de Play Store fuera del flujo de actualización
-        if (!f.updateInProgress && packageName == PKG_PLAY_STORE) {
+        // Bloqueo estricto de Play Store fuera del flujo de actualización POR GOOGLE PLAY
+        // (B.97: la ruta de la Tienda no abre Play Store, así que no la exime).
+        if (!f.playUpdateActive && packageName == PKG_PLAY_STORE) {
             val shouldBlock = f.installBlocked || f.playStoreSuspended ||
                 f.vendingHidden || f.vendingSuspended
             if (shouldBlock) {
@@ -701,7 +742,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 )
                 overlayManager.hideBlockingMessageOverlay()
                 performGlobalAction(GLOBAL_ACTION_HOME)
-                policyManager.restoreInstallRestrictions()
+                // Con una instalación silenciosa en curso (la Tienda, o la ruta de la Tienda
+                // de una actualización) NO se re-imponen las restricciones: le cortaría la
+                // instalación a mitad. Esa ventana la cierra quien la abrió.
+                if (!f.updateInProgress) policyManager.restoreInstallRestrictions()
                 return
             }
         }
@@ -876,7 +920,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     }
 
     private fun handleScrollEvent(ev: AccessibilityEvent, packageName: String, f: Flags) {
-        if (f.updateInProgress) return
+        if (f.playUpdateActive) return
         // Chequeo O(1): si no hay nada tapado, este evento no nos interesa.
         if (overlayManager.regionCount() == 0 && !overlayManager.hasStrictCover()) return
         lastScrollPkg = packageName
@@ -2946,6 +2990,16 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     private var updateSessionRenderedAt = 0L
     private var updateSessionScrolls = 0
     private var updateSessionLastScrollAt = 0L
+    /** B.97 — desde cuándo el flujo espera con el celular bloqueado (0 = no está esperando). */
+    private var updateSessionLockedSince = 0L
+    /** B.97 — desde cuándo Google Play muestra la descarga sin sesión de instalación y sin avanzar. */
+    private var updateSessionQueuedSince = 0L
+    private var updateSessionBandPct = -1
+    /** B.97 — los números de la pantalla la última vez que la descarga "se movió". */
+    private var updateSessionProgressSig = ""
+    /** B.97 — desde cuándo Google Play muestra "Esperando Wi-Fi" sin cortar (0 = no lo muestra). */
+    private var updateSessionWaitNetSince = 0L
+    private var updateSessionRelaunches = 0
 
     /** Invalida el snapshot de flags. La usa UpdateFlowManager al arrancar/terminar. */
     fun invalidateFlagsCache() {
@@ -2963,7 +3017,40 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         updateSessionRenderedAt = 0L
         updateSessionScrolls = 0
         updateSessionLastScrollAt = 0L
+        updateSessionLockedSince = 0L
+        updateSessionQueuedSince = 0L
+        updateSessionBandPct = -1
+        updateSessionProgressSig = ""
+        updateSessionWaitNetSince = 0L
+        updateSessionRelaunches = 0
         releaseUpdateWakeLock()
+    }
+
+    /** El texto de un nodo para el registro ("Actualizar", "Update"…), corto. */
+    private fun nodeLabel(node: AccessibilityNodeInfo?): String {
+        val t = try {
+            node?.text?.toString()?.trim().takeUnless { it.isNullOrEmpty() }
+                ?: node?.contentDescription?.toString()?.trim()
+        } catch (e: Exception) {
+            null
+        }
+        return (t ?: "sin texto").replace('\n', ' ').take(40)
+    }
+
+    /**
+     * Anota en el registro de la actualización que se volvió a abrir Play Store (B.97),
+     * sin llenarlo: la primera vez y después una de cada cinco. Cada relanzamiento es una
+     * pista ("el usuario se iba", "Play Store no aparecía") que antes no quedaba en ningún
+     * lado.
+     */
+    private fun noteStoreRelaunch(motivo: String) {
+        updateSessionRelaunches++
+        if (updateSessionRelaunches == 1 || updateSessionRelaunches % 5 == 0) {
+            UpdateFlowManager.step(
+                applicationContext, UpdateStepLog.ACT,
+                "Volví a abrir la ficha en Google Play ($motivo; vez $updateSessionRelaunches)."
+            )
+        }
     }
 
     /**
@@ -3212,7 +3299,59 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
             val progressText = if (pct >= 0) "Descargando... $pct%" else
                 (UpdateFlowManager.currentDetail(ctx) ?: "Descargando actualización...")
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING, progressText)
+            UpdateFlowManager.setStage(
+                ctx, UpdateFlowManager.STAGE_DOWNLOADING, progressText,
+                progress = if (pct >= 0) pct else null
+            )
+            return
+        }
+
+        // ── 2-bis. ¿El celular está bloqueado? (26/10/2026, B.97) ──
+        //
+        // Todo lo que sigue necesita VER y TOCAR la ficha de Google Play, y con la
+        // pantalla de bloqueo puesta no se puede: Play Store queda detrás del keyguard.
+        // Antes el flujo tapaba igual la pantalla —el overlay es una ventana de
+        // accesibilidad y queda POR ENCIMA del keyguard y de la barra de navegación (capa
+        // 31 contra 17, WindowManagerPolicy de AOSP)—, el usuario no podía desbloquear, y
+        // a los 75 s se cerraba con "Google Play no se abrió". Una de las causas de "en
+        // algunos celulares no actualiza": dependía de si el teléfono estaba bloqueado
+        // cuando llegaba el pedido. Ahora se espera, sin tapar nada, con un aviso en la
+        // pantalla de bloqueo, y lo esperado no cuenta para los frenos. Una descarga ya
+        // empezada no pasa por acá: sigue sola con el celular bloqueado (paso 2).
+        if (UpdateFlowManager.isKeyguardLocked(ctx)) {
+            if (updateSessionLockedSince == 0L) {
+                updateSessionLockedSince = now
+                val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+                UpdateFlowManager.step(
+                    ctx, UpdateStepLog.WARN,
+                    "El celular está bloqueado: espero a que lo desbloqueen para seguir con Google Play " +
+                        "(la pantalla no se tapa, para que se pueda desbloquear)."
+                )
+                UpdateFlowManager.notifyUser(
+                    ctx, "Actualizando $label",
+                    "Desbloqueá el celular para que LockSuite termine de actualizar $label.", null, ongoing = true
+                )
+            }
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_UNLOCK)
+            return
+        }
+        if (updateSessionLockedSince != 0L) {
+            val bloqueadoMs = (now - updateSessionLockedSince).coerceAtLeast(0L)
+            updateSessionLockedSince = 0L
+            updateSessionStartTime += bloqueadoMs
+            if (updateSessionTreeSeenAt > 0L) updateSessionTreeSeenAt += bloqueadoMs
+            if (updateSessionRenderedAt > 0L) updateSessionRenderedAt += bloqueadoMs
+            if (updateSessionQueuedSince > 0L) updateSessionQueuedSince += bloqueadoMs
+            UpdateFlowManager.cancelUserNotification(ctx)
+            UpdateFlowManager.step(
+                ctx, UpdateStepLog.INFO,
+                "Desbloqueado después de ${bloqueadoMs / 1000} s: sigo con Google Play."
+            )
+            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE, "Esperando a Google Play...")
+            UpdateFlowManager.showOverlay(ctx, updatingPkg, UpdateFlowManager.STAGE_WAITING_STORE)
+            lastStoreRelaunchAt = now
+            noteStoreRelaunch("se desbloqueó el celular")
+            UpdateFlowManager.openStore(ctx, updatingPkg)
             return
         }
 
@@ -3225,6 +3364,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 now - lastStoreRelaunchAt > STORE_RELAUNCH_MIN_MS
             ) {
                 lastStoreRelaunchAt = now
+                noteStoreRelaunch("Google Play no estaba al frente")
                 UpdateFlowManager.openStore(ctx, updatingPkg)
             }
             // Si Play Store nunca aparece, el freno por estancamiento tiene que
@@ -3248,12 +3388,104 @@ class LockSuiteAccessibilityService : AccessibilityService() {
 
         if (scan.rendered && updateSessionRenderedAt == 0L) updateSessionRenderedAt = now
 
-        // Si Play Store muestra una barra de progreso, ya está descargando
-        if (scan.sawProgressBar) {
-            val progressText = UpdateFlowManager.currentDetail(ctx) ?: "Descargando actualización..."
-            UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING, progressText)
+        val hasDefiniteUpdate = scan.actions.any { it.score >= 80 }
+
+        // ── 3-ter. ¿Google Play está descargando? (corregido el 26/10/2026, B.97) ──
+        //
+        // Antes CUALQUIER barra de progreso en pantalla se leía como "ya está
+        // descargando": no se apretaba nada y se esperaba. Pero la ficha tiene barras que
+        // no son descargas —las capturas y el video de la app mientras cargan, la ficha
+        // misma mientras se dibuja—, y si una quedaba girando el flujo mostraba
+        // "Descargando…" sin haber apretado nunca "Actualizar", hasta el watchdog de 10
+        // minutos. Otra causa de "en algunos celulares no actualiza".
+        //
+        // Ahora: si hay un "Actualizar" a la vista, NO está descargando (mientras baja, en
+        // su lugar está "Cancelar"), y se aprieta. Sin "Actualizar", cuenta como descarga
+        // una barra después de haber apretado algo, o una en la fila de botones de una
+        // ficha ya dibujada (Play Store actualizando la app por su cuenta). Y una descarga
+        // que no avanza tiene su propio tope (QUEUED_STALL_MS), que antes no existía.
+        val progresoDeDescarga = when {
+            !scan.sawProgressBar -> false
+            hasDefiniteUpdate -> false
+            updateSessionCandidatesTried > 0 -> true
+            else -> scan.progressInBand && scan.rendered
+        }
+        if (progresoDeDescarga) {
+            if (scan.diagnosis == PlayButtonFinder.Diagnosis.WAITING_NETWORK) {
+                // "Esperando Wi-Fi": no va a arrancar sola, así que se dice ahora y no en 4
+                // minutos. Pero recién cuando se SOSTIENE unos segundos: al cambiar de red,
+                // Google Play hace parpadear "esperando red" en una descarga que sigue sola.
+                if (updateSessionWaitNetSince == 0L) {
+                    updateSessionWaitNetSince = now
+                    UpdateFlowManager.step(
+                        ctx, UpdateStepLog.WARN,
+                        "Google Play muestra «${scan.diagnosisEvidence ?: "esperando red"}». Si sigue así unos segundos, cierro avisando."
+                    )
+                } else if (now - updateSessionWaitNetSince > WAITING_NETWORK_CONFIRM_MS) {
+                    val diag = diagnosisResult(ctx, updatingPkg, scan.diagnosis, scan.diagnosisEvidence)
+                    if (diag != null) {
+                        UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_FINISHING)
+                        UpdateFlowManager.finish(ctx, diag.first, diag.second, diag.third)
+                        return
+                    }
+                }
+            } else {
+                updateSessionWaitNetSince = 0L
+            }
+            val pctFila = scan.bandProgressPct
+            // Los números de la pantalla ("12 MB de 30 MB"): hay versiones de Play Store
+            // cuya barra no informa el valor a la Accesibilidad, pero el texto avanza.
+            val numeros = scan.progressSignature
+            var seMovio = false
+            if (updateSessionQueuedSince == 0L) {
+                updateSessionQueuedSince = now
+                updateSessionBandPct = pctFila
+                updateSessionProgressSig = numeros
+                UpdateFlowManager.step(
+                    ctx, UpdateStepLog.INFO,
+                    if (updateSessionCandidatesTried > 0) "Después de apretar aparece una barra de progreso: espero la descarga."
+                    else "Google Play ya está bajando esta app por su cuenta: espero."
+                )
+            } else if ((pctFila >= 0 && pctFila != updateSessionBandPct) ||
+                (numeros.isNotEmpty() && numeros != updateSessionProgressSig)
+            ) {
+                // Avanza (la barra o los números): es una descarga de verdad, no una cola
+                // trabada. Si algo de la pantalla cambió por otro motivo se espera de más
+                // (hasta el watchdog), nunca se corta una descarga que anda.
+                updateSessionBandPct = pctFila
+                updateSessionProgressSig = numeros
+                updateSessionQueuedSince = now
+                seMovio = true
+            }
+            if (pctFila >= 0) {
+                UpdateFlowManager.setStage(
+                    ctx, UpdateFlowManager.STAGE_DOWNLOADING, "Descargando... $pctFila%", progress = pctFila
+                )
+            } else if (seMovio || UpdateFlowManager.currentStage(ctx) == UpdateFlowManager.STAGE_DOWNLOADING) {
+                // Se mueve pero sin porcentaje legible: se dice "descargando", no "en cola".
+                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_DOWNLOADING)
+            } else {
+                UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_QUEUED)
+            }
+            if (now - updateSessionQueuedSince > QUEUED_STALL_MS) {
+                val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+                finishUpdateWithBestReason(
+                    ctx, updatingPkg, scan,
+                    UpdateFlowManager.RESULT_STORE_ERROR,
+                    "Google Play dejó la descarga de $label en espera y no arrancó (otra descarga en curso, " +
+                        "sin Wi-Fi o pausada). Probá de nuevo más tarde.",
+                    "Progreso ${if (pctFila >= 0) "detenido en $pctFila%" else "sin valor (en cola)"}, sin cambios en " +
+                        "los números de la pantalla y sin sesión de instalación durante ${(now - updateSessionQueuedSince) / 1000}s"
+                )
+            }
             return
         }
+        if (updateSessionQueuedSince != 0L) {
+            updateSessionQueuedSince = 0L
+            updateSessionBandPct = -1
+            updateSessionProgressSig = ""
+        }
+        updateSessionWaitNetSince = 0L
 
         // ── 3-bis. Pantalla de error de Play Store reconocida ──
         //
@@ -3280,6 +3512,9 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             if (performClickOnNode(d.node)) {
                 updateSessionLastClickAt = now
                 Log.i(TAG, "Clic en diálogo: ${d.reason}")
+                UpdateFlowManager.step(ctx, UpdateStepLog.ACT, "Confirmé el diálogo de Google Play: «${nodeLabel(d.node)}» (${d.reason}).")
+            } else {
+                UpdateFlowManager.step(ctx, UpdateStepLog.WARN, "No pude apretar el botón del diálogo «${nodeLabel(d.node)}».")
             }
             return
         }
@@ -3301,12 +3536,20 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 if (performClickOnNode(next.node)) {
                     updateSessionLastClickAt = now
                     Log.i(TAG, "Candidato ${updateSessionCandidatesTried}/${MAX_CANDIDATES}: ${next.reason}")
+                    UpdateFlowManager.step(
+                        ctx, UpdateStepLog.ACT,
+                        "Apreté «${nodeLabel(next.node)}» (intento $updateSessionCandidatesTried de $MAX_CANDIDATES: ${next.reason})."
+                    )
+                } else {
+                    UpdateFlowManager.step(
+                        ctx, UpdateStepLog.WARN,
+                        "No pude apretar «${nodeLabel(next.node)}» (intento $updateSessionCandidatesTried de $MAX_CANDIDATES)."
+                    )
                 }
                 return
             }
         }
 
-        val hasDefiniteUpdate = scan.actions.any { it.score >= 80 }
         val hasOpenButton = scan.opens.isNotEmpty()
 
         // ── 6. La ficha todavía no terminó de dibujarse ──
@@ -3359,6 +3602,10 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 try {
                     scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
                     Log.i(TAG, "Desplazando la ficha ($updateSessionScrolls/$MAX_UPDATE_SCROLLS) para encontrar el botón")
+                    UpdateFlowManager.step(
+                        ctx, UpdateStepLog.ACT,
+                        "No veo el botón: bajé la ficha para buscarlo ($updateSessionScrolls de $MAX_UPDATE_SCROLLS)."
+                    )
                 } catch (e: Exception) {
                     Log.w(TAG, "No se pudo desplazar la ficha: ${e.message}")
                 }

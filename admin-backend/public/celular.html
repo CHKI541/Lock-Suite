@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Ficha del celular — LockSuite</title>
   <link rel="stylesheet" href="styles.css?v=23" />
-  <link rel="stylesheet" href="panel2.css?v=2" />
+  <link rel="stylesheet" href="panel2.css?v=3" />
 </head>
 <body class="ls-body">
 
@@ -21,6 +21,14 @@
        configuración GLOBAL, así que tocar ahí le cambiaba la configuración a
        toda la flota. Acá está todo lo de este equipo junto, y lo que es global
        está marcado como global.
+
+       26/10/2026 (B.98) — rearmada para que sea COMPLETA de verdad: todo lo que
+       se podía hacer solo desde la vista rápida está acá (controles por app,
+       Play Store, apps permitidas, desbloquear todo, olvidar el PIN, archivar,
+       eliminar, detector de navegadores embebidos, terminar un alta), más dos
+       secciones nuevas: Actualizaciones (el proceso de cada actualización paso
+       a paso, en vivo) y Diagnóstico (todo lo que reporta el celular). La vista
+       rápida (index.html + app.js) NO se tocó.
        ══════════════════════════════════════════════════════════════════════ -->
 
   <header class="ls-top">
@@ -31,6 +39,7 @@
     <span class="ls-chip" id="c-conexion"><span class="ls-dot off"></span>—</span>
     <span class="ls-chip" id="c-bateria">🔋 —</span>
     <span class="ls-chip" id="c-version">—</span>
+    <button class="ls-chip ls-chip-btn hidden" id="c-upd-chip" title="Ver la actualización en curso">⬆️ actualizando…</button>
     <div class="ls-top-spacer"></div>
     <input class="ls-input" id="c-buscar" type="search" placeholder="Buscar app, dominio o política…  (/)" style="width:min(320px,42vw)" />
     <a class="ls-btn ls-btn-sm" href="index.html" title="Volver al panel">← Panel</a>
@@ -40,11 +49,14 @@
     <nav class="ls-rail" id="c-rail">
       <button data-sec="resumen" class="active">📋 Resumen</button>
       <button data-sec="rapida">⚡ Configuración rápida</button>
-      <button data-sec="apps">📱 Apps y dominios <span class="ls-rail-count" id="cnt-apps"></span></button>
+      <button data-sec="celapps">📱 Apps del celular <span class="ls-rail-count" id="cnt-cel"></span></button>
+      <button data-sec="apps">🧭 Filtro de apps <span class="ls-rail-count" id="cnt-apps"></span></button>
       <button data-sec="politicas">🔒 Políticas <span class="ls-rail-count" id="cnt-pol"></span></button>
+      <button data-sec="actualizaciones">⬆️ Actualizaciones <span class="ls-rail-count" id="cnt-upd"></span></button>
       <button data-sec="dns">🌐 DNS</button>
       <button data-sec="tienda">🏪 Tienda</button>
       <button data-sec="acciones">⚙️ Acciones</button>
+      <button data-sec="diag">🩺 Diagnóstico</button>
     </nav>
 
     <main class="ls-main">
@@ -55,11 +67,13 @@
         <p class="ls-lead">Lo que hay que mirar primero: si el equipo responde, si el filtro está
           funcionando de verdad, y qué está mal ahora mismo.</p>
         <div id="c-alertas"></div>
+        <div class="ls-quick" id="c-rapidas"></div>
         <div class="ls-grid">
           <div class="ls-card"><h3>Identificación</h3><div id="c-ident"></div></div>
           <div class="ls-card"><h3>Salud del filtro</h3><div id="c-salud"></div></div>
           <div class="ls-card"><h3>Configuración aplicada</h3><div id="c-config"></div></div>
         </div>
+        <div id="c-upd-resumen"></div>
         <div class="ls-card">
           <h3>🛑 Qué cerró la Capa 3</h3>
           <p class="ls-hint">Cada vez que el filtro visual saca al usuario de una pantalla, queda anotado
@@ -71,7 +85,7 @@
         <div class="ls-card">
           <h3>Nombre del celular</h3>
           <p class="ls-hint">El panel manda: si el celular tiene otro nombre guardado, adopta este.</p>
-          <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <div class="ls-row">
             <input class="ls-input" id="c-nombre-input" placeholder="Celular de…" style="flex:1 1 240px" />
             <button class="ls-btn ls-btn-primary" id="c-nombre-btn">Guardar</button>
           </div>
@@ -93,12 +107,57 @@
         </div>
       </section>
 
-      <!-- ── APPS Y DOMINIOS ───────────────────────────────────────────── -->
+      <!-- ── APPS DEL CELULAR ──────────────────────────────────────────── -->
+      <section class="ls-section" data-sec="celapps">
+        <h2>Apps del celular</h2>
+        <p class="ls-lead">Las apps que tiene instaladas este equipo y lo que se le puede hacer a
+          cada una <b>al instante</b>: ocultarla, suspenderla, cortarle la web o internet, taparle
+          las imágenes o actualizarla. (Qué apps puede usar según el filtro está en
+          <a href="#apps" data-ir="apps">Filtro de apps</a>.)</p>
+
+        <div class="ls-card" id="c-play"></div>
+
+        <div class="ls-card">
+          <div class="ls-row" style="margin-bottom:10px">
+            <input class="ls-input" id="c-inst-buscar" type="search" placeholder="Buscar por nombre o paquete…" style="flex:1 1 240px" />
+          </div>
+          <div class="ls-chips" id="c-inst-filtro">
+            <button data-f="usuario" class="on">Del usuario</button>
+            <button data-f="todas">Todas</button>
+            <button data-f="restringidas">Con algo bloqueado</button>
+            <button data-f="preinstaladas">Preinstaladas</button>
+            <button data-f="sistema">Del sistema</button>
+          </div>
+          <div id="c-inst"></div>
+        </div>
+
+        <div class="ls-grid">
+          <div class="ls-card">
+            <h3>🔓 Desbloquear todas las apps</h3>
+            <p class="ls-hint">Saca la suspensión de todas las apps (menos las críticas) y vacía la
+              lista de apps permitidas de abajo. Para cuando el equipo quedó demasiado cerrado.</p>
+            <button class="ls-btn" id="c-unsuspend-all">Desbloquear todas</button>
+          </div>
+          <div class="ls-card">
+            <h3>Apps permitidas con la instalación bloqueada</h3>
+            <p class="ls-hint">Paquetes separados por coma. Con «Bloquear instalación de apps»
+              encendido, son las únicas que se pueden instalar; con el kiosco encendido, las únicas
+              que se pueden abrir.</p>
+            <textarea class="ls-input ls-wide" id="c-allowlist" rows="2" placeholder="com.whatsapp, com.android.dialer"></textarea>
+            <div class="ls-row" style="margin-top:8px">
+              <button class="ls-btn" id="c-allowlist-btn">Guardar la lista</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── FILTRO DE APPS Y DOMINIOS ─────────────────────────────────── -->
       <section class="ls-section" data-sec="apps">
-        <h2>Apps y dominios</h2>
+        <h2>Filtro de apps y dominios</h2>
         <p class="ls-lead">Una sola lista. Cada app está en uno de tres estados, y ese estado decide
           <b>las tres cosas a la vez</b>: si se ve y se puede abrir en el celular, si se puede bajar
-          de la Tienda, y qué dominios suyos resuelven.</p>
+          de la Tienda, y qué dominios suyos resuelven. Los cambios de esta lista se juntan abajo y
+          se mandan todos juntos.</p>
 
         <div class="ls-card">
           <h3>Modo del filtro</h3>
@@ -110,7 +169,7 @@
         </div>
 
         <div class="ls-card">
-          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px">
+          <div class="ls-row" style="margin-bottom:12px">
             <input class="ls-input" id="c-apps-buscar" placeholder="Filtrar por nombre, paquete o dominio…" style="flex:1 1 260px" />
             <select class="ls-select" id="c-apps-filtro">
               <option value="todas">Todas</option>
@@ -125,6 +184,8 @@
           </div>
           <div id="c-apps"></div>
         </div>
+
+        <div class="ls-card" id="c-iab"></div>
       </section>
 
       <!-- ── POLÍTICAS ─────────────────────────────────────────────────── -->
@@ -133,7 +194,7 @@
         <p class="ls-lead">Los interruptores del sistema. Se marcan acá y se mandan todos juntos con
           el botón de abajo, en vez de esperar la confirmación del celular uno por uno.</p>
         <div class="ls-card">
-          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px">
+          <div class="ls-row" style="margin-bottom:12px">
             <input class="ls-input" id="c-pol-buscar" placeholder="Buscar política…" style="flex:1 1 240px" />
             <label style="font-size:12.5px; color:var(--text-gray); display:flex; gap:6px; align-items:center">
               <input type="checkbox" id="c-pol-solo-on" /> Solo las encendidas
@@ -150,6 +211,63 @@
         </div>
       </section>
 
+      <!-- ── ACTUALIZACIONES ───────────────────────────────────────────── -->
+      <section class="ls-section" data-sec="actualizaciones">
+        <h2>Actualizaciones</h2>
+        <p class="ls-lead">Actualizar las apps de este celular y ver <b>exactamente</b> qué está pasando:
+          por qué camino va, qué apretó, cuánto lleva y en qué terminó, paso a paso.</p>
+
+        <div id="c-upd-vivo"></div>
+        <div id="c-upd-pasos"></div>
+        <div id="c-upd-ultimo"></div>
+
+        <div class="ls-card">
+          <h3>Actualizar una app</h3>
+          <div class="ls-seg ls-seg-wide" id="c-upd-ruta">
+            <button data-ruta="auto" class="on-allow">Automático</button>
+            <button data-ruta="play">Solo Google Play</button>
+            <button data-ruta="hosted">Solo Tienda de LockSuite</button>
+          </div>
+          <p class="ls-hint" id="c-upd-ruta-txt" style="margin-top:8px"></p>
+          <div class="ls-row" style="margin:6px 0 10px">
+            <input class="ls-input" id="c-upd-buscar" type="search" placeholder="Buscar app…" style="flex:1 1 220px" />
+            <label style="font-size:12.5px; color:var(--text-gray); display:flex; gap:6px; align-items:center">
+              <input type="checkbox" id="c-upd-sistema" /> Mostrar también las del sistema
+            </label>
+          </div>
+          <div id="c-upd-lista"></div>
+          <details class="ls-more" style="margin-top:10px">
+            <summary>¿No está en la lista? Escribí el paquete</summary>
+            <div class="ls-row" style="margin-top:8px">
+              <input class="ls-input" id="c-upd-pkg" placeholder="com.ejemplo.app" style="flex:1 1 240px" />
+              <button class="ls-btn" id="c-upd-btn">Actualizar</button>
+            </div>
+          </details>
+          <div id="c-upd-estado" class="ls-hint" style="margin-top:10px"></div>
+        </div>
+
+        <div class="ls-card" id="c-ota"></div>
+
+        <details class="ls-card ls-more" id="c-upd-como">
+          <summary><b>¿Cómo funciona? (los dos caminos)</b></summary>
+          <div class="ls-hint" style="margin-top:10px">
+            <p><b>Google Play.</b> Android no tiene una forma oficial de decirle a Google Play «actualizá
+              esta app». LockSuite abre la ficha de la app en Google Play, tapa la pantalla con el cartel
+              negro y aprieta «Actualizar» con la Accesibilidad. Funciona con cualquier app que haya
+              instalado Google Play, pero depende de la pantalla: si el celular está bloqueado, espera a
+              que lo desbloqueen (con un aviso en la pantalla de bloqueo) y recién ahí sigue.</p>
+            <p><b>Tienda de LockSuite.</b> Si la app está cargada en la Tienda (con huella sha256), LockSuite
+              la baja y la instala en silencio, como dueño del equipo: no abre Google Play, no tapa nada y
+              no depende de la pantalla. Solo se instala si la copia es <b>más nueva</b> que la instalada,
+              de la <b>misma firma</b> y de una arquitectura que corre en el equipo.</p>
+            <p><b>Automático</b> (lo recomendado): las apps que instaló Google Play van por Google Play,
+              que tiene siempre la última versión; las que vinieron de la Tienda, de un APK o por ADB van
+              por la Tienda, porque Google Play no puede reemplazar una app firmada por otro. Si la copia
+              de la Tienda no sirve, sigue solo por Google Play.</p>
+          </div>
+        </details>
+      </section>
+
       <!-- ── DNS ───────────────────────────────────────────────────────── -->
       <section class="ls-section" data-sec="dns">
         <h2>DNS</h2>
@@ -158,7 +276,7 @@
           cuando algo quedó cerrado y hace falta abrirlo ya.</p>
         <div class="ls-card">
           <h3>Agregar regla</h3>
-          <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <div class="ls-row">
             <input class="ls-input" id="c-dns-dominio" placeholder="ejemplo.com" style="flex:1 1 240px" />
             <select class="ls-select" id="c-dns-tipo">
               <option value="FORCE_ALLOW">Forzar permitir</option>
@@ -182,7 +300,8 @@
       <section class="ls-section" data-sec="tienda">
         <h2>Tienda</h2>
         <p class="ls-lead">Lo que este celular puede instalar. Una app se habilita permitiéndola en
-          <b>Apps y dominios</b>; acá se ve si además está cargada en la Tienda para poder bajarla.</p>
+          <b>Filtro de apps</b>; acá se ve si además está cargada en la Tienda para poder bajarla, y
+          las que ya están instaladas se pueden actualizar desde acá, en silencio.</p>
         <div class="ls-card"><div id="c-tienda"></div></div>
         <div class="ls-card">
           <h3>Pedidos de este celular</h3>
@@ -197,30 +316,55 @@
         <p class="ls-lead">Cosas que pasan una vez, no configuración.</p>
         <div class="ls-card">
           <h3>Mantenimiento</h3>
-          <div style="display:flex; gap:8px; flex-wrap:wrap" id="c-acciones"></div>
+          <div class="ls-row" id="c-acciones"></div>
           <div class="ls-progress" id="c-acciones-log"></div>
         </div>
         <div class="ls-card">
-          <h3>Actualizar una app</h3>
-          <div style="display:flex; gap:8px; flex-wrap:wrap">
-            <input class="ls-input" id="c-upd-pkg" placeholder="com.ejemplo.app" style="flex:1 1 240px" />
-            <button class="ls-btn" id="c-upd-btn">Actualizar por Play Store</button>
-          </div>
-          <div id="c-upd-estado" style="margin-top:10px; font-size:13px; color:var(--text-gray)"></div>
-        </div>
-        <div class="ls-card">
           <h3>PIN de administrador</h3>
-          <div style="display:flex; gap:8px; flex-wrap:wrap">
-            <input class="ls-input" id="c-pin-nuevo" placeholder="PIN nuevo (4 a 16 dígitos)" style="flex:1 1 200px" />
+          <p class="ls-hint" id="c-pin-estado"></p>
+          <div class="ls-row">
+            <input class="ls-input" id="c-pin-nuevo" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN nuevo (4 a 16 dígitos)" style="flex:1 1 200px" />
             <button class="ls-btn" id="c-pin-btn">Cambiar PIN</button>
+            <button class="ls-btn" id="c-pin-olvidar">Olvidar la confianza del PIN</button>
           </div>
         </div>
-        <div class="ls-card" style="border-color: rgba(239,68,68,.35)">
+        <div class="ls-card ls-danger">
           <h3>⚠️ Zona de peligro</h3>
           <p class="ls-hint">Suspender LockSuite levanta <b>todas</b> las protecciones, incluidas las
-            que impiden desinstalarlo y restaurar de fábrica. Usalo solo con el equipo a la vista.</p>
-          <div style="display:flex; gap:8px; flex-wrap:wrap" id="c-peligro"></div>
+            que impiden desinstalarlo y restaurar de fábrica (está en Políticas → «Interruptores que se
+            tratan aparte»). Archivar saca el equipo del panel conservando sus datos; eliminar los borra
+            para siempre.</p>
+          <div class="ls-row" id="c-peligro"></div>
         </div>
+      </section>
+
+      <!-- ── DIAGNÓSTICO ───────────────────────────────────────────────── -->
+      <section class="ls-section" data-sec="diag">
+        <h2>Diagnóstico</h2>
+        <p class="ls-lead">Todo lo que reporta el celular, sin interpretar. Para cuando algo no cierra y
+          hay que mirar el dato crudo antes de pedir un ADB.</p>
+        <div class="ls-card">
+          <h3>Comandos recientes</h3>
+          <p class="ls-hint">Lo último que se le mandó a este equipo y qué contestó.</p>
+          <div id="c-diag-acks"></div>
+        </div>
+        <div class="ls-card">
+          <h3>En el buzón del celular</h3>
+          <p class="ls-hint">Comandos mandados que el equipo todavía no levantó. Se aplican solos cuando se conecta.</p>
+          <div id="c-diag-buzon"></div>
+        </div>
+        <div class="ls-card">
+          <h3>Datos que reporta</h3>
+          <input class="ls-input ls-wide" id="c-diag-buscar" type="search" placeholder="Filtrar por nombre o valor…" style="margin-bottom:10px" />
+          <div id="c-diag-campos"></div>
+        </div>
+        <details class="ls-card ls-more" id="c-diag-json-box">
+          <summary><b>JSON completo del equipo</b></summary>
+          <div class="ls-row" style="margin:10px 0">
+            <button class="ls-btn ls-btn-sm" id="c-diag-copiar">Copiar</button>
+          </div>
+          <pre class="ls-pre" id="c-diag-json"></pre>
+        </details>
       </section>
 
     </main>
@@ -241,6 +385,6 @@
   <script src="catalog.js?v=2"></script>
   <script src="policies.js?v=1"></script>
   <script src="comun.js?v=3"></script>
-  <script src="celular.js?v=5"></script>
+  <script src="celular.js?v=6"></script>
 </body>
 </html>

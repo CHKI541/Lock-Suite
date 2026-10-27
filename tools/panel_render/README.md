@@ -40,6 +40,25 @@ No necesita red ni credenciales: nunca toca el Firebase de verdad.
 
 `test_ficha.js` (ficha completa, `comun.js` + `celular.js`): el contrato de
 `LS.sendCommand` (`applied` / `pendiente` / falla) y el «Canal de comandos» del Resumen.
+**(26/10, B.98)** Además, la ficha rearmada como la usa el administrador:
+
+- Cada sección del riel se abre; «Terminar alta» manda `FINISH_ENROLLMENT`.
+- **Apps del celular:** la lista sale de lo que reporta el equipo (las del sistema y
+  críticas aparte, sin controles); «Ocultar» manda `HIDE_APP` y el botón queda en ⏳
+  hasta que el celular reporta la app oculta; «Más» (internet, imágenes, navegador
+  interno, actualizar); Play Store (`UNSUSPEND_APP`, `SET_HIDE_SUSPENDED_APPS`); la lista
+  de permitidas precargada y `UPDATE_ALLOWLIST`.
+- **Actualizaciones (B.97):** el flujo en vivo con camino, etapa, barra y el porqué; el
+  paso a paso que se agrega en vivo; Cancelar → `CANCEL_UPDATE_APP`; el último resultado
+  con versión de → a; «Solo Google Play» viaja como `route=play`, «Automático» NO manda
+  `route` (comando idéntico al de siempre) y «Actualizar desde la Tienda» manda
+  `route=hosted`.
+- Filtro: el detector de navegadores embebidos; Diagnóstico: campos, comandos recientes y
+  JSON, **sin el token de FCM entero**; Acciones: «Olvidar la confianza del PIN»;
+  Archivar.
+- **A 390 px de ancho ninguna sección se desborda de costado** (antes el riel crecía a
+  860-1274 px en un teléfono).
+- Un equipo con LockSuite anterior a B.97 avisa que actualiza solo por Google Play.
 
 ## Control negativo
 

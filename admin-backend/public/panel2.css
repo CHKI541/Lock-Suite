@@ -268,11 +268,98 @@
 
 .ls-empty { color: var(--text-muted); font-size: 13px; padding: 14px 0; }
 
+/* ══ 26/10/2026 (B.98) — ficha completa rearmada ══════════════════════════
+ * Clases nuevas de la ficha: filas genéricas, atajos, apps del celular,
+ * actualizaciones (estado en vivo, barra, paso a paso) y diagnóstico. Mismo
+ * criterio que el resto del archivo: todo prefijado `ls-`, solo variables de
+ * styles.css, y nada que pueda alcanzar al panel viejo.
+ * ───────────────────────────────────────────────────────────────────────── */
+.ls-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* Enlaces de texto: el azul por omisión del navegador no se lee sobre el fondo oscuro. */
+.ls-main a:not(.ls-btn) { color: var(--accent-cyan); text-decoration: none; }
+.ls-main a:not(.ls-btn):hover { text-decoration: underline; }
+.ls-quick { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }
+.ls-chiprow { margin-top: 5px; display: flex; gap: 5px; flex-wrap: wrap; }
+.ls-chip-btn { border: none; cursor: pointer; background: rgba(241, 196, 15, 0.16); color: var(--accent); }
+.ls-chip-btn:hover { background: rgba(241, 196, 15, 0.26); }
+
+/* Avisos del Resumen y tarjetas de resultado */
+.ls-alert { border-left: 4px solid var(--text-muted); padding: 12px 16px; margin-bottom: 10px; }
+.ls-alert.bad { border-left-color: var(--alert-red); }
+.ls-alert.warn { border-left-color: var(--warning-yellow); }
+.ls-alert.okb { border-left-color: var(--success-green); }
+.ls-danger { border-color: rgba(239, 68, 68, .35); }
+
+/* Filtros en forma de chips (Apps del celular) */
+.ls-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+.ls-chips button {
+  background: var(--navy-dark); color: var(--text-gray); border: 1px solid var(--navy-light);
+  border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.ls-chips button:hover { color: var(--text-light); border-color: var(--navy-border-hover); }
+.ls-chips button.on { background: var(--navy-light); color: var(--accent); border-color: var(--accent); }
+
+/* Selector segmentado ancho (camino de la actualización) */
+.ls-seg-wide { display: flex; flex-wrap: wrap; width: 100%; }
+.ls-seg-wide button { flex: 1 1 160px; }
+
+/* Botón "encendido" (la acción ya está aplicada: ofrece deshacerla) */
+.ls-btn.ls-on { background: var(--alert-red-bg); color: var(--alert-red); border-color: rgba(239,68,68,.3); }
+
+/* Apps del celular */
+.ls-irow { border: 1px solid var(--navy-border); border-radius: 10px; margin-bottom: 8px; background: var(--navy-dark); }
+.ls-irow.restr { border-left: 3px solid var(--alert-red); }
+.ls-ihead { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex-wrap: wrap; }
+.ls-ihead > .ls-btn { flex: 0 0 auto; }
+.ls-ibody { padding: 4px 12px 10px; border-top: 1px solid var(--navy-border); }
+.ls-ibody .ls-kv span:first-child { max-width: 60%; }
+.ls-ibody small { color: var(--text-muted); }
+.ls-avatar {
+  flex: 0 0 34px; width: 34px; height: 34px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--navy-light); color: var(--accent); font-weight: 800; font-size: 15px;
+}
+
+/* Actualizaciones */
+.ls-live { border-color: rgba(241, 196, 15, .45); box-shadow: 0 0 0 1px rgba(241, 196, 15, .15) inset; }
+.ls-stage { font-size: 15px; font-weight: 700; margin: 4px 0 8px; }
+.ls-bar { height: 8px; border-radius: 999px; background: var(--navy-light); overflow: hidden; }
+.ls-bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .4s ease; }
+.ls-bar-ind span { width: 35%; animation: ls-ind 1.4s ease-in-out infinite; }
+@keyframes ls-ind { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .ls-bar-ind span { animation: none; width: 100%; opacity: .5; } }
+.ls-steps { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.ls-steps li { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--navy-border); line-height: 1.45; }
+.ls-steps li:last-child { border-bottom: none; }
+.ls-steptime { flex: 0 0 74px; color: var(--text-muted); font-family: monospace; font-size: 12px; padding-top: 1px; }
+.ls-stepmark { flex: 0 0 14px; font-weight: 800; color: var(--text-gray); text-align: center; }
+.ls-steps li.ok .ls-stepmark { color: var(--success-green); }
+.ls-steps li.bad .ls-stepmark, .ls-steps li.bad { color: var(--alert-red); }
+.ls-steps li.warn .ls-stepmark { color: var(--warning-yellow); }
+.ls-steps li.act .ls-stepmark { color: var(--accent-cyan); }
+.ls-updlist { max-height: 460px; overflow-y: auto; border: 1px solid var(--navy-border); border-radius: 10px; }
+.ls-updrow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--navy-border); }
+.ls-updrow:last-child { border-bottom: none; }
+
+/* Desplegables (<details>) y diagnóstico */
+.ls-more > summary { cursor: pointer; color: var(--text-gray); font-size: 13px; }
+.ls-more > summary:hover { color: var(--text-light); }
+.ls-pre {
+  background: var(--navy-dark); border: 1px solid var(--navy-border); border-radius: 8px;
+  padding: 10px; font-size: 11.5px; max-height: 480px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+.ls-diagtable { max-height: 520px; overflow-y: auto; }
+.ls-diagtable td { font-size: 12px; padding: 5px 8px; vertical-align: top; }
+
 /* ── Teléfono (pantallas medianas y chicas) ────────────────────────────── */
 @media (max-width: 820px) {
-  .ls-layout { flex-direction: column; }
+  /* `align-items: stretch` NO es un detalle: la regla de escritorio dice flex-start, y en
+     columna eso hace que el riel mida lo que miden sus botones juntos (860 px con 7
+     secciones) en vez del ancho de la pantalla — toda la ficha se corría de costado en
+     un teléfono. Se vio midiendo a 390 px (B.98), no leyendo el CSS. */
+  .ls-layout { flex-direction: column; align-items: stretch; }
   .ls-rail {
-    position: static; width: auto; flex: 1 1 auto; max-height: none;
+    position: static; width: auto; flex: 1 1 auto; max-height: none; min-width: 0; max-width: 100%;
     display: flex; gap: 6px; overflow-x: auto; border-right: none;
     border-bottom: 1px solid var(--navy-border); padding: 8px 10px;
     -webkit-overflow-scrolling: touch;
@@ -287,6 +374,12 @@
 }
 
 @media (max-width: 480px) {
+  .ls-ihead { padding: 8px 10px; gap: 8px; }
+  .ls-ihead .ls-appgrow { flex: 1 1 calc(100% - 48px); }
+  .ls-steptime { flex-basis: 58px; }
+  .ls-ibody .ls-kv { flex-direction: column; gap: 6px; }
+  .ls-ibody .ls-kv span:first-child { max-width: none; }
+  .ls-ibody .ls-kv span:last-child { text-align: left; }
   .ls-top { padding: 8px 10px; gap: 8px; }
   .ls-top h1 { font-size: 16px; }
   .ls-top #c-buscar, .ls-top #d-buscar { width: 100% !important; order: 10; margin-top: 4px; }

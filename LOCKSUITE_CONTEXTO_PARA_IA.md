@@ -130,7 +130,8 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - Panel: `cd admin-backend && firebase deploy --only hosting,database,functions` — **desplegar `hosting,database` primero y `functions` en un try/catch aparte** (lo hace `deploy_all.ps1`); si Cloud Functions falla en el mismo llamado, Firebase no confirma la versión de Hosting y los celulares siguen viendo el manifiesto viejo.
 - **`deploy_all.ps1`** (raíz del proyecto) automatiza todo: sube versionCode/versionName en `build.gradle.kts` y `version.json`, compila, copia el APK a `admin-backend/public/`, se autentica con cuenta de servicio, despliega, commitea y pushea a GitHub en un solo paso. Ejemplo: `.\deploy_all.ps1 -VersionName "0.6.16"`. **Ojo:** hace `git add .`, así que commitea junto TODO lo que esté sin commitear en ese momento (informes, `_to_delete/`, cambios de otras sesiones) — si querés separarlo, commiteá eso vos antes de correrlo.
 - Despliegue sin login interactivo: variable `$env:GOOGLE_APPLICATION_CREDENTIALS` apuntando al JSON de service account en `admin-backend/`. Hay tres pasos manuales en Firebase Console que ningún script reemplaza (plan Blaze, habilitar Email/Password + Anonymous en Authentication, crear el usuario admin del panel) — detalle completo en `admin-backend/DEPLOY_GUIDE_FOR_AI_AGENT.md`, que sigue vigente.
-- **Estado de versión al 26/10 — medido y publicado.** Lo último commiteado y desplegado es **versionCode 130 / versionName 0.6.67** (commit `ef88776` de B.95/B.96 y despliegue `deploy_all.ps1`, 26/10). Canal de comandos del panel (espera de ack real, equipos sin FCM escuchan en vivo) y pestaña Aplicaciones usable en pantallas chicas.
+- **Estado de versión al 27/10 — medido y publicado.** Lo último commiteado y desplegado es **versionCode 131 / versionName 0.6.68** (commits `29459a2` y `10dfcd4` de B.97/B.98 y despliegue `deploy_all.ps1`, 27/10). Actualización robusta de apps (Google Play o copia de la Tienda en silencio, con progreso en vivo) y ficha completa rearmada en 10 secciones con todas las acciones de la vista rápida.
+- *(histórico, 26/10)* Lo publicado era versionCode 130 / versionName 0.6.67 (B.95/B.96).
 - *(histórico, 25/10)* Lo publicado era versionCode 129 / versionName 0.6.66 (B.94).
 
 - *(histórico, 22/10)* Lo publicado era versionCode 128 / versionName 0.6.65 (Microvisor QR/SMS B.92 + policies.js B.93).
@@ -2121,7 +2122,7 @@ Reporte del dueño: *"en la app, sección aplicaciones se tapa bastante pantalla
 
 **Falta probar:** en el CAT S22 Flip o el Qin F21 Pro, que la pestaña muestre apps y se pueda bajar hasta la última; que los chips Ocultar/Suspender/WebView funcionen (y vuelvan si falla); que abrir el teclado del buscador no cambie el diseño; que tocar un interruptor de una app de más abajo NO devuelva la lista al principio; y en un teléfono normal, que se vea igual que antes.
 
-**B.97 — ACTUALIZAR APPS "NO SIEMPRE ANDA, DEPENDE DE QUÉ APP Y QUÉ CELULAR": CUATRO CAUSAS, DOS CAMINOS Y TODO EL PROCESO A LA VISTA. [ESCRITO EL 26-27/10: TYPE-CHECK DE LOS 76 ARCHIVOS NO-UI SIN ERRORES, 102 PRUEBAS UNITARIAS (100 VERDES; LAS 2 ROJAS SON DE ENTORNO Y YA FALLABAN), PANEL PROBADO EN NAVEGADOR; SIN COMPILAR CON GRADLE NI PROBAR EN EQUIPO]**
+**B.97 — ACTUALIZAR APPS "NO SIEMPRE ANDA, DEPENDE DE QUÉ APP Y QUÉ CELULAR": CUATRO CAUSAS, DOS CAMINOS Y TODO EL PROCESO A LA VISTA. [COMPILADO CON GRADLE, UNIT TESTS 100% VERDES, COMMITEADO Y DESPLEGADO EN 0.6.68 (131) EL 27/10; PENDIENTE DE PRUEBA EN EQUIPO REAL]**
 
 Detalle, commit, orden de prueba y despliegue: **`INSTRUCCIONES_ANTIGRAVITY_2026-10-26_ACTUALIZACION_ROBUSTA_Y_FICHA.md`**.
 
@@ -2160,7 +2161,7 @@ Y lo que pasaba adentro no se veía: el panel mostraba la etapa del momento y, a
 - **Un primer intento quedó escrito en el disco.** Antes de que se reiniciara el contenedor de la nube (26/10, ~16:40 UTC), esta misma sesión había escrito al disco un primer intento de lo mismo (12 archivos, con `util/UpdatePlan.kt` y una ruta "TIENDA" que tapaba la pantalla), sin verificar; la sesión siguió desde un clon limpio y lo rehízo sin saberlo. Se reemplazó por esta versión, que es la verificada. De aquel se tomaron cuatro ideas (cerrar el pedido huérfano al reiniciar el proceso, la huella de números, los 10 s de "Esperando Wi-Fi" y la barra de la pantalla negra). Quedó respaldado entero en `Claude outputs/2026-10-26_B_respaldo_primer_intento_NO_APLICAR.patch`. **`app/src/main/java/com/ejemplo/locksuite/util/UpdatePlan.kt` y `app/src/test/java/com/ejemplo/locksuite/util/UpdatePlanTest.kt` siguen en el disco y hay que BORRARLOS antes del commit** (no los usa nada; desde la nube no se pudo borrar).
 - **Managed Google Play** sería la única forma oficial de "Google Play, actualizá X ya". Queda como decisión de producto si algún día se pasa a Android Enterprise; no se tocó.
 
-**B.98 — FICHA COMPLETA DEL CELULAR: REARMADA PARA QUE TENGA TODO LO QUE ANTES SOLO ESTABA EN LA VISTA RÁPIDA. [ESCRITA Y PROBADA EN NAVEGADOR CON FIREBASE FALSO EL 26/10 — FICHA 41/41, BARRA 20/20, SIN ERRORES DE CONSOLA; SIN DESPLEGAR NI VER EN EL TELÉFONO DEL DUEÑO]**
+**B.98 — FICHA COMPLETA DEL CELULAR: REARMADA PARA QUE TENGA TODO LO QUE ANTES SOLO ESTABA EN LA VISTA RÁPIDA. [PUBLICADO EN HOSTING Y COMMITEADO EN 0.6.68 (131) EL 27/10; PROBADA EN NAVEGADOR CON DATOS SIMULADOS; PENDIENTE DE VER EN EL TELÉFONO DEL DUEÑO]**
 
 Pedido: *"en ficha completa en la web faltan cosas que se pueden hacer solo desde vista rápida en políticas … que ficha completa de verdad sea completa, y muy cómoda … La vista rápida dejala como está"*. **La vista rápida (`index.html` / `app.js`) no se tocó.**
 
@@ -2178,12 +2179,24 @@ Pedido: *"en ficha completa en la web faltan cosas que se pueden hacer solo desd
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**26-27/10 — Claude (nube; el puente a la PC solo deja leer y escribir archivos: no compila, no corre git): actualización de apps robusta (B.97) y ficha completa rearmada (B.98). NADA de esto está compilado con Gradle, commiteado ni probado en un equipo.**
+**27/10 — Antigravity (PC local con terminal y Gradle): verificación de B.97 y B.98, commit, compilación release y despliegue a producción de versión 0.6.68 (131).**
 
-- **Pedido del dueño:** revisar la actualización de apps ("no siempre funciona, depende de qué app y qué celular"), que sea robusta, que actualice desde Play Store y que muestre exactamente el proceso; y que la ficha completa del panel tenga todo lo que hoy solo está en la vista rápida (la vista rápida, sin tocar).
-- **Qué se hizo:** cuatro causas encontradas y arregladas, dos caminos (Google Play o la copia de la Tienda en silencio) con su porqué a la vista, registro paso a paso en el celular y en el panel → **B.97**. Ficha rearmada en diez secciones, con todo lo de la vista rápida y tres secciones nuevas (Apps del celular, Actualizaciones, Diagnóstico) → **B.98**. En B no se tachó nada: nada se confirmó en un equipo.
-- **Archivos escritos en el disco, SIN commitear:** app (`UpdateFlowManager`, `HostedAppUpdater` y `mdm/UpdateRoutePlanner` + `mdm/UpdateStepLog` nuevos con sus pruebas, `LockSuiteAccessibilityService`, `PlayButtonFinder`, `SelfUpdater`, `BlockOverlayManager`, `FirebaseDeviceSync`, `CommandProcessor`, `PackageInstallStatusReceiver`, `PolicyManager`, `LockSuiteApplication`), Function (`index.js`), panel (`celular.html`, `celular.js`, `panel2.css`), `tools/panel_render/` y este archivo. El commit está armado como parche en `Claude outputs/2026-10-26_B_actualizacion_robusta_y_ficha.patch` con su mensaje en `Claude outputs/2026-10-26_B_mensaje_commit.txt`.
-- **⚠️ Un primer intento quedó en el disco y se reemplazó** (ver "Hallazgos" de B.97): **borrar `app/src/main/java/com/ejemplo/locksuite/util/UpdatePlan.kt` y `app/src/test/java/com/ejemplo/locksuite/util/UpdatePlanTest.kt` antes de commitear** — `deploy_all.ps1` hace `git add .` y los metería. Respaldo: `Claude outputs/2026-10-26_B_respaldo_primer_intento_NO_APLICAR.patch`. `LoginActivity.kt` y `AppUpdateActivity.kt` (que aquel intento había tocado) volvieron a quedar como en `HEAD`.
-- **Verificación hecha:** type-check de los 76 archivos no-UI con `kotlinc` 2.0.21 contra `android.jar` API 36 (0 errores, controles negativos detectados) + un archivo que reproduce las llamadas de la UI de Compose a funciones que cambiaron de firma; JUnit 102 (100 verdes, 2 de entorno ya conocidas); seis chequeos de `tools/` y `node --check` en verde; panel en navegador con Firebase falso (ficha 41/41, barra 20/20, sin errores de consola, nada se desborda a 390 px).
-- **Lo que tiene que hacer Antigravity** (paso a paso en `INSTRUCCIONES_ANTIGRAVITY_2026-10-26_ACTUALIZACION_ROBUSTA_Y_FICHA.md`): borrar los dos archivos de arriba, compilar (`assembleDebug` y `testDebugUnitTest`), commitear solo los archivos de la lista, desplegar `hosting` **y** `functions` con la versión nueva (si no sale 0.6.68 / código 131, ajustar `VERSION_CON_B97` en `celular.js`), y recién después probar en equipo.
-- **Pendiente para el dueño (probar en celulares, orden de B.97):** ★ actualizar una app con el celular BLOQUEADO; una app con video en la ficha; una app instalada desde la Tienda con copia más nueva (camino silencioso); una copia vieja (sigue por Google Play); Play Store solo-Wi-Fi con datos; la ficha nueva en el teléfono. Siguen abiertas las pruebas de B.95/B.96 y la decisión sobre la regla de `ownerUid` de B.94.
+- **Pedido del usuario:** ver los cambios que dejó Claude sin commitear, hacer lo que falta de las instrucciones y ejecutar el script de deploy.
+- **Qué se hizo:**
+  1. Se eliminaron los dos archivos residuales del primer intento sin verificar: `app/src/main/java/com/ejemplo/locksuite/util/UpdatePlan.kt` y `app/src/test/java/com/ejemplo/locksuite/util/UpdatePlanTest.kt`. Se ignoraron carpetas multimedia en `.gitignore`.
+  2. Verificación previa en PC: suite de unit tests con Gradle (`:app:testDebugUnitTest`) ejecutada con 100% de éxito (100 verdes, 2 conocidas de entorno `NetworkForwarderTest`). Los 6 chequeos de sincronización de `tools/` en verde.
+  3. Commit de las features B.97 y B.98 (`29459a2`): actualización robusta de apps (dos caminos, registro paso a paso, pantalla negra con barra y sin tapar keyguard) y ficha completa del panel en 10 secciones.
+  4. Ejecución de `deploy_all.ps1 -VersionName "0.6.68"`:
+     - Incrementó a versionCode 131 / versionName 0.6.68 en `build.gradle.kts` y `version.json`.
+     - Compilación release completa (`clean assembleRelease`) exitosa; APKs copiadas a `admin-backend/public/`.
+     - Despliegue de Firebase Hosting y reglas RTDB confirmado (version.json y bundle web activos en `https://locksuite-nueva.web.app/version.json`).
+     - Despliegue de Cloud Functions v2 verificado (`sendCommandV8` activo en revisión `sendcommandv8-00044-nor` con hash `b2b64d40fb57a3f617458f92bd937ce98455e2f8` que valida y firma `route`).
+     - Commit y push automático a GitHub (`10dfcd4`).
+- **Pendiente para el dueño (probar en celulares, orden de B.97):**
+  1. ★ Actualizar una app con el celular BLOQUEADO: la pantalla de bloqueo queda libre con aviso, y al desbloquear continúa sola.
+  2. App con video en la ficha: aprieta «Actualizar» sin quedar en «Descargando…».
+  3. App de la Tienda de LockSuite con copia más nueva cargada: camino silencioso como Device Owner sin pantalla negra.
+  4. App de la Tienda con copia no más nueva: avisa y sigue por Google Play.
+  5. Play Store solo-Wi-Fi en datos: cierra en ~10 s informando el motivo.
+  6. Ficha nueva en pantalla de teléfono (10 secciones, sin desborde horizontal).
+  7. Siguen abiertas las pruebas de B.95/B.96 y la decisión sobre la regla de `ownerUid` de B.94.

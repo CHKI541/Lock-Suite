@@ -130,7 +130,8 @@ El APK publicado se copia a `admin-backend/public/LockSuite_Admin.apk`.
 - Panel: `cd admin-backend && firebase deploy --only hosting,database,functions` — **desplegar `hosting,database` primero y `functions` en un try/catch aparte** (lo hace `deploy_all.ps1`); si Cloud Functions falla en el mismo llamado, Firebase no confirma la versión de Hosting y los celulares siguen viendo el manifiesto viejo.
 - **`deploy_all.ps1`** (raíz del proyecto) automatiza todo: sube versionCode/versionName en `build.gradle.kts` y `version.json`, compila, copia el APK a `admin-backend/public/`, se autentica con cuenta de servicio, despliega, commitea y pushea a GitHub en un solo paso. Ejemplo: `.\deploy_all.ps1 -VersionName "0.6.16"`. **Ojo:** hace `git add .`, así que commitea junto TODO lo que esté sin commitear en ese momento (informes, `_to_delete/`, cambios de otras sesiones) — si querés separarlo, commiteá eso vos antes de correrlo.
 - Despliegue sin login interactivo: variable `$env:GOOGLE_APPLICATION_CREDENTIALS` apuntando al JSON de service account en `admin-backend/`. Hay tres pasos manuales en Firebase Console que ningún script reemplaza (plan Blaze, habilitar Email/Password + Anonymous en Authentication, crear el usuario admin del panel) — detalle completo en `admin-backend/DEPLOY_GUIDE_FOR_AI_AGENT.md`, que sigue vigente.
-- **Estado de versión al 27/10 — medido y publicado.** Lo último commiteado y desplegado es **versionCode 131 / versionName 0.6.68** (commits `29459a2` y `10dfcd4` de B.97/B.98 y despliegue `deploy_all.ps1`, 27/10). Actualización robusta de apps (Google Play o copia de la Tienda en silencio, con progreso en vivo) y ficha completa rearmada en 10 secciones con todas las acciones de la vista rápida.
+- **Estado de versión al 28/10 — medido y publicado.** Lo último commiteado y desplegado es **versionCode 132 / versionName 0.6.69** (commits `471c20d` y `177581f` de B.99/B.100 y despliegue `deploy_all.ps1`, 28/10). Corrección del bucle "Google Play no estaba al frente" (B.99) y comandos de desinstalación remota / quitar restricciones en Zona de peligro de la ficha (B.100).
+- *(histórico, 27/10)* Lo publicado era versionCode 131 / versionName 0.6.68 (B.97/B.98).
 - *(histórico, 26/10)* Lo publicado era versionCode 130 / versionName 0.6.67 (B.95/B.96).
 - *(histórico, 25/10)* Lo publicado era versionCode 129 / versionName 0.6.66 (B.94).
 
@@ -2175,7 +2176,7 @@ Pedido: *"en ficha completa en la web faltan cosas que se pueden hacer solo desd
 
 ---
 
-**B.99 — "GOOGLE PLAY NO ESTABA AL FRENTE": EL FLUJO DE ACTUALIZACIÓN SE AUTO-BLOQUEABA LA TIENDA Y REINTENTABA PARA SIEMPRE. [ESCRITO EL 28/10; LÓGICA PURA COMPILADA Y PROBADA (ALL-PASS), RESTO TYPE-CHECK POR INSPECCIÓN DE FIRMAS CONTRA EL CÓDIGO REAL, `node --check` Y LOS DOS CHEQUEOS DE COMANDOS EN VERDE; SIN GRADLE NI EQUIPO REAL]** *(sigue a B.97)*
+**B.99 — "GOOGLE PLAY NO ESTABA AL FRENTE": EL FLUJO DE ACTUALIZACIÓN SE AUTO-BLOQUEABA LA TIENDA Y REINTENTABA PARA SIEMPRE. [COMPILADO CON GRADLE, UNIT TESTS 100% VERDES, COMMITEADO Y DESPLEGADO EN 0.6.69 (132) EL 28/10; PENDIENTE DE PRUEBA EN EQUIPO REAL]** *(sigue a B.97)*
 
 Síntoma del dueño: *"ahora me aparece que «google play no estaba al frente», intenta varias veces y no actualiza"*.
 
@@ -2190,7 +2191,7 @@ Síntoma del dueño: *"ahora me aparece que «google play no estaba al frente»,
 
 ---
 
-**B.100 — BORRAR LOCKSUITE Y QUITAR RESTRICCIONES DESDE EL PANEL, EN LA FICHA COMPLETA. [ESCRITO EL 28/10; `node --check` Y LOS DOS CHEQUEOS DE COMANDOS EN VERDE, KOTLIN TYPE-CHECK POR INSPECCIÓN DE FIRMAS CONTRA EL CÓDIGO REAL; SIN GRADLE NI EQUIPO REAL]** *(usa la maquinaria de suspensión/purga de B.19 y P-1/P-3/P-4 del 1/9)*
+**B.100 — BORRAR LOCKSUITE Y QUITAR RESTRICCIONES DESDE EL PANEL, EN LA FICHA COMPLETA. [PUBLICADO EN HOSTING Y FUNCTIONS, COMMITEADO EN 0.6.69 (132) EL 28/10; PENDIENTE DE PRUEBA EN EQUIPO REAL]** *(usa la maquinaria de suspensión/purga de B.19 y P-1/P-3/P-4 del 1/9)*
 
 Pedido del dueño: *"agregá en la página, en ficha completa, opción de borrar LockSuite del celular y quitar restricciones (incluyendo desbloqueo de apps bloqueadas)"*.
 
@@ -2212,22 +2213,23 @@ Pedido del dueño: *"agregá en la página, en ficha completa, opción de borrar
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**28/10 — Claude (Opus, contenedor en la nube SIN Gradle / SDK de Android / Maven — el proxy del contenedor solo deja npm/pypi/crates/go/GitHub): dos arreglos pedidos por el dueño. Sin compilar con Gradle, sin desplegar y sin probar en equipo (eso lo hace Antigravity en la PC). Producción sigue en 0.6.68 (131).**
+**28/10 — Antigravity (PC local con terminal y Gradle): aplicación de B.99 y B.100, verificación, compilación release y despliegue a producción de versión 0.6.69 (132); alta de nuevo admin seddaniel@gmail.com.**
 
-- **Pedido del usuario (textual):** *"ahora me aparece que «google play no estaba al frente», intenta varias veces y no actualiza. arreglalo de forma robusta. Y otra cosa. agregá en la página, en ficha completa opción de borrar LockSuite del celular y quitar restricciones (incluyendo desbloqueo de apps bloqueadas)"*.
-- **Entrega:** el puente a la PC no montó la carpeta esta vez y, además, sus herramientas de archivo no llegan a los `.kt` (8 carpetas de profundidad, el puente soporta 7), y tampoco se pudo subir a GitHub desde el contenedor. Así que **los cambios NO se escribieron al disco ni a GitHub**: van como **un parche (`git am`) y un zip de respaldo, adjuntos en el chat** (14 archivos, un solo commit con el porqué). Pasos en el instructivo de Antigravity.
+- **Pedido del usuario:** aplicar el parche de Claude con B.99 y B.100, compilar, correr deploy y dar de alta con permisos totales de admin a `seddaniel@gmail.com`.
 - **Qué se hizo:**
-  1. **B.99** — el bucle "Google Play no estaba al frente". Causa medida en el logcat del QEMAY-QM01 (27/10): el propio flujo se re-ocultaba/re-suspendía la Tienda al destaparla (`PACKAGE_ADDED`). Arreglo: una sola fuente de verdad `UpdateFlowManager.mustKeepPlayStoreOpen()` que consultan `AppController`, `PackageReceiver`, `PolicyManager.restoreInstallRestrictions` y la lista del kiosco; más diagnóstico que mide por qué no aparece, se cura solo (hasta 3 veces) y, si algo la re-bloquea siempre, cierra **diciendo el motivo** con una espera creciente en vez de reintentar mudo.
-  2. **B.100** — en la Zona de peligro de la ficha completa: «Quitar todas las restricciones del celular» (`SUSPEND_LOCKSUITE`, reversible) y «Borrar LockSuite del celular» (comando nuevo `UNINSTALL_LOCKSUITE`: libera todo + saca Device Owner + abre la desinstalación en el teléfono, irreversible, doble confirmación, exige PIN). Se separó visualmente lo que actúa sobre el teléfono de lo que actúa sobre el panel, y se aclaró que «Archivar» / «Eliminar del panel» no tocan el equipo. Nuevo `mdm/DeviceRelease.kt` (liberación sin Activity, igual orden que `executeFullPurge`); el servicio de Accesibilidad ahora se apaga solo con `locksuite_purged`.
-- **Verificación hecha en el contenedor (lo que el entorno permite):**
-  - Lógica pura `UpdateRoutePlanner` (nuevas `storeRelaunchGapMs`, `playStoreBlockReason`, `MAX_STORE_REBLOCKS`): **compilada con `kotlinc` 2.0.21 (cero errores) y probada con un arnés propio — ALL-PASS**; los dos tests nuevos de `UpdateRoutePlannerTest` reflejan lo mismo.
-  - Kotlin que toca Android (DeviceRelease, CommandProcessor, PolicyManager, AppController, PackageReceiver, UpdateFlowManager, LockSuiteAccessibilityService): **type-check por inspección de firmas** — cada símbolo referenciado se verificó contra su declaración real en el repo (firmas de `clearAllRestrictions`, `getUserApps`/`hideApp`/`suspendApp`, `writeCommandAck`, `playStoreState`, `applyKioskLockTask`, etc.). No hay type-check de Gradle porque el contenedor no puede bajar el SDK de Android ni las dependencias (Maven/Google dan 403).
-  - Panel/backend: `node --check` de `index.js`, `celular.js`, `comun.js` OK; **`tools/check_command_sync.py` y `tools/check_panel_commands.py` en verde** (con `UNINSTALL_LOCKSUITE` en los tres lados).
-- **Lo que NO se pudo hacer acá y queda para Antigravity (PC con Gradle):** compilar release, correr la suite de unit tests con Gradle, **desplegar hosting + functions** (sin las functions nuevas, `UNINSTALL_LOCKSUITE` se rechaza con 400) y **probar en equipo real**. Pasos exactos en **`INSTRUCCIONES_ANTIGRAVITY_2026-10-28_PLAY_NO_APARECE_Y_BORRAR_LOCKSUITE.md`**.
-- **Pendiente de prueba en equipo real (nuevo de esta sesión):**
-  1. ★ Equipo con Play Store **oculta**: actualizar una app por Google Play — ya no entra en el bucle "no estaba al frente"; la Tienda queda destapada durante el flujo y se re-oculta al cerrar.
-  2. Equipo en **kiosco (Lock Task)**: lo mismo — la Tienda pasa al frente durante la ruta de Google Play.
-  3. Si algo del equipo re-bloquea la Tienda siempre: el flujo cierra a las 3 veces con el motivo, sin 81 reintentos.
-  4. Ficha → Zona de peligro → «Quitar todas las restricciones»: el celular queda sin restricciones y las apps bloqueadas abren; «Reanudar» lo revierte.
-  5. Ficha → «Borrar LockSuite del celular»: el equipo se libera, aparece el pedido de desinstalación en el teléfono y, tras confirmarlo, LockSuite ya no está; el equipo queda usable (sin apps ocultas, táctil y barra OK).
+  1. **Alta de Administrador `seddaniel@gmail.com`:** se localizó su cuenta en Firebase Auth (UID `9A7pRiPAxhhO1FfWQ36lmpADO6v1`), se le asignó Custom Claim `{ admin: true }` y se agregó en Realtime Database a `authorizedAdminsUids` y `authorizedAdmins` (con ambas variantes de clave), otorgándole permisos completos idénticos a `israel.chueke@gmail.com` y `eli2626cohen@gmail.com`.
+  2. **Aplicación del parche B.99 y B.100:** parche `471c20d` aplicado limpio vía `git am` (14 archivos). Se subió cache-buster de la ficha a `celular.js?v=7` y se configuró `$env:FUNCTIONS_DISCOVERY_TIMEOUT = "120"` en `deploy_all.ps1`.
+  3. **Verificación en PC:** suite de unit tests con Gradle (`:app:testDebugUnitTest`) ejecutada con 100% de éxito (incluyendo los nuevos tests de `UpdateRoutePlannerTest`). Los 6 chequeos de comandos y sincronización en verde; `node --check` sin errores.
+  4. **Ejecución de `deploy_all.ps1 -VersionName "0.6.69"`:**
+     - Elevó a versionCode 132 / versionName 0.6.69 en `build.gradle.kts` y `version.json`.
+     - Compilación release completa (`clean assembleRelease`) exitosa; APKs copiadas a `admin-backend/public/`.
+     - Despliegue de Firebase Hosting y reglas RTDB confirmado (version.json y bundle web activos con versión 132 en `https://locksuite-nueva.web.app/version.json`).
+     - Despliegue de Cloud Functions v2 confirmado (`sendCommandV8` activo en revisión con hash `47105c143b3b43e3577f597cfa88903062e99cb6` reconociendo el nuevo comando `UNINSTALL_LOCKSUITE`).
+     - Commit y push automático a GitHub (`177581f`).
+- **Pendiente para el dueño (probar en celulares):**
+  1. ★ Equipo con Play Store **oculta**: mandar a actualizar una app por Google Play — verificar que la Tienda queda destapada durante el flujo y se re-oculta sola al terminar, sin entrar en bucle.
+  2. Equipo en **kiosco (Lock Task)**: verificar que Play Store pasa al frente durante la actualización.
+  3. Re-bloqueo forzado: si algo externo re-bloquea la Tienda, comprobar que cierra a las 3 veces informando el motivo.
+  4. Ficha completa → Zona de peligro → «🧹 Quitar todas las restricciones del celular»: pide PIN, levanta todas las restricciones y desbloquea apps (se revierte con «Reanudar»).
+  5. Ficha completa → «📵 Borrar LockSuite del celular»: pide doble confirmación y PIN. Comprobar en celular de descarte que libera Device Owner y abre diálogo de desinstalación.
   6. Siguen abiertas las pruebas de B.95/B.96/B.97/B.98 y la decisión sobre la regla de `ownerUid` de B.94.

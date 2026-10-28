@@ -184,8 +184,23 @@ class PackageReceiver : BroadcastReceiver() {
 
             prefs.edit().putLong("launcher_packages_version", System.currentTimeMillis()).apply()
 
+            // 28/10/2026 (B.99) — ESTA ERA LA CAUSA DE "GOOGLE PLAY NO ESTABA AL FRENTE".
+            // Destapar Play Store (lo hace el flujo de actualización para poder abrirla) es,
+            // para Android, "instalarla": llega PACKAGE_ADDED de com.android.vending. Este
+            // bloque la volvía a suspender y ocultar en el acto, Android la cerraba a los
+            // 0,2 s y el flujo la reabría sin fin (logcat del QEMAY-QM01, 27/10: 81 cierres
+            // "hiding pkg" en 2 minutos). Mientras dura una actualización por Google Play no
+            // se toca: la vuelve a bloquear el cierre del flujo, como siempre.
+            val playStoreDelFlujo = packageName == "com.android.vending" &&
+                UpdateFlowManager.mustKeepPlayStoreOpen(context)
+            if (playStoreDelFlujo) {
+                Log.i("PackageReceiver", "Google Play destapada por la actualización en curso: no se re-bloquea ahora")
+            }
+
             // Re-suspender de forma inmediata el paquete si fue instalado o actualizado y debe estar suspendido
-            if (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED) {
+            if (!playStoreDelFlujo &&
+                (action == Intent.ACTION_PACKAGE_ADDED || action == Intent.ACTION_PACKAGE_REPLACED)
+            ) {
                 try {
                     val appController = AppController(context)
                     val policyManager = com.ejemplo.locksuite.mdm.PolicyManager(context)

@@ -94,6 +94,11 @@ const ALLOWED_COMMANDS = new Set([
   // el estado desde las preferencias guardadas. Exige PIN del dispositivo (no
   // esta en la excepcion de UPDATE_*), porque deja el equipo sin proteccion.
   "SUSPEND_LOCKSUITE", "RESUME_LOCKSUITE",
+  // Borrar LockSuite del equipo: libera TODO (igual que SUSPEND_LOCKSUITE), ademas
+  // saca Device Owner y abre el pedido de desinstalacion en el telefono. Irreversible.
+  // Exige PIN del dispositivo (NO esta en la excepcion de UPDATE_* de mas abajo) y
+  // firma HMAC, porque es la accion mas destructiva del panel. Ver app/mdm/DeviceRelease.kt.
+  "UNINSTALL_LOCKSUITE",
   "PROTECT_ACCESSIBILITY", "UNPROTECT_ACCESSIBILITY",
   // Sub-interruptores de "Protecciones de Accesibilidad" (17/8/2026). Todos
   // exigen PIN del dispositivo: NO estan en la excepcion de UPDATE_* de mas
@@ -234,6 +239,9 @@ function commandFamily(command, packages) {
 // estado deseado y se aplican aunque el equipo vuelva a las semanas.
 const ACTION_COMMANDS = new Set([
   "LOCK_DEVICE", "UPDATE_APP", "CANCEL_UPDATE_APP", "UPDATE_LOCKSUITE",
+  // Liberar/desinstalar es una ACCIÓN puntual: si llega tarde (equipo que estuvo una
+  // semana apagado) ya no tiene sentido ejecutarla sola. Vence en un día como el resto.
+  "UNINSTALL_LOCKSUITE",
   "SYNC_WHITELIST", "SYNC_APP_REQUESTS", "CLEAR_WHITELIST_AUDIT", "CLEAR_IAB_AUDIT",
 ]);
 const MAILBOX_TTL_ACTION_MS = 24 * 60 * 60 * 1000;

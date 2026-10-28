@@ -351,4 +351,33 @@ class UpdateRoutePlannerTest {
         val muchos = (1..200).map { "$it %" }
         assertTrue(UpdateRoutePlanner.progressSignature(muchos).length <= 420)
     }
+
+    // ── Google Play no aparece (B.99) ─────────────────────────────────────────────
+
+    @Test
+    fun reabrirGooglePlay_laPrimeraEsRapidaYDespuesEspera() {
+        // La primera vuelta es el caso normal (el usuario tocó Inicio): rápido.
+        assertEquals(1_500L, UpdateRoutePlanner.storeRelaunchGapMs(0))
+        // Sin haberla visto, cada vez espera más, con tope.
+        var anterior = UpdateRoutePlanner.storeRelaunchGapMs(0)
+        for (n in 1..4) {
+            val g = UpdateRoutePlanner.storeRelaunchGapMs(n)
+            assertTrue("vuelta $n no espera más que la anterior", g > anterior)
+            anterior = g
+        }
+        assertEquals(UpdateRoutePlanner.storeRelaunchGapMs(4), UpdateRoutePlanner.storeRelaunchGapMs(40))
+        assertTrue(UpdateRoutePlanner.storeRelaunchGapMs(40) <= 15_000L)
+        // Un valor negativo (contador roto) no puede dar una espera rara.
+        assertEquals(1_500L, UpdateRoutePlanner.storeRelaunchGapMs(-3))
+    }
+
+    @Test
+    fun porQueNoApareceGooglePlay_soloLoMedible() {
+        assertNull(UpdateRoutePlanner.playStoreBlockReason(hidden = false, suspended = false, lockTaskBlocks = false))
+        assertEquals("está oculta", UpdateRoutePlanner.playStoreBlockReason(true, false, false))
+        assertEquals("está suspendida", UpdateRoutePlanner.playStoreBlockReason(false, true, false))
+        val todo = UpdateRoutePlanner.playStoreBlockReason(true, true, true)!!
+        assertTrue(todo.contains("oculta") && todo.contains("suspendida") && todo.contains("kiosco"))
+        assertTrue(UpdateRoutePlanner.MAX_STORE_REBLOCKS in 2..5)
+    }
 }

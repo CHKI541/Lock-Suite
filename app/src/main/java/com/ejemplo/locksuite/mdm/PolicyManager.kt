@@ -282,6 +282,16 @@ class PolicyManager(private val context: Context) {
 
     fun restoreInstallRestrictions() {
         val prefs = PrefsHelper.getMdmPrefs(context)
+        // 28/10/2026 (B.99): con una actualización POR GOOGLE PLAY en curso, esto no puede
+        // correr: apagaría la marca de instalación, volvería a bloquear la instalación de
+        // apps y re-ocultaría/re-suspendería Play Store con la descarga a mitad. Quien lo
+        // llama en ese momento es otra instalación (la Tienda del celular, el OTA) que
+        // terminó; las restricciones las restaura el cierre del flujo, que llama acá cuando
+        // el flujo ya figura cerrado.
+        if (com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context)) {
+            android.util.Log.i("PolicyManager", "restoreInstallRestrictions: actualización por Google Play en curso; la restaura su cierre")
+            return
+        }
         prefs.edit().putBoolean("mdm_install_in_progress", false).apply()
         if (prefs.getBoolean("locksuite_suspended", false)) {
             android.util.Log.i("PolicyManager", "LockSuite suspendido: no se re-imponen los bloqueos de instalación")
@@ -590,7 +600,17 @@ class PolicyManager(private val context: Context) {
             "com.android.server.telecom",
             "com.android.phone"
         )
-        return (allowed + dialerPkgs + extraEssential).toTypedArray()
+        // 28/10/2026 (B.99): mientras dura una actualización POR GOOGLE PLAY, Play Store
+        // entra a la lista. Si no, con el kiosco encendido Android no la deja pasar al
+        // frente y el flujo se queda reabriéndola hasta rendirse. UpdateFlowManager vuelve
+        // a escribir la lista al empezar y al terminar (refreshKioskForUpdate).
+        val porActualizacion = try {
+            if (com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context)) setOf("com.android.vending")
+            else emptySet()
+        } catch (_: Exception) {
+            emptySet()
+        }
+        return (allowed + dialerPkgs + extraEssential + porActualizacion).toTypedArray()
     }
 
     fun setKioskLockTaskEnabled(enable: Boolean): Boolean {

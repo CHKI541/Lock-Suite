@@ -17,6 +17,9 @@ import com.ejemplo.locksuite.util.PrefsHelper
 class AppController(private val context: Context) {
 
     companion object {
+        /** Google Play (Play Store). Ver hideApp/suspendApp y B.99. */
+        const val PKG_PLAY_STORE = "com.android.vending"
+
         /**
          * Paquetes bloqueados/suspendidos por defecto en LockSuite.
          * Si el administrador no los desbloqueó explícitamente, quedan suspendidos desde el inicio.
@@ -255,6 +258,16 @@ class AppController(private val context: Context) {
             PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", true).apply()
             return true
         }
+        // 28/10/2026 (B.99): Google Play no se oculta con una actualización POR GOOGLE PLAY en
+        // curso — ocultarla la cierra en el acto y el flujo queda reabriéndola sin fin. Se
+        // anota la intención y la aplica el cierre del flujo (restoreInstallRestrictions).
+        if (hide && packageName == PKG_PLAY_STORE &&
+            com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context)
+        ) {
+            PrefsHelper.getMdmPrefs(context).edit().putBoolean("hide_$packageName", true).apply()
+            android.util.Log.i("AppController", "Ocultar Google Play: diferido hasta que termine la actualización en curso")
+            return true
+        }
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) {
             // Si la app es crítica o especial y se solicita des-ocultarla (hide = false), el estado deseado
             // ya se cumple (no está oculta por protección del sistema) -> retornar true (éxito).
@@ -306,6 +319,16 @@ class AppController(private val context: Context) {
         val prefs = PrefsHelper.getMdmPrefs(context)
         if (suspend && prefs.getBoolean("locksuite_suspended", false)) {
             prefs.edit().putBoolean("suspend_$packageName", true).apply()
+            return true
+        }
+        // 28/10/2026 (B.99): ídem hideApp — Google Play no se suspende en medio de una
+        // actualización por Google Play ("app en pausa" en vez de la ficha). Queda la
+        // intención; la aplica el cierre del flujo.
+        if (suspend && packageName == PKG_PLAY_STORE &&
+            com.ejemplo.locksuite.util.UpdateFlowManager.mustKeepPlayStoreOpen(context)
+        ) {
+            prefs.edit().putBoolean("suspend_$packageName", true).apply()
+            android.util.Log.i("AppController", "Suspender Google Play: diferido hasta que termine la actualización en curso")
             return true
         }
         if (isCritical(packageName) || isPartialBlockOnly(packageName)) {

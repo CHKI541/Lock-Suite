@@ -2175,28 +2175,59 @@ Pedido: *"en ficha completa en la web faltan cosas que se pueden hacer solo desd
 
 ---
 
+**B.99 — "GOOGLE PLAY NO ESTABA AL FRENTE": EL FLUJO DE ACTUALIZACIÓN SE AUTO-BLOQUEABA LA TIENDA Y REINTENTABA PARA SIEMPRE. [ESCRITO EL 28/10; LÓGICA PURA COMPILADA Y PROBADA (ALL-PASS), RESTO TYPE-CHECK POR INSPECCIÓN DE FIRMAS CONTRA EL CÓDIGO REAL, `node --check` Y LOS DOS CHEQUEOS DE COMANDOS EN VERDE; SIN GRADLE NI EQUIPO REAL]** *(sigue a B.97)*
+
+Síntoma del dueño: *"ahora me aparece que «google play no estaba al frente», intenta varias veces y no actualiza"*.
+
+**Causa, medida en el logcat del QEMAY-QM01 del 27/10 (no deducida):** el flujo de actualización destapa Google Play con `setApplicationHidden(false)`; para Android una app oculta "no está instalada", así que destaparla dispara `ACTION_PACKAGE_ADDED` de `com.android.vending`; y el `PackageReceiver` de LockSuite, al ver "se instaló Play Store", la volvía a ocultar y suspender según la preferencia del administrador. 0,2 s después de abrirse, Android la mataba (`Force stopping com.android.vending: hiding pkg`) y Play Store caía con *"is package not installed?"*. El ciclo la reabría cada 1,5 s y el registro decía "Google Play no estaba al frente" **81 veces en 2 minutos**, hasta rendirse a los 75 s. Le pasaba a **todo equipo con Play Store oculta** (o suspendida con "ocultar íconos de lo suspendido" encendido): otra cara del "depende del celular". El mismo tipo de bug auto-infligido no lo veía nadie porque cada pieza hacía "lo suyo" bien.
+
+**Arreglo — una sola fuente de verdad + diagnóstico que se cura solo:**
+- `UpdateFlowManager.mustKeepPlayStoreOpen(context)`: la única función que dice "no toques Google Play ahora". La consultan **antes de ocultar/suspender** `AppController.hideApp`/`suspendApp` (anotan la intención en `hide_`/`suspend_` y la difieren), el `PackageReceiver` (no re-bloquea `com.android.vending` si el flujo está abierto), `PolicyManager.restoreInstallRestrictions` (sale sin tocar nada) y `PolicyManager.lockTaskAllowedPackages` (suma `com.android.vending` a la lista del kiosco mientras dura la ruta de Google Play). Lo que se pida en el medio queda anotado y lo aplica el cierre del flujo, como siempre.
+- `UpdateFlowManager.playStoreState()` mide por qué no aparece (oculta / suspendida / el kiosco no la deja), y `UpdateRoutePlanner.playStoreBlockReason()` (puro, con prueba) lo pone en palabras.
+- En el ciclo de la Accesibilidad, `diagnoseMissingStore()`: si Google Play no está al frente, mide el estado; si algo la volvió a bloquear **después** de destaparla, la destapa de nuevo, refresca el kiosco y lo cuenta; a las `MAX_STORE_REBLOCKS` (3) veces cierra el flujo **diciendo el motivo** ("algo del equipo la vuelve a bloquear apenas se la destapa") en vez de reintentar mudo. El relanzamiento usa `storeRelaunchGapMs()` (puro, con prueba): la primera vuelta es rápida (el caso normal: el usuario tocó Inicio), las siguientes esperan cada vez más (3/5/8/12 s) para no entrar en un bucle de cierres. El cartel que quedó al frente ("Google Play se detuvo", la pantalla de inicio, otra app) se nombra en el registro. Cuando la ficha se dibuja de verdad, el contador de ausencias se reinicia.
+
+**Archivos:** `util/UpdateFlowManager.kt` (mustKeepPlayStoreOpen, playStoreState, refreshKioskForUpdate; refresco del kiosco al empezar y cerrar la ruta), `mdm/AppController.kt`, `receiver/PackageReceiver.kt`, `mdm/PolicyManager.kt`, `service/LockSuiteAccessibilityService.kt` (diagnoseMissingStore, relaunchStoreIfDue, describeFrontApp, frenteTexto), `mdm/UpdateRoutePlanner.kt` + test (puros: storeRelaunchGapMs, playStoreBlockReason, MAX_STORE_REBLOCKS).
+
+---
+
+**B.100 — BORRAR LOCKSUITE Y QUITAR RESTRICCIONES DESDE EL PANEL, EN LA FICHA COMPLETA. [ESCRITO EL 28/10; `node --check` Y LOS DOS CHEQUEOS DE COMANDOS EN VERDE, KOTLIN TYPE-CHECK POR INSPECCIÓN DE FIRMAS CONTRA EL CÓDIGO REAL; SIN GRADLE NI EQUIPO REAL]** *(usa la maquinaria de suspensión/purga de B.19 y P-1/P-3/P-4 del 1/9)*
+
+Pedido del dueño: *"agregá en la página, en ficha completa, opción de borrar LockSuite del celular y quitar restricciones (incluyendo desbloqueo de apps bloqueadas)"*.
+
+**Zona de peligro de la ficha, ahora separada en dos grupos** (`celular.html`/`celular.js`):
+- **En el celular:** «🧹 Quitar todas las restricciones del celular» manda `SUSPEND_LOCKSUITE` (ya existía): levanta TODAS las protecciones y desbloquea TODAS las apps, **reversible** con «Reanudar». «📵 Borrar LockSuite del celular» manda el comando nuevo `UNINSTALL_LOCKSUITE`: hace lo mismo y además saca Device Owner y abre el pedido de desinstalación **en el teléfono**; irreversible, con doble confirmación.
+- **En el panel:** «📦 Archivar (solo saca del panel)» y «🗑️ Eliminar del panel» — **ninguno toca el teléfono**. Antes "Eliminar el dispositivo" solo lo borraba del panel y se confundía con borrarlo del celular; ahora cada botón dice sobre qué actúa, y los textos de confirmación lo repiten.
+
+**`UNINSTALL_LOCKSUITE` (nuevo comando), en los tres lados** (lo exigen `tools/check_command_sync.py` y `check_panel_commands.py`, ambos en verde): `ALLOWED_COMMANDS` + `ACTION_COMMANDS` (vence en 1 día) en `functions/index.js` — **exige PIN del dispositivo y firma HMAC** (no está en la excepción de `UPDATE_*`: es la acción más destructiva del panel); `CommandProcessor.kt` lo ejecuta y está en `allowedWhileSuspended` (un equipo ya suspendido igual hay que poder sacárselo de encima). El ack va por una corrutina aparte y se escribe **primero** (el paso 2 de la liberación borra las preferencias —incluido el secreto de comandos— y después se suelta Device Owner: un ack dejado para el final no saldría nunca), así que el panel marca "aplicado" cuando el equipo acepta la orden, no cuando la app termina de borrarse.
+
+**`mdm/DeviceRelease.kt` (nuevo):** la liberación completa SIN Activity, el mismo orden delicado que `EmergencyActivity.executeFullPurge()` (des-ocultar/des-suspender todas las apps siendo todavía Device Owner → `clearAllRestrictions()` → reactivar el ícono del lanzador → parar servicios → `clearDeviceOwnerApp()` → marcar `locksuite_purged` **después** de borrar las prefs → abrir el diálogo de desinstalación). El servicio de Accesibilidad ahora respeta `locksuite_purged`: en `onServiceConnected` y en `onAccessibilityEvent` se apaga solo (`disableSelf()`) para no quedar bloqueando apps si la desinstalación se demora (los watchdogs, el arranque y el buzón ya lo respetaban desde antes).
+
+**Archivos:** `admin-backend/functions/index.js`, `admin-backend/public/celular.js` y `celular.html`, `app/.../service/CommandProcessor.kt`, `app/.../service/LockSuiteAccessibilityService.kt`, nuevo `app/.../mdm/DeviceRelease.kt`.
+
+**OJO para el dueño:** `UNINSTALL_LOCKSUITE` deja el equipo **sin control remoto** (se suelta Device Owner); para volver a administrarlo hay que darlo de alta de cero. Es irreversible. La desinstalación final la confirma una persona en el teléfono (Android no deja que una app se autodesinstale sin ese toque una vez que ya no es Device Owner): el equipo queda liberado igual aunque nadie confirme.
+
+---
+
 ## C. BITÁCORA — última sesión conocida
 
 *(Esto se reemplaza en cada cierre de sesión, no se acumula. Para el historial completo versión por versión, ver `walkthrough.md`.)*
 
-**27/10 — Antigravity (PC local con terminal y Gradle): verificación de B.97 y B.98, commit, compilación release y despliegue a producción de versión 0.6.68 (131).**
+**28/10 — Claude (Opus, contenedor en la nube SIN Gradle / SDK de Android / Maven — el proxy del contenedor solo deja npm/pypi/crates/go/GitHub): dos arreglos pedidos por el dueño. Sin compilar con Gradle, sin desplegar y sin probar en equipo (eso lo hace Antigravity en la PC). Producción sigue en 0.6.68 (131).**
 
-- **Pedido del usuario:** ver los cambios que dejó Claude sin commitear, hacer lo que falta de las instrucciones y ejecutar el script de deploy.
+- **Pedido del usuario (textual):** *"ahora me aparece que «google play no estaba al frente», intenta varias veces y no actualiza. arreglalo de forma robusta. Y otra cosa. agregá en la página, en ficha completa opción de borrar LockSuite del celular y quitar restricciones (incluyendo desbloqueo de apps bloqueadas)"*.
+- **Entrega:** el puente a la PC no montó la carpeta esta vez y, además, sus herramientas de archivo no llegan a los `.kt` (8 carpetas de profundidad, el puente soporta 7), y tampoco se pudo subir a GitHub desde el contenedor. Así que **los cambios NO se escribieron al disco ni a GitHub**: van como **un parche (`git am`) y un zip de respaldo, adjuntos en el chat** (14 archivos, un solo commit con el porqué). Pasos en el instructivo de Antigravity.
 - **Qué se hizo:**
-  1. Se eliminaron los dos archivos residuales del primer intento sin verificar: `app/src/main/java/com/ejemplo/locksuite/util/UpdatePlan.kt` y `app/src/test/java/com/ejemplo/locksuite/util/UpdatePlanTest.kt`. Se ignoraron carpetas multimedia en `.gitignore`.
-  2. Verificación previa en PC: suite de unit tests con Gradle (`:app:testDebugUnitTest`) ejecutada con 100% de éxito (100 verdes, 2 conocidas de entorno `NetworkForwarderTest`). Los 6 chequeos de sincronización de `tools/` en verde.
-  3. Commit de las features B.97 y B.98 (`29459a2`): actualización robusta de apps (dos caminos, registro paso a paso, pantalla negra con barra y sin tapar keyguard) y ficha completa del panel en 10 secciones.
-  4. Ejecución de `deploy_all.ps1 -VersionName "0.6.68"`:
-     - Incrementó a versionCode 131 / versionName 0.6.68 en `build.gradle.kts` y `version.json`.
-     - Compilación release completa (`clean assembleRelease`) exitosa; APKs copiadas a `admin-backend/public/`.
-     - Despliegue de Firebase Hosting y reglas RTDB confirmado (version.json y bundle web activos en `https://locksuite-nueva.web.app/version.json`).
-     - Despliegue de Cloud Functions v2 verificado (`sendCommandV8` activo en revisión `sendcommandv8-00044-nor` con hash `b2b64d40fb57a3f617458f92bd937ce98455e2f8` que valida y firma `route`).
-     - Commit y push automático a GitHub (`10dfcd4`).
-- **Pendiente para el dueño (probar en celulares, orden de B.97):**
-  1. ★ Actualizar una app con el celular BLOQUEADO: la pantalla de bloqueo queda libre con aviso, y al desbloquear continúa sola.
-  2. App con video en la ficha: aprieta «Actualizar» sin quedar en «Descargando…».
-  3. App de la Tienda de LockSuite con copia más nueva cargada: camino silencioso como Device Owner sin pantalla negra.
-  4. App de la Tienda con copia no más nueva: avisa y sigue por Google Play.
-  5. Play Store solo-Wi-Fi en datos: cierra en ~10 s informando el motivo.
-  6. Ficha nueva en pantalla de teléfono (10 secciones, sin desborde horizontal).
-  7. Siguen abiertas las pruebas de B.95/B.96 y la decisión sobre la regla de `ownerUid` de B.94.
+  1. **B.99** — el bucle "Google Play no estaba al frente". Causa medida en el logcat del QEMAY-QM01 (27/10): el propio flujo se re-ocultaba/re-suspendía la Tienda al destaparla (`PACKAGE_ADDED`). Arreglo: una sola fuente de verdad `UpdateFlowManager.mustKeepPlayStoreOpen()` que consultan `AppController`, `PackageReceiver`, `PolicyManager.restoreInstallRestrictions` y la lista del kiosco; más diagnóstico que mide por qué no aparece, se cura solo (hasta 3 veces) y, si algo la re-bloquea siempre, cierra **diciendo el motivo** con una espera creciente en vez de reintentar mudo.
+  2. **B.100** — en la Zona de peligro de la ficha completa: «Quitar todas las restricciones del celular» (`SUSPEND_LOCKSUITE`, reversible) y «Borrar LockSuite del celular» (comando nuevo `UNINSTALL_LOCKSUITE`: libera todo + saca Device Owner + abre la desinstalación en el teléfono, irreversible, doble confirmación, exige PIN). Se separó visualmente lo que actúa sobre el teléfono de lo que actúa sobre el panel, y se aclaró que «Archivar» / «Eliminar del panel» no tocan el equipo. Nuevo `mdm/DeviceRelease.kt` (liberación sin Activity, igual orden que `executeFullPurge`); el servicio de Accesibilidad ahora se apaga solo con `locksuite_purged`.
+- **Verificación hecha en el contenedor (lo que el entorno permite):**
+  - Lógica pura `UpdateRoutePlanner` (nuevas `storeRelaunchGapMs`, `playStoreBlockReason`, `MAX_STORE_REBLOCKS`): **compilada con `kotlinc` 2.0.21 (cero errores) y probada con un arnés propio — ALL-PASS**; los dos tests nuevos de `UpdateRoutePlannerTest` reflejan lo mismo.
+  - Kotlin que toca Android (DeviceRelease, CommandProcessor, PolicyManager, AppController, PackageReceiver, UpdateFlowManager, LockSuiteAccessibilityService): **type-check por inspección de firmas** — cada símbolo referenciado se verificó contra su declaración real en el repo (firmas de `clearAllRestrictions`, `getUserApps`/`hideApp`/`suspendApp`, `writeCommandAck`, `playStoreState`, `applyKioskLockTask`, etc.). No hay type-check de Gradle porque el contenedor no puede bajar el SDK de Android ni las dependencias (Maven/Google dan 403).
+  - Panel/backend: `node --check` de `index.js`, `celular.js`, `comun.js` OK; **`tools/check_command_sync.py` y `tools/check_panel_commands.py` en verde** (con `UNINSTALL_LOCKSUITE` en los tres lados).
+- **Lo que NO se pudo hacer acá y queda para Antigravity (PC con Gradle):** compilar release, correr la suite de unit tests con Gradle, **desplegar hosting + functions** (sin las functions nuevas, `UNINSTALL_LOCKSUITE` se rechaza con 400) y **probar en equipo real**. Pasos exactos en **`INSTRUCCIONES_ANTIGRAVITY_2026-10-28_PLAY_NO_APARECE_Y_BORRAR_LOCKSUITE.md`**.
+- **Pendiente de prueba en equipo real (nuevo de esta sesión):**
+  1. ★ Equipo con Play Store **oculta**: actualizar una app por Google Play — ya no entra en el bucle "no estaba al frente"; la Tienda queda destapada durante el flujo y se re-oculta al cerrar.
+  2. Equipo en **kiosco (Lock Task)**: lo mismo — la Tienda pasa al frente durante la ruta de Google Play.
+  3. Si algo del equipo re-bloquea la Tienda siempre: el flujo cierra a las 3 veces con el motivo, sin 81 reintentos.
+  4. Ficha → Zona de peligro → «Quitar todas las restricciones»: el celular queda sin restricciones y las apps bloqueadas abren; «Reanudar» lo revierte.
+  5. Ficha → «Borrar LockSuite del celular»: el equipo se libera, aparece el pedido de desinstalación en el teléfono y, tras confirmarlo, LockSuite ya no está; el equipo queda usable (sin apps ocultas, táctil y barra OK).
+  6. Siguen abiertas las pruebas de B.95/B.96/B.97/B.98 y la decisión sobre la regla de `ownerUid` de B.94.

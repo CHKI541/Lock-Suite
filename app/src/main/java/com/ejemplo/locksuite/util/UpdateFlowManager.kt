@@ -351,6 +351,63 @@ object UpdateFlowManager {
         isRunning(context) && currentRoute(context) == ROUTE_PLAY_STORE
 
     /**
+     * 28/10/2026 (B.99) — ¿Google Play tiene que quedar DESTAPADA? Mientras dura la ruta de
+     * Google Play, nada puede volver a ocultarla ni suspenderla.
+     *
+     * Medido en el logcat del QEMAY-QM01 del 27/10: el flujo destapaba Play Store
+     * (`setApplicationHidden(false)`), Android avisaba PACKAGE_ADDED de com.android.vending
+     * —para el sistema una app oculta "no está instalada", y destaparla es "instalarla"—, y
+     * el PackageReceiver de LockSuite, al ver "se instaló Play Store", la volvía a ocultar y
+     * suspender según la preferencia del administrador. 0,2 s después de abrirse, Android la
+     * cerraba ("Force stopping com.android.vending: hiding pkg"; Play Store caía con "is
+     * package not installed?"). El ciclo la volvía a abrir cada 1,5 s y el registro decía
+     * "Google Play no estaba al frente", 81 veces en 2 minutos, hasta rendirse a los 75 s.
+     * Pasaba en todo equipo con Play Store OCULTA (o suspendida con "ocultar íconos de lo
+     * suspendido"): otra forma del "depende del celular".
+     *
+     * Es la única fuente de verdad que miran AppController (ocultar/suspender),
+     * PackageReceiver, PolicyManager.restoreInstallRestrictions y la lista del kiosco antes
+     * de tocar Google Play. Lo que se pida en el medio queda anotado como intención y lo
+     * aplica el cierre del flujo (restoreInstallRestrictions), como siempre.
+     */
+    fun mustKeepPlayStoreOpen(context: Context): Boolean = isPlayStoreFlowRunning(context)
+
+    /** Lo que se puede MEDIR de por qué Google Play no aparece (B.99). */
+    data class PlayStoreState(val hidden: Boolean, val suspended: Boolean, val lockTaskBlocks: Boolean)
+
+    fun playStoreState(context: Context): PlayStoreState {
+        val ctx = context.applicationContext
+        val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager
+            ?: return PlayStoreState(false, false, false)
+        val admin = ComponentName(ctx, DeviceAdminReceiver::class.java)
+        val oculta = try { dpm.isApplicationHidden(admin, PKG_PLAY_STORE) } catch (e: Exception) { false }
+        val suspendida = try { dpm.isPackageSuspended(admin, PKG_PLAY_STORE) } catch (e: Exception) { false }
+        val kiosco = try {
+            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            val enLockTask = am != null && am.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE
+            enLockTask && !dpm.isLockTaskPermitted(PKG_PLAY_STORE)
+        } catch (e: Exception) {
+            false
+        }
+        return PlayStoreState(oculta, suspendida, kiosco)
+    }
+
+    /**
+     * Con el modo kiosco (Lock Task) encendido, la lista de apps que pueden pasar al frente
+     * incluye Google Play mientras dura la ruta de Google Play (ver
+     * PolicyManager.lockTaskAllowedPackages). Esto la vuelve a escribir. No hace nada si el
+     * kiosco está apagado.
+     */
+    fun refreshKioskForUpdate(context: Context) {
+        try {
+            val pm = PolicyManager(context.applicationContext)
+            if (pm.isKioskLockTaskEnabled() && !pm.isLockSuiteSuspended()) pm.applyKioskLockTask(true)
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo actualizar la lista del kiosco: ${e.message}")
+        }
+    }
+
+    /**
      * ¿El flujo de ESTE paquete sigue abierto? A diferencia de [isRunning] no mira
      * `mdm_install_in_progress`: `SelfUpdater` lo pone en false cuando falla a mitad de
      * una instalación (restoreInstallRestrictions) y eso no significa que el flujo haya
@@ -951,6 +1008,8 @@ object UpdateFlowManager {
         step(ctx, UpdateStepLog.INFO, "Camino elegido: Google Play. $why")
 
         LockSuiteAccessibilityService.instance?.invalidateFlagsCache()
+        // B.99: con el kiosco encendido, Google Play entra a su lista mientras dure esto.
+        refreshKioskForUpdate(ctx)
 
         // Con el celular bloqueado, showOverlay no tapa nada y el ciclo de la Accesibilidad
         // espera a que lo desbloqueen (lo anota en el registro y avisa en la pantalla de
@@ -1351,6 +1410,10 @@ object UpdateFlowManager {
                 .putLong(KEY_LAST_RESULT_AT, System.currentTimeMillis())
         }
         cierre.apply()
+
+        // B.99: si Google Play había entrado a la lista del kiosco por esta actualización,
+        // sale ahora (el flujo ya figura cerrado, así que la lista se arma sin ella).
+        if (route == ROUTE_PLAY_STORE) refreshKioskForUpdate(ctx)
 
         // B.86: Restaurar setUninstallBlocked sincrónicamente al cerrar el flujo,
         // sin esperar los 5.6 segundos de lectura del aviso. Así si el proceso muere

@@ -2118,11 +2118,18 @@
         : "🔒 Las acciones críticas piden el PIN de este celular.";
     $("c-pin-olvidar").classList.toggle("hidden", !tienePin);
 
+    // Dos grupos distintos a propósito: lo que actúa SOBRE EL TELÉFONO (quitar
+    // restricciones / borrar LockSuite) y lo que actúa SOBRE EL PANEL (archivar /
+    // eliminar de la lista). Antes "Eliminar el dispositivo" solo lo sacaba del panel
+    // y se confundía con "borrar del celular"; ahora cada botón dice sobre qué actúa.
     $("c-peligro").innerHTML =
-      (suspendido ? '<button class="ls-btn ls-btn-primary" data-cmd="RESUME_LOCKSUITE">▶️ Reanudar LockSuite</button>'
-        : '<button class="ls-btn" data-cmd="RESUME_LOCKSUITE" title="Por si quedó suspendido">Reanudar LockSuite</button>') +
-      '<button class="ls-btn" id="c-archivar">📦 Archivar el dispositivo</button>' +
-      '<button class="ls-btn ls-btn-danger" id="c-eliminar">🗑️ Eliminar el dispositivo</button>';
+      (suspendido
+        ? '<button class="ls-btn ls-btn-primary" data-cmd="RESUME_LOCKSUITE">▶️ Reanudar LockSuite (volver a aplicar todo)</button>'
+        : '<button class="ls-btn" id="c-quitar-restric" title="Suspende LockSuite: el equipo queda como si no lo tuviera, pero se puede reanudar">🧹 Quitar todas las restricciones del celular</button>' +
+          '<button class="ls-btn" data-cmd="RESUME_LOCKSUITE" title="Por si quedó suspendido y el panel no se enteró">Reanudar LockSuite</button>') +
+      '<button class="ls-btn ls-btn-danger" id="c-borrar-celu" title="Libera el equipo y desinstala LockSuite del teléfono. Irreversible.">📵 Borrar LockSuite del celular</button>' +
+      '<button class="ls-btn" id="c-archivar" title="Solo lo saca del panel; no toca el teléfono">📦 Archivar (solo saca del panel)</button>' +
+      '<button class="ls-btn ls-btn-danger" id="c-eliminar" title="Solo borra sus datos del panel; no toca el teléfono">🗑️ Eliminar del panel</button>';
   }
 
   $("c-acciones").addEventListener("click", async (e) => {
@@ -2154,6 +2161,8 @@
   $("c-peligro").addEventListener("click", async (e) => {
     if (e.target.id === "c-archivar") { archivar(e.target); return; }
     if (e.target.id === "c-eliminar") { eliminar(e.target); return; }
+    if (e.target.id === "c-quitar-restric") { quitarRestricciones(e.target); return; }
+    if (e.target.id === "c-borrar-celu") { borrarDelCelular(e.target); return; }
     const b = e.target.closest("[data-cmd]");
     if (!b) return;
     b.disabled = true;
@@ -2161,6 +2170,51 @@
     b.disabled = false;
     LS.toast(...LS.resultado(r, "Listo."));
   });
+
+  /** Quita TODAS las restricciones del teléfono de forma REVERSIBLE: manda
+   *  SUSPEND_LOCKSUITE, que levanta las protecciones y desbloquea todas las apps. Con
+   *  «Reanudar LockSuite» vuelve todo. Pide el PIN del equipo (lo hace LS.sendCommand
+   *  solo). No toca el panel: LockSuite sigue instalado. */
+  async function quitarRestricciones(boton) {
+    const n = nombreDispositivo();
+    if (!confirm("¿Quitar TODAS las restricciones de «" + n + "»?\n\n" +
+      "El celular queda como si no tuviera LockSuite: se desbloquean todas las apps y " +
+      "se levantan todas las protecciones (incluida la que impide desinstalar).\n\n" +
+      "Es REVERSIBLE: con «Reanudar LockSuite» vuelve todo. LockSuite sigue instalado.")) return;
+    boton.disabled = true;
+    const r = await LS.sendCommand(deviceId, "SUSPEND_LOCKSUITE", null, null, { nombre: n });
+    boton.disabled = false;
+    LS.toast(...LS.resultado(r, "Listo: el celular quedó sin restricciones. Con «Reanudar» vuelve todo."));
+  }
+
+  /** Borra LockSuite del teléfono: libera el equipo del todo (quita Device Owner,
+   *  levanta restricciones, desbloquea apps) y abre el pedido de desinstalación EN EL
+   *  EQUIPO. Irreversible; pide el PIN (lo hace LS.sendCommand). NO saca el equipo del
+   *  panel: para eso está «Eliminar del panel». */
+  async function borrarDelCelular(boton) {
+    const n = nombreDispositivo();
+    if (!confirm("📵 ¿Borrar LockSuite del celular «" + n + "»?\n\n" +
+      "Esto actúa SOBRE EL TELÉFONO, no sobre el panel:\n" +
+      "• Levanta todas las restricciones y desbloquea todas las apps.\n" +
+      "• Quita a LockSuite como administrador del equipo (Device Owner).\n" +
+      "• Abre en el teléfono el pedido para desinstalar la app.\n\n" +
+      "No se puede deshacer: para volver a controlarlo habría que darlo de alta de cero.")) return;
+    if (!confirm("¿Seguro? Confirmá que querés liberar y desinstalar LockSuite de «" + n + "».\n\n" +
+      "El equipo NO se saca del panel (para eso está «Eliminar del panel»); va a aparecer " +
+      "desconectado cuando la app ya no esté.")) return;
+    boton.disabled = true;
+    const r = await LS.sendCommand(deviceId, "UNINSTALL_LOCKSUITE", null, null,
+      { nombre: n, timeoutMs: 20000 });
+    boton.disabled = false;
+    // El equipo confirma "applied" apenas acepta la orden (después se libera y ya no
+    // puede reportar). Un "pendiente" acá es normal si está dormido o sin red.
+    if (r.ok && !r.pendiente) {
+      LS.toast("📵 «" + n + "» se está liberando. En el teléfono aparece el pedido para " +
+        "desinstalar LockSuite: hay que tocar «Desinstalar» ahí para terminar.", "ok");
+    } else {
+      LS.toast(...LS.resultado(r, "Pedido enviado."));
+    }
+  }
 
   /** Lo mismo que «Archivar» de la vista rápida: copia a archivedDevices y saca de devices. */
   async function archivar(boton) {
@@ -2186,8 +2240,10 @@
 
   async function eliminar(boton) {
     const n = nombreDispositivo();
-    if (!confirm("⚠️ ¿Eliminar PARA SIEMPRE «" + n + "»?\n\nNo se puede deshacer: se borran todos sus datos.")) return;
-    if (!confirm("¿Confirmás que querés eliminar «" + n + "» de forma irreversible?")) return;
+    if (!confirm("⚠️ ¿Eliminar «" + n + "» DEL PANEL para siempre?\n\n" +
+      "Se borran sus datos del panel y no se puede deshacer. NO toca el teléfono: LockSuite sigue " +
+      "instalado y controlándolo. Para sacar LockSuite del equipo, usá «Borrar LockSuite del celular».")) return;
+    if (!confirm("¿Confirmás que querés eliminar «" + n + "» del panel de forma irreversible?")) return;
     boton.disabled = true;
     try {
       S.ui.cerrado = true;

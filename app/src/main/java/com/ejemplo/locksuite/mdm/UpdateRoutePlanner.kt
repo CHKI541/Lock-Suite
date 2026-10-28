@@ -497,4 +497,48 @@ object UpdateRoutePlanner {
         }
         return sb.toString()
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Google Play no aparece (28/10/2026, B.99)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Cuánto esperar antes de volver a abrir Google Play, según cuántas veces SEGUIDAS se
+     * la abrió sin que llegara a verse.
+     *
+     * Antes era siempre 1,5 s. Medido el 27/10 en el QEMAY-QM01: cuando algo mata a Play
+     * Store apenas arranca, abrirla cada 1,5 s es un bucle de cierres ("Google Play Store
+     * dejó de funcionar") que no arregla nada y tapa la causa. La primera vuelta sigue
+     * siendo rápida —es el caso normal: el usuario tocó Inicio y hay que traerla de
+     * vuelta—; las siguientes, sin haberla visto ni una vez, esperan cada vez más.
+     */
+    fun storeRelaunchGapMs(seguidasSinVerla: Int): Long = when {
+        seguidasSinVerla <= 0 -> 1_500L
+        seguidasSinVerla == 1 -> 3_000L
+        seguidasSinVerla == 2 -> 5_000L
+        seguidasSinVerla == 3 -> 8_000L
+        else -> 12_000L
+    }
+
+    /** Cuántas veces se tolera que algo vuelva a bloquear Google Play antes de cerrar diciéndolo. */
+    const val MAX_STORE_REBLOCKS = 3
+
+    /**
+     * Qué tiene a Google Play fuera de la pantalla, en palabras, a partir de lo que se puede
+     * MEDIR (no de lo que se ve). `null` = nada medible: Play Store está habilitada y la
+     * causa es otra (no terminó de abrir, el usuario se fue, otra app adelante).
+     *
+     * @param hidden `DevicePolicyManager.isApplicationHidden`: oculta = para Android "no
+     *   está instalada"; al abrirla se cierra sola ("is package not installed?").
+     * @param suspended `isPackageSuspended`: en vez de la ficha aparece "app en pausa".
+     * @param lockTaskBlocks el modo kiosco (Lock Task) está activo y Play Store no está en
+     *   su lista: Android no la deja pasar al frente.
+     */
+    fun playStoreBlockReason(hidden: Boolean, suspended: Boolean, lockTaskBlocks: Boolean): String? {
+        val partes = ArrayList<String>(3)
+        if (hidden) partes.add("está oculta")
+        if (suspended) partes.add("está suspendida")
+        if (lockTaskBlocks) partes.add("el modo kiosco no la deja abrir")
+        return if (partes.isEmpty()) null else partes.joinToString(" y ")
+    }
 }

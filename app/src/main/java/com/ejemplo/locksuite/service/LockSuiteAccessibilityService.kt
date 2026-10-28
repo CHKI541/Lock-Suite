@@ -527,6 +527,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     // Configuración del servicio
     // ──────────────────────────────────────────────
     override fun onServiceConnected() {
+        // LockSuite purgado: el equipo ya fue liberado y la app está por desinstalarse.
+        // No se arranca nada y el servicio se saca solo de la lista de activos. La marca
+        // la ponen DeviceRelease/EmergencyActivity (locksuite_purged).
+        if (PrefsHelper.getMdmPrefs(this).getBoolean("locksuite_purged", false)) {
+            try { disableSelf() } catch (_: Exception) {}
+            return
+        }
         // Modificar el serviceInfo existente para preservar capacidades cargadas del XML (canTakeScreenshot)
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -632,6 +639,20 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             eventType != AccessibilityEvent.TYPE_VIEW_SELECTED &&
             eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED) return
 
+        // LockSuite purgado: el equipo fue liberado y la app está por desinstalarse. El
+        // servicio no bloquea, no rebota y no dibuja nada, y se apaga solo (disableSelf)
+        // para no quedar a medio andar si la desinstalación se demora. Va después del
+        // filtro barato de tipo de evento, y se lee directo (sin la caché de flags) porque
+        // es un estado terminal: no tiene que esperar a que la caché venza.
+        if (mdmPrefs.getBoolean("locksuite_purged", false)) {
+            try {
+                if (overlayManager.isBlockingMessageVisible()) overlayManager.hideBlockingMessageOverlay()
+                overlayManager.clearAll()
+            } catch (_: Exception) {}
+            try { disableSelf() } catch (_: Exception) {}
+            return
+        }
+
         val f = flags()
 
         // ──────────────────────────────────────────────
@@ -694,11 +715,15 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                     updatingPkg,
                     UpdateFlowManager.currentStage(applicationContext)
                 )
-                val nowRelaunch = SystemClock.elapsedRealtime()
-                if (!bloqueado && nowRelaunch - lastStoreRelaunchAt > STORE_RELAUNCH_MIN_MS) {
-                    lastStoreRelaunchAt = nowRelaunch
-                    noteStoreRelaunch("el usuario salió de Google Play a $packageName")
-                    UpdateFlowManager.openStore(applicationContext, updatingPkg)
+                // B.99: misma puerta que el ciclo (relaunchStoreIfDue): rápida si Google Play
+                // se venía viendo, cada vez más espaciada si no llega a aparecer. Y el motivo
+                // dice qué apareció, sin suponer que fue el usuario: en el QEMAY-QM01 era el
+                // cartel del sistema de Play Store cerrándose.
+                if (!bloqueado) {
+                    relaunchStoreIfDue(
+                        applicationContext, updatingPkg, SystemClock.elapsedRealtime(),
+                        "al frente apareció ${frenteTexto(applicationContext, packageName, false)}"
+                    )
                 }
                 return
             }
@@ -3000,6 +3025,18 @@ class LockSuiteAccessibilityService : AccessibilityService() {
     /** B.97 — desde cuándo Google Play muestra "Esperando Wi-Fi" sin cortar (0 = no lo muestra). */
     private var updateSessionWaitNetSince = 0L
     private var updateSessionRelaunches = 0
+    /** B.99 — veces SEGUIDAS que se abrió Google Play sin llegar a ver su ficha dibujada. */
+    private var updateSessionStoreMisses = 0
+    /** B.99 — se la reabrió (y por lo tanto se la destapó) desde la última medición. */
+    private var updateSessionRelaunchedSinceCheck = false
+    /** B.99 — veces que se la encontró bloqueada de nuevo después de destaparla. */
+    private var updateSessionReblocks = 0
+    private var updateSessionLastBlock: String? = null
+    private var updateSessionLastFront: String? = null
+    /** B.99 — el último porqué medido de que Google Play no aparezca, para el cierre por tiempo. */
+    private var updateSessionAbsenceWhy: String? = null
+    /** Paquete de la pantalla de inicio, para nombrarla en el registro. Se averigua una vez. */
+    private var homePackageCache: String? = null
 
     /** Invalida el snapshot de flags. La usa UpdateFlowManager al arrancar/terminar. */
     fun invalidateFlagsCache() {
@@ -3023,6 +3060,12 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         updateSessionProgressSig = ""
         updateSessionWaitNetSince = 0L
         updateSessionRelaunches = 0
+        updateSessionStoreMisses = 0
+        updateSessionRelaunchedSinceCheck = false
+        updateSessionReblocks = 0
+        updateSessionLastBlock = null
+        updateSessionLastFront = null
+        updateSessionAbsenceWhy = null
         releaseUpdateWakeLock()
     }
 
@@ -3051,6 +3094,126 @@ class LockSuiteAccessibilityService : AccessibilityService() {
                 "Volví a abrir la ficha en Google Play ($motivo; vez $updateSessionRelaunches)."
             )
         }
+    }
+
+    /**
+     * Vuelve a abrir la ficha en Google Play si ya pasó la espera que corresponde (28/10,
+     * B.99). La espera es corta si Google Play se venía viendo (el usuario tocó Inicio) y
+     * crece mientras no llegue a aparecer (UpdateRoutePlanner.storeRelaunchGapMs): abrirla
+     * cada 1,5 s a una Play Store que algo cierra al instante era un bucle de cierres.
+     *
+     * @return true si la abrió.
+     */
+    private fun relaunchStoreIfDue(ctx: Context, updatingPkg: String, now: Long, motivo: String): Boolean {
+        val espera = com.ejemplo.locksuite.mdm.UpdateRoutePlanner.storeRelaunchGapMs(updateSessionStoreMisses)
+        if (lastStoreRelaunchAt != 0L && now - lastStoreRelaunchAt <= espera) return false
+        lastStoreRelaunchAt = now
+        updateSessionStoreMisses++
+        updateSessionRelaunchedSinceCheck = true
+        noteStoreRelaunch(motivo)
+        UpdateFlowManager.openStore(ctx, updatingPkg)
+        return true
+    }
+
+    /**
+     * Qué app está al frente, mirando las ventanas de arriba hacia abajo (B.99). Se saltean
+     * la pantalla negra propia (overlay de accesibilidad), el teclado, el divisor de pantalla
+     * partida y las barras del sistema. Devuelve el paquete y si es una ventana del SISTEMA
+     * (un cartel como "Google Play Store se detuvo" es del paquete "android"), o null.
+     */
+    private fun describeFrontApp(): Pair<String, Boolean>? {
+        try {
+            for (w in windows) {
+                val tipo = w.type
+                if (tipo == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ||
+                    tipo == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD ||
+                    tipo == android.view.accessibility.AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER
+                ) continue
+                val pkg = w.root?.packageName?.toString() ?: continue
+                val esSistema = tipo == android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM
+                if (esSistema && pkg == "com.android.systemui") continue   // barras de estado y navegación
+                return pkg to esSistema
+            }
+        } catch (e: Exception) {
+            // sigue al camino de abajo
+        }
+        val pkg = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
+        return pkg?.let { it to false }
+    }
+
+    /** "la pantalla de inicio", "un cartel del sistema", "«WhatsApp» (com.whatsapp)"… para el registro. */
+    private fun frenteTexto(ctx: Context, pkg: String, esSistema: Boolean): String {
+        if (pkg == LOCKSUITE_PKG) return "una pantalla de LockSuite"
+        if (pkg == "android" || (esSistema && pkg != PKG_PLAY_STORE)) {
+            return "un cartel del sistema (puede ser el de «Google Play se detuvo»)"
+        }
+        val home = homePackageCache ?: try {
+            val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            packageManager.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+        } catch (e: Exception) {
+            null
+        }?.also { homePackageCache = it }
+        if (pkg == home) return "la pantalla de inicio"
+        return "«${UpdateFlowManager.appLabel(ctx, pkg)}» ($pkg)"
+    }
+
+    /**
+     * Google Play no aparece: ¿por qué? (28/10/2026, B.99). Se mide lo que se puede medir
+     * —oculta, suspendida, bloqueada por el kiosco— y se dice, en vez de reabrirla a
+     * ciegas. Si algo la vuelve a bloquear cada vez que se la destapa (lo que pasaba en el
+     * QEMAY-QM01 hasta B.99), se cierra enseguida con ese motivo en vez de dar vueltas 75 s
+     * y terminar en "Google Play no se abrió".
+     *
+     * @return true si cerró el flujo.
+     */
+    private fun diagnoseMissingStore(ctx: Context, updatingPkg: String): Boolean {
+        val st = UpdateFlowManager.playStoreState(ctx)
+        val bloqueo = com.ejemplo.locksuite.mdm.UpdateRoutePlanner.playStoreBlockReason(
+            st.hidden, st.suspended, st.lockTaskBlocks
+        )
+        val despuesDeDestaparla = updateSessionRelaunchedSinceCheck
+        updateSessionRelaunchedSinceCheck = false
+        if (bloqueo != null) {
+            if (despuesDeDestaparla) updateSessionReblocks++
+            if (bloqueo != updateSessionLastBlock || despuesDeDestaparla) {
+                updateSessionLastBlock = bloqueo
+                UpdateFlowManager.step(
+                    ctx, UpdateStepLog.WARN,
+                    if (despuesDeDestaparla) {
+                        "Google Play $bloqueo otra vez: algo del equipo la volvió a bloquear apenas se la destapó " +
+                            "(vez $updateSessionReblocks). La vuelvo a destapar."
+                    } else {
+                        "Google Play $bloqueo: la destapo para poder abrirla."
+                    }
+                )
+            }
+            if (st.lockTaskBlocks) UpdateFlowManager.refreshKioskForUpdate(ctx)
+            updateSessionAbsenceWhy = "Google Play $bloqueo"
+            if (updateSessionReblocks >= com.ejemplo.locksuite.mdm.UpdateRoutePlanner.MAX_STORE_REBLOCKS) {
+                val label = UpdateFlowManager.appLabel(ctx, updatingPkg)
+                finishUpdateWithBestReason(
+                    ctx, updatingPkg, null,
+                    UpdateFlowManager.RESULT_STORE_ERROR,
+                    "No se pudo abrir Google Play para actualizar $label: algo del equipo la vuelve a bloquear " +
+                        "($bloqueo) apenas se la destapa. Probá con «Solo Tienda» desde el panel.",
+                    "Google Play $bloqueo de nuevo $updateSessionReblocks veces después de destaparla"
+                )
+                return true
+            }
+        } else {
+            updateSessionLastBlock = null
+        }
+
+        val frente = describeFrontApp()
+        if (frente != null) {
+            val texto = frenteTexto(ctx, frente.first, frente.second)
+            if (frente.first != updateSessionLastFront) {
+                updateSessionLastFront = frente.first
+                UpdateFlowManager.step(ctx, UpdateStepLog.INFO, "Google Play no aparece; al frente está $texto.")
+            }
+            if (bloqueo == null) updateSessionAbsenceWhy = "al frente estaba $texto"
+        }
+        return false
     }
 
     /**
@@ -3350,6 +3513,7 @@ class LockSuiteAccessibilityService : AccessibilityService() {
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE, "Esperando a Google Play...")
             UpdateFlowManager.showOverlay(ctx, updatingPkg, UpdateFlowManager.STAGE_WAITING_STORE)
             lastStoreRelaunchAt = now
+            updateSessionRelaunchedSinceCheck = true
             noteStoreRelaunch("se desbloqueó el celular")
             UpdateFlowManager.openStore(ctx, updatingPkg)
             return
@@ -3360,21 +3524,22 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         if (root == null) {
             UpdateFlowManager.setStage(ctx, UpdateFlowManager.STAGE_WAITING_STORE,
                 "Esperando a Google Play...")
-            if (now - updateSessionStartTime > 6_000L &&
-                now - lastStoreRelaunchAt > STORE_RELAUNCH_MIN_MS
-            ) {
-                lastStoreRelaunchAt = now
-                noteStoreRelaunch("Google Play no estaba al frente")
-                UpdateFlowManager.openStore(ctx, updatingPkg)
+            if (now - updateSessionStartTime > 6_000L) {
+                // B.99: antes de reabrirla, medir por qué no está (y decirlo). Si algo la
+                // vuelve a bloquear cada vez, esto cierra el flujo con ese motivo.
+                if (diagnoseMissingStore(ctx, updatingPkg)) return
+                relaunchStoreIfDue(ctx, updatingPkg, now, "Google Play no estaba al frente")
             }
             // Si Play Store nunca aparece, el freno por estancamiento tiene que
             // poder actuar igual. Antes este `return` también lo salteaba.
             if (now - updateSessionStartTime > UPDATE_STALL_MS) {
+                val porQue = updateSessionAbsenceWhy
                 finishUpdateWithBestReason(
                     ctx, updatingPkg, null,
                     UpdateFlowManager.RESULT_STORE_ERROR,
-                    "Google Play no se abrió en este equipo.",
-                    "La ventana de Play Store nunca apareció en ${UPDATE_STALL_MS / 1000}s"
+                    "Google Play no se abrió en este equipo." + (if (porQue != null) " ($porQue)" else ""),
+                    "La ventana de Play Store nunca apareció en ${UPDATE_STALL_MS / 1000}s" +
+                        (if (porQue != null) ": $porQue" else "")
                 )
             }
             return
@@ -3387,6 +3552,13 @@ class LockSuiteAccessibilityService : AccessibilityService() {
         UpdateFlowManager.reportDebugLabels(ctx, scan.debugLabels)
 
         if (scan.rendered && updateSessionRenderedAt == 0L) updateSessionRenderedAt = now
+        // B.99: con la ficha dibujada, Google Play está de verdad: la próxima vez que haya
+        // que traerla de vuelta (el usuario tocó Inicio) es rápido otra vez.
+        if (scan.rendered) {
+            updateSessionStoreMisses = 0
+            updateSessionLastFront = null
+            updateSessionAbsenceWhy = null
+        }
 
         val hasDefiniteUpdate = scan.actions.any { it.score >= 80 }
 

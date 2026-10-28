@@ -224,7 +224,10 @@ class CommandProcessor(private val context: Context) {
         // remoto del equipo.
         val allowedWhileSuspended = setOf(
             "RESUME_LOCKSUITE", "SUSPEND_LOCKSUITE", "UPDATE_LOCKSUITE",
-            "VERIFY_PIN", "CHANGE_PIN", "CANCEL_UPDATE_APP"
+            "VERIFY_PIN", "CHANGE_PIN", "CANCEL_UPDATE_APP",
+            // Borrar LockSuite tiene que poder pedirse esté o no suspendido: un equipo
+            // ya suspendido ("sin restricciones") igual hay que poder sacárselo de encima.
+            "UNINSTALL_LOCKSUITE"
         )
         if (command !in allowedWhileSuspended && policyManager.isLockSuiteSuspended()) {
             commandErrorReason = "LockSuite está suspendido en este equipo. Desactivá la suspensión antes de cambiar políticas."
@@ -601,6 +604,37 @@ class CommandProcessor(private val context: Context) {
                 }
                 "RESUME_LOCKSUITE" -> {
                     policyManager.setLockSuiteSuspended(false)
+                }
+                "UNINSTALL_LOCKSUITE" -> {
+                    // Libera el equipo del todo y lo deja listo para desinstalar:
+                    // levanta TODAS las restricciones, desbloquea TODAS las apps, suelta
+                    // el kiosco, saca Device Owner y abre el pedido de desinstalación EN
+                    // EL EQUIPO. Es irreversible. Ver mdm/DeviceRelease.kt.
+                    //
+                    // El ack va por una corrutina aparte (como UPDATE_LOCKSUITE y los
+                    // perfiles) y se escribe PRIMERO, antes de tocar nada: el paso 2 de la
+                    // liberación borra las preferencias —incluido el secreto de comandos—
+                    // y después se suelta Device Owner, así que un ack dejado para el final
+                    // podría no salir nunca. Por eso el panel marca "aplicado" apenas el
+                    // equipo acepta la orden, no cuando la app termina de borrarse: para
+                    // entonces ya no puede reportar nada.
+                    val idToAck = commandId
+                    commandId = null
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                        com.ejemplo.locksuite.util.FirebaseDeviceSync.writeCommandAck(
+                            applicationContext, idToAck, "UNINSTALL_LOCKSUITE", "applied",
+                            "El equipo se está liberando: se quitan todas las restricciones, se " +
+                                "desbloquean todas las apps y se abre el pedido para desinstalar " +
+                                "LockSuite en el teléfono."
+                        )
+                        // Darle tiempo al ack a que llegue antes de borrar las preferencias
+                        // (el secreto de comandos vive ahí) y soltar Device Owner.
+                        kotlinx.coroutines.delay(2500)
+                        com.ejemplo.locksuite.mdm.DeviceRelease.releaseAndPrepareUninstall(
+                            applicationContext, promptUninstall = true
+                        )
+                    }
+                    true
                 }
                 "PROTECT_ACCESSIBILITY" -> {
                     policyManager.setAccessibilityProtection(true)
